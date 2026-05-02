@@ -1,0 +1,23 @@
+docker-compose.yml
+  b1e477c83d64d585 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1a78eb517f0c5250199916c388db52b53f075cd7",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 62,
+      "total_deletions": 0,
+      "accepted_lines": 62,
+      "overriden_lines": 0
+    }
+  }
+}
