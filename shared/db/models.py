@@ -1,0 +1,213 @@
+"""SQLAlchemy 2.0 ORM models — mirror the schema from spec §6."""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, date
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import (
+    String, Integer, Boolean, Date, DateTime, Numeric, ForeignKey,
+    Text, UniqueConstraint, Index, text,
+)
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from shared.db.base import Base
+
+
+class Ohlcv(Base):
+    __tablename__ = "ohlcv"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    timeframe: Mapped[str] = mapped_column(String(4), primary_key=True)
+    open: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    high: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    low: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    close: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    volume: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+
+    __table_args__ = (
+        Index("idx_ohlcv_tf", "timeframe", "time", postgresql_using="btree"),
+    )
+
+
+class Indicators(Base):
+    __tablename__ = "indicators"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        Index("idx_indicators_data", "data", postgresql_using="gin"),
+    )
+
+
+class Decision(Base):
+    __tablename__ = "decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    agent: Mapped[str] = mapped_column(String(20), nullable=False)
+    model: Mapped[str] = mapped_column(String(50), nullable=False)
+    tokens_in: Mapped[int | None] = mapped_column(Integer)
+    tokens_out: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    input: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    output: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    outcome: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    trade_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trades.id"), nullable=True,
+    )
+    executed: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejected_reason: Mapped[str | None] = mapped_column(String(200))
+
+    trade: Mapped["Trade | None"] = relationship(
+        "Trade", foreign_keys=[trade_id], post_update=True,
+    )
+
+    __table_args__ = (
+        Index("idx_decisions_ts", "ts"),
+        Index("idx_decisions_output", "output", postgresql_using="gin"),
+        Index("idx_decisions_input", "input", postgresql_using="gin"),
+    )
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id", use_alter=True),
+    )
+    ts_open: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ts_close: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    side: Mapped[str] = mapped_column(String(4), nullable=False)
+    quantity_btc: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    exit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    pnl_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    pnl_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    close_reason: Mapped[str | None] = mapped_column(String(20))
+    order_id_open: Mapped[str | None] = mapped_column(String(50))
+    order_id_close: Mapped[str | None] = mapped_column(String(50))
+    fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+
+    __table_args__ = (
+        Index("idx_trades_status", "status"),
+        Index("idx_trades_ts", "ts_open"),
+    )
+
+
+class Position(Base):
+    __tablename__ = "positions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    trade_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("trades.id"))
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="BTC/USDT")
+    quantity_btc: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    current_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    unrealized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    unrealized_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    status: Mapped[str] = mapped_column(String(10), default="open")
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PlaybookVersion(Base):
+    __tablename__ = "playbook_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    ts_generated: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(50))
+    trades_analyzed: Mapped[int | None] = mapped_column(Integer)
+    win_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    pnl_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        Index(
+            "idx_playbook_active",
+            "active",
+            unique=True,
+            postgresql_where=text("active = true"),
+        ),
+    )
+
+
+class ConfigEntry(Base):
+    __tablename__ = "config"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    value_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"),
+    )
+
+
+class ConfigHistory(Base):
+    __tablename__ = "config_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(60), default="system")
+
+
+class DailyStats(Base):
+    __tablename__ = "daily_stats"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    decisions_total: Mapped[int] = mapped_column(Integer, default=0)
+    trades_executed: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+    pnl_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    pnl_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    max_drawdown: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class FeeSnapshot(Base):
+    __tablename__ = "fee_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="BTC/USDT")
+    maker_fee: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    taker_fee: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        Index("idx_fee_snapshots_ts", "ts"),
+    )
