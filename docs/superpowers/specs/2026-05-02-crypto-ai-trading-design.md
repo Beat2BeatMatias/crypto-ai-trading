@@ -52,6 +52,8 @@ The system runs in three Docker containers (`trading-engine`, `web`, `postgres`)
 - **C3.** Spot only. SPOT means BUY = open long with USDT, SELL = close long to USDT.
 - **C4.** Decisor frequency must fit within Gemini 2.5 Flash free tier (1500 req/day → 5-min ticks ≈ 288/day, comfortable margin).
 - **C5.** Risk gate must be deterministic (Python only). No LLM calls in the critical execution path.
+- **C6.** Trading fees are NEVER hardcoded. They are fetched from the live Binance account via CCXT (`fetch_trading_fees`) and refreshed periodically (see §8.2).
+- **C7.** Ports must coexist with the sibling `crypto-arbitrage` project: frontend `:3100`, web API `:8100`, Postgres `:5532`.
 
 ### Assumptions
 - **A1.** Binance Spot Testnet remains free and API-compatible with mainnet.
@@ -59,6 +61,7 @@ The system runs in three Docker containers (`trading-engine`, `web`, `postgres`)
 - **A3.** User can run Docker locally with adequate resources (~2 GB RAM minimum).
 - **A4.** Initial paper trading capital (testnet) is $10,000 USDT virtual.
 - **A5.** Initial real capital (Phase 7) will be small ($200–500 USD).
+- **A6.** Binance returns valid trading fees via CCXT for the authenticated account (mainnet and testnet both expose this).
 
 ---
 
@@ -72,7 +75,7 @@ Three runtime containers + database:
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
 │  trading-engine  │  │       web        │  │     frontend     │
 │  (Python proc)   │  │ FastAPI + asyncio│  │  React 19 + nginx│
-│  no exposed port │  │  exposes :8000   │  │  exposes :3000   │
+│  no exposed port │  │  exposes :8100   │  │  exposes :3100   │
 └──────────────────┘  └──────────────────┘  └──────────────────┘
          │                     │                      │
          │                     │                      │ (HTTP/WS proxy)
@@ -82,10 +85,34 @@ Three runtime containers + database:
                                ▼
                    ┌──────────────────────┐
                    │  PostgreSQL 17       │
+                   │  exposes :5532       │
                    │  (single source of   │
                    │   truth)             │
                    └──────────────────────┘
 ```
+
+**Port allocation** — chosen to coexist with the sibling `crypto-arbitrage` project (which uses `:3000`, `:8000`, default `:5432`):
+
+| Service | Port |
+|---------|------|
+| Frontend (nginx serving React) | `3100` |
+| Web API (FastAPI) | `8100` |
+| PostgreSQL | `5532` (mapped from internal `5432`) |
+| trading-engine | none (no HTTP server) |
+
+**Component responsibilities — explicit split:**
+
+| Aspect | `trading-engine` | `web` |
+|--------|------------------|-------|
+| HTTP server | ❌ no | ✅ FastAPI on `:8100` |
+| Runs without UI open | ✅ 24/7 | ❌ idle when no clients |
+| Talks to Binance | ✅ CCXT REST + WebSocket | ❌ never |
+| Calls LLM (Gemini/Groq) | ✅ Decisor + Supervisor | ❌ never |
+| Places orders | ✅ via Executor | ❌ never |
+| Reads from Postgres | ✅ config + active playbook | ✅ everything for UI |
+| Writes to Postgres | ✅ decisions, trades, ohlcv, indicators, positions | ✅ only `config` + `config_history` |
+| Frontend talks to it directly | ❌ no exposed port | ✅ REST + WebSocket |
+| Survives if the other crashes | ✅ keeps trading | ✅ shows historical data + kill switch |
 
 **Communication:** Engine and web communicate **only via PostgreSQL**. No message queue, no shared memory, no IPC. Config changes from the UI are written to the `config` table; engine polls and applies on next cycle.
 
@@ -119,6 +146,10 @@ Three runtime containers + database:
 │                                                                 │
 │  PositionManager (poll every 30s)                              │
 │   • detects SL/TP fills, updates outcome on decisions table    │
+│                                                                 │
+│  FeeManager (refresh on startup + every 24h + after each trade)│
+│   • ccxt.fetch_trading_fees() → current maker/taker for account│
+│   • injected into Decisor prompt + Risk Gate + Executor logging│
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  Supervisor (00:00 UTC daily, Gemini 2.5 Pro)           │  │
@@ -311,7 +342,23 @@ CREATE TABLE daily_stats (
 );
 ```
 
-### 6.2 Default config keys (seeded on first run)
+### 6.2 Additional table — `fee_snapshots`
+
+Fees are fetched dynamically (see §8.2). Snapshots are persisted for auditing and fallback:
+
+```sql
+CREATE TABLE fee_snapshots (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    symbol      VARCHAR(20) NOT NULL DEFAULT 'BTC/USDT',
+    maker_fee   NUMERIC(8,6) NOT NULL,
+    taker_fee   NUMERIC(8,6) NOT NULL,
+    raw         JSONB NOT NULL    -- full ccxt response for debugging
+);
+CREATE INDEX idx_fee_snapshots_ts ON fee_snapshots (ts DESC);
+```
+
+### 6.3 Default config keys (seeded on first run)
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -359,7 +406,10 @@ Capital total: ${capital_total} USDT
 Capital disponible: ${usdt_available} USDT
 BTC en posición: {btc_held} BTC
 Frecuencia de decisión: cada {decisor_interval_min} minutos
-Fee por orden: 0.1% (taker), considerar 0.2% round-trip
+Fees actuales (consultados de tu cuenta Binance):
+  Taker: {taker_fee_pct:.4f}%   Maker: {maker_fee_pct:.4f}%
+  Round-trip (apertura + cierre como taker): {roundtrip_fee_pct:.4f}%
+  → considerá estos fees al calcular take_profit y stop_loss
 
 ═══════════════════════════════════════════════════════════════════════
   REGLAS ABSOLUTAS (el Risk Gate las verifica — violarlas → orden rechazada)
@@ -748,14 +798,32 @@ Checks performed in order:
 
 Rejected orders are logged in `decisions.rejected_reason` and never reach the Executor.
 
-### 8.2 Circuit breakers
+### 8.2 Fee handling (real, not hardcoded)
+
+Fees are **never hardcoded**. They are fetched from the live Binance account via CCXT and refreshed periodically:
+
+- **On engine startup**: first call to `exchange.fetch_trading_fees()`.
+- **Every 24 hours**: scheduled refresh via APScheduler.
+- **After every trade close**: opportunistic refresh to catch VIP-level changes.
+
+The current maker/taker fees are stored in memory (`FeeManager.current_fees`) and persisted in the `fee_snapshots` table (schema in §6.2) for historical reference, auditing, and fallback.
+
+The current fees are injected into:
+- **Decisor prompt** — to compute realistic R:R after fees.
+- **Risk Gate** — validation R:R check uses live fees, not 0.1% assumption.
+- **Executor** — logs actual fees paid into `trades.fees_usdt` from the order fill response.
+- **Supervisor** — included in the analysis context so playbook reasoning accounts for current cost structure.
+
+If the fee fetch fails, the engine falls back to the **last known fees from `fee_snapshots`** (with a warning logged). If no historical snapshot exists, it uses the conservative default `taker = 0.001` (0.1%) and pauses non-critical operations until fees can be confirmed.
+
+### 8.3 Circuit breakers
 
 - **Daily stop**: when triggered, set `kill_switch_daily = true` until next 00:00 UTC.
 - **Total drawdown**: when triggered, set `kill_switch = true` permanently. Requires manual user reset from UI with double confirmation.
 - **LLM failure**: 5 consecutive LLM call failures (after retries) → engine pauses + alert.
 - **Exchange failure**: 5 consecutive Binance API errors → engine pauses + alert.
 
-### 8.3 Playbook safety
+### 8.4 Playbook safety
 
 - All playbook versions retained (immutable history).
 - Automatic rollback: if 7 days post-update show >2× drawdown vs prior 7 days, revert to previous version + alert.
@@ -766,16 +834,109 @@ Rejected orders are logged in `decisions.rejected_reason` and never reach the Ex
 
 ## 9. Frontend
 
-### 9.1 Pages / views
+### 9.1 Pages / views — detailed content
+
+#### `/` — Dashboard (main view)
+
+**Header (always visible)**
+- Engine status indicator: 🟢 ON / 🔴 OFF / 🟡 PAUSED (circuit breaker)
+- Mode badge: PAPER_TRADING (yellow) / LIVE (red, pulsing)
+- Time to next decision cycle (countdown, e.g., "próximo ciclo en 2:34")
+- Kill switch button (always reachable, top-right, large red)
+
+**Main content grid**
+- **Live price chart** (BTC/USDT, last 24h, 5-min candles, current candle highlighted)
+- **Current position card** — when position is open:
+  - Side, quantity BTC, entry price, SL, TP
+  - Current price, unrealized P&L USDT, unrealized %
+  - Time held
+  - Distance to SL and TP in %
+  - "Forzar cierre" button
+- **Last decision card** — most recent decisor output:
+  - Big action label: BUY / SELL / HOLD
+  - Confidence gauge (0–100%)
+  - Identified regime (TRENDING_UP / TRENDING_DOWN / RANGE / HIGH_VOLATILITY)
+  - Confluences as chips (e.g., `rsi_oversold_5m`, `macd_bullish_15m`)
+  - Reasoning paragraph in Spanish
+  - "Ver decisión completa" link → opens decisions page filtered to this row
+- **Today's stats panel**:
+  - P&L USD (realized + unrealized)
+  - P&L %
+  - Trades hoy count
+  - Win rate (W/L of today)
+  - Best trade / worst trade today
+  - Time to daily reset (00:00 UTC)
+- **Active playbook summary**:
+  - Bias badge (BULLISH / BEARISH / NEUTRAL)
+  - Top 3 active rules (excerpt)
+  - "Ver playbook completo" → `/playbook`
+
+#### `/trades` — Trade history
+
+- **Filters bar**: date range picker, status (open/closed/cancelled), result (win/loss/all), close reason
+- **Table columns**: ts open, ts close, side, qty BTC, entry, exit, SL, TP, pnl_usdt, pnl_pct, fees_usdt (real, from FeeManager), close_reason, duration
+- **Sortable** by any column
+- **Click row** → modal showing the full originating decision context (input JSONB pretty-printed, output, outcome)
+- **Export** button: download filtered set as CSV
+- **Summary footer**: totals across filtered set (total P&L, # wins, # losses, avg holding time, total fees paid)
+
+#### `/decisions` — LLM audit log
+
+- **Filters bar**: agent (decisor / supervisor), action (BUY/SELL/HOLD), confidence range (slider), executed (yes/no/rejected), date range
+- **Table columns**: ts, agent, model, action, confidence, executed/rejected, rejected_reason, tokens_in, tokens_out, latency_ms
+- **Color-coded rows**: BUY green, SELL orange, HOLD gray, REJECTED red
+- **Click row** → expanded view in side panel:
+  - Full **input JSON** sent to the LLM (pretty-printed, collapsible nodes)
+  - Full **output JSON** received
+  - Reasoning text rendered prominently
+  - Outcome JSON (if trade closed)
+  - Resolved trade link if applicable
+  - Token usage and cost (always $0 in v1 since free tier)
+- Useful for answering: "¿por qué hizo este trade?" or "¿por qué rechazó esta operación?"
+
+#### `/playbook` — Playbook viewer
+
+- **Active version** rendered as styled markdown
+- **Version history sidebar**: list of all versions with timestamp, win rate of period that generated it, P&L summary, "active" badge on current
+- **Diff viewer**: select two versions to see line-by-line diff
+- **Manual edit**: button "Editar manualmente" opens a markdown editor with warning. Saving creates a new version with `model = 'manual'` for traceability.
+- **Reset to v0**: button with confirmation modal, sets v0 as active.
+- **Rollback to previous**: one-click rollback if supervisor's latest version is performing worse.
+
+#### `/config` — Configuration panel
+
+- All sections from §9.3 in collapsible cards: **Riesgo**, **Timing**, **LLM**, **Data**, **Prompts (advanced)**, **Notificaciones**, **Kill Switch**.
+- Each setting:
+  - Current value displayed prominently
+  - Control: slider for ranges, dropdown for enums, toggle for booleans, text input for strings
+  - Description tooltip on hover
+  - "Last changed" timestamp + "by whom"
+- **Save changes** button validates all values, writes to `config`, audit-logs to `config_history`.
+- **PAPER → LIVE toggle** requires modal with input field where user types literally `"CONFIRMO TRADING REAL"` to enable.
+- **Kill switch** is a separate prominent card with big red button.
+
+#### `/health` — System diagnostics
+
+- **Engine card**: last heartbeat timestamp, uptime, memory usage, # errors last 24h, recent error log (last 10)
+- **Postgres card**: connection status, # rows per main table, total DB size, oldest record per table
+- **Binance card**: REST connection, WebSocket connection, last successful API call ts, current rate limit usage (% of weight quota)
+- **LLM card** (per provider — Gemini Flash, Gemini Pro, Groq):
+  - Status (healthy / degraded / down)
+  - Latency p50 / p95 / p99 last hour
+  - Calls today / quota remaining
+  - # times fallback was triggered
+- **Recent errors panel**: tail of last 100 ERROR-level log entries (structured JSON)
+
+### 9.1.1 Pages summary
 
 | Route | Component | Purpose |
 |-------|-----------|---------|
-| `/` | Dashboard | Live price, current position, P&L gauge, last decision card |
-| `/trades` | TradeHistory | Closed trades table with filters |
-| `/decisions` | DecisionLog | Audit trail of every LLM call |
-| `/playbook` | PlaybookViewer | Active playbook + version history |
-| `/config` | ConfigPanel | All editable runtime config (see §6.2) |
-| `/health` | SystemHealth | Engine status, LLM latency, exchange connectivity |
+| `/` | Dashboard | Live monitoring with all key info on one screen |
+| `/trades` | TradeHistory | Closed trades table with filters and originating decision |
+| `/decisions` | DecisionLog | Full audit trail of every LLM call (decisor + supervisor) |
+| `/playbook` | PlaybookViewer | Active playbook + version history + diff + rollback |
+| `/config` | ConfigPanel | All editable runtime config |
+| `/health` | SystemHealth | Engine, DB, exchange, and LLM provider diagnostics |
 
 ### 9.2 Real-time updates
 
