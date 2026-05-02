@@ -1,0 +1,27 @@
+trading-engine/tests/test_config_store.py
+  b1e477c83d64d585 1-80
+shared/config_store.py
+  b1e477c83d64d585 1-129
+trading-engine/config.py
+  b1e477c83d64d585 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "716de3705c0b614f1a76bcbcf1cae4cd266768e9",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 254,
+      "total_deletions": 11,
+      "accepted_lines": 244,
+      "overriden_lines": 0
+    }
+  }
+}
