@@ -1,0 +1,32 @@
+=== CICLO DE DECISION — {timestamp_utc} UTC ===
+
+PRECIO BTC/USDT
+  Actual: ${price:,.2f}
+  Cambio: 1h {pct_1h:+.2f}% | 4h {pct_4h:+.2f}% | 24h {pct_24h:+.2f}%
+
+INDICADORES TECNICOS
+  5m:  RSI {rsi_5m:.0f} | BB% {bb_pct_5m:.0f}
+  15m: RSI {rsi_15m:.0f} | MACD {macd_15m:+.1f}/{sig_15m:+.1f} hist {hist_15m:+.1f}
+  1h:  RSI {rsi_1h:.0f} | MACD {macd_1h:+.1f}/{sig_1h:+.1f}
+       EMA20 {ema20_1h:,.0f} EMA50 {ema50_1h:,.0f} EMA200 {ema200_1h:,.0f}
+  4h:  RSI {rsi_4h:.0f} | EMA20 {ema20_4h:,.0f} EMA50 {ema50_4h:,.0f}
+  ATR(1h): ${atr_1h:.0f} ({atr_pct_1h:.2f}%)
+
+ORDER BOOK
+  Spread: ${spread:.2f} ({spread_pct:.4f}%)
+  Imbalance: {imbalance:.2f} ({imbalance_label})
+  Bid wall: ${bid_wall_price:,.0f} ({bid_wall_size:.1f} BTC)
+  Ask wall: ${ask_wall_price:,.0f} ({ask_wall_size:.1f} BTC)
+
+POSICIONES ({open_positions_count}/{max_simultaneous_trades})
+{positions_block}
+
+BALANCE
+  USDT: ${usdt_available:,.2f} | BTC: {btc_held:.6f}
+
+P&L HOY: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%) | Stop en: {daily_stop_pct}%
+
+ULTIMAS DECISIONES
+{last_decisions_block}
+
+=== Decide ahora con el JSON exacto. ===
