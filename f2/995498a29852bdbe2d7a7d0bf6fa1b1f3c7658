@@ -1,0 +1,25 @@
+trading-engine/risk/risk_gate.py
+  b1e477c83d64d585 1-63
+trading-engine/tests/test_risk_gate.py
+  b1e477c83d64d585 1-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "f2995498a29852bdbe2d7a7d0bf6fa1b1f3c7658",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 323,
+      "total_deletions": 1,
+      "accepted_lines": 322,
+      "overriden_lines": 0
+    }
+  }
+}
