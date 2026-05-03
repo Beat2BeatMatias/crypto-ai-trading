@@ -1,0 +1,25 @@
+trading-engine/tests/test_price_collector.py
+  b1e477c83d64d585 1-83
+trading-engine/collectors/price_collector.py
+  b1e477c83d64d585 1-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "5509c86e3094325862b66f2958b1efe5e4a34dc5",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 230,
+      "total_deletions": 2,
+      "accepted_lines": 229,
+      "overriden_lines": 0
+    }
+  }
+}
