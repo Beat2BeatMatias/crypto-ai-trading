@@ -1,0 +1,25 @@
+trading-engine/tests/test_context_builder.py
+  b1e477c83d64d585 1-241
+trading-engine/agents/context_builder.py
+  b1e477c83d64d585 1-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1b1dd30f5371f3f4212cd203854a33e79765e0b4",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 374,
+      "total_deletions": 0,
+      "accepted_lines": 374,
+      "overriden_lines": 0
+    }
+  }
+}
