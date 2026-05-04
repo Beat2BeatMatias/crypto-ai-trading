@@ -14,6 +14,15 @@ async def lifespan(app: FastAPI):
     engine = create_engine_from_url(db_url)
     app.state.engine = engine
     app.state.session_factory = create_session_factory(engine)
+
+    # Auto-create tables in SQLite (dev/test mode — Postgres uses Alembic migrations)
+    if "sqlite" in db_url:
+        from shared.db.base import Base
+        from shared.db import models  # noqa: F401 — registers all tables
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("web.sqlite_tables_created")
+
     logger.info("web.started")
     try:
         yield

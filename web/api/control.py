@@ -25,7 +25,10 @@ async def _session(request: Request) -> AsyncSession:
 async def toggle_kill_switch(body: KillSwitchBody,
                               session: Annotated[AsyncSession, Depends(_session)]):
     store = ConfigStore(session)
-    await store.set(ConfigKey.KILL_SWITCH, "true" if body.enabled else "false", changed_by="user")
+    try:
+        await store.set(ConfigKey.KILL_SWITCH, "true" if body.enabled else "false", changed_by="user")
+    except KeyError:
+        raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
     return {"ok": True, "kill_switch": body.enabled}
 
 
@@ -34,5 +37,8 @@ async def set_mode(body: ModeBody, session: Annotated[AsyncSession, Depends(_ses
     if body.mode == "LIVE" and body.confirmation != "CONFIRMO TRADING REAL":
         raise HTTPException(400, "LIVE mode requires confirmation phrase: CONFIRMO TRADING REAL")
     store = ConfigStore(session)
-    await store.set(ConfigKey.MODE, body.mode, changed_by="user")
+    try:
+        await store.set(ConfigKey.MODE, body.mode, changed_by="user")
+    except KeyError:
+        raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
     return {"ok": True, "mode": body.mode}
