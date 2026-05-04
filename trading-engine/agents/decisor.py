@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 import uuid
 from typing import Any
 import structlog
@@ -44,7 +45,7 @@ class Decisor:
         )
 
         system_prompt = self.prompt_manager.load_system_prompt("decisor")
-        system_prompt = system_prompt.format_map(_SafeMap(ctx))
+        system_prompt = _safe_substitute(system_prompt, ctx)
         user_prompt = self.prompt_manager.render_user_prompt("decisor", ctx, strict=False)
 
         resp = None
@@ -90,9 +91,13 @@ def _hold_decision(reason: str) -> DecisorOutput:
     )
 
 
-class _SafeMap(dict):
-    def __missing__(self, key):
-        return "{" + key + "}"
+def _safe_substitute(template: str, ctx: dict) -> str:
+    """Replace only {valid_identifier} placeholders that exist in ctx.
+    Leaves all other curly-brace content (JSON examples, pipes, etc.) untouched."""
+    def replace(match: re.Match) -> str:
+        key = match.group(1)
+        return str(ctx[key]) if key in ctx else match.group(0)
+    return re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}', replace, template)
 
 
 def _serialize(value: Any) -> Any:
