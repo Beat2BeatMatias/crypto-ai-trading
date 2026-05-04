@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -80,6 +80,7 @@ class ConfigStore:
                     value=default.value,
                     value_type=default.value_type,
                     description=default.description,
+                    updated_at=datetime.now(tz=timezone.utc),
                 )
             )
         await self.session.commit()
@@ -103,11 +104,11 @@ class ConfigStore:
             raise KeyError(f"Cannot set unknown key: {key.value}")
         old_value = row.value
         row.value = value
-        row.updated_at = datetime.utcnow()
+        row.updated_at = datetime.now(tz=timezone.utc)
         self.session.add(
             ConfigHistory(
                 id=uuid.uuid4(),
-                ts=datetime.utcnow(),
+                ts=datetime.now(tz=timezone.utc),
                 key=key.value,
                 old_value=old_value,
                 new_value=value,
