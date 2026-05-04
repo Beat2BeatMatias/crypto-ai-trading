@@ -1,0 +1,29 @@
+backtesting/requirements.txt
+  b1e477c83d64d585 2
+trading-engine/collectors/indicators.py
+  b1e477c83d64d585 1-9,30,32-74,77-79,84-86,90-92
+trading-engine/requirements.txt
+  b1e477c83d64d585 16
+backtesting/runner.py
+  b1e477c83d64d585 56-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "13a57a691ffcb2634b9ab8032e0ad5ef4697827b",
+  "prompts": {
+    "b1e477c83d64d585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ec44bd6-54db-4361-b784-aef26a274805",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 91,
+      "total_deletions": 52,
+      "accepted_lines": 772,
+      "overriden_lines": 0
+    }
+  }
+}
