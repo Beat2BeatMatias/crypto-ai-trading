@@ -19,8 +19,8 @@ logger = structlog.get_logger()
 class Decisor:
     def __init__(self, *, session: AsyncSession, llm: LLMClient, symbol: str,
                  prompt_manager: PromptManager | None = None,
-                 provider: LLMProvider = LLMProvider.GEMINI_FLASH,
-                 fallback: LLMProvider | None = LLMProvider.GROQ_LLAMA):
+                 provider: LLMProvider = LLMProvider.GROQ_LLAMA,
+                 fallback: LLMProvider | None = LLMProvider.GEMINI_FLASH):
         self.session = session
         self.llm = llm
         self.symbol = symbol
