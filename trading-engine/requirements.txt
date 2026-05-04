@@ -13,8 +13,7 @@ uvloop==0.21.0
 # Exchange & indicators
 ccxt==4.4.40
 pandas==2.2.3
-numpy==2.2.6
-pandas-ta==0.4.71b0
+numpy==1.26.4
 
 # LLMs
 google-genai==0.3.0

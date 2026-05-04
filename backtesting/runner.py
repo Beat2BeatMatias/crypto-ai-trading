@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 import ccxt
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 
 @dataclass
@@ -54,16 +53,33 @@ def fetch_history(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd is not None:
-        df["macd"] = macd.iloc[:, 0]
-        df["macd_signal"] = macd.iloc[:, 1]
-        df["macd_hist"] = macd.iloc[:, 2]
-    df["ema20"] = ta.ema(df["close"], length=20)
-    df["ema50"] = ta.ema(df["close"], length=50)
-    df["ema200"] = ta.ema(df["close"], length=200)
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    close = df["close"]
+    # RSI
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(com=13, min_periods=14).mean()
+    avg_loss = loss.ewm(com=13, min_periods=14).mean()
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    df["rsi"] = 100 - (100 / (1 + rs))
+    # MACD
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+    # EMAs
+    df["ema20"] = close.ewm(span=20, adjust=False).mean()
+    df["ema50"] = close.ewm(span=50, adjust=False).mean()
+    df["ema200"] = close.ewm(span=200, adjust=False).mean()
+    # ATR
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    df["atr"] = tr.ewm(com=13, min_periods=14).mean()
     df["volume_avg"] = df["volume"].rolling(20).mean()
     return df
 
