@@ -1,0 +1,30 @@
+README.md
+  ff874406190a89e0 3-5,11,13,17-18,20-44,46,49,52,55-91,94-137,139-241
+trading-engine/agents/decisor.py
+  ff874406190a89e0 22-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b2dab8918913ba829d7349f6a406b5bd24a892a8",
+  "prompts": {
+    "ff874406190a89e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a72aca5c-975b-483a-8aa2-098ef2dba91e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 440,
+      "total_deletions": 36,
+      "accepted_lines": 440,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_168a2cc2ff8919": {
+      "author": "mfariasfalki_meli"
+    }
+  }
+}
