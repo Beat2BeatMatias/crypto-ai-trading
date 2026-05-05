@@ -70,7 +70,7 @@ class Decisor:
             rejected_reason = f"llm_error: {type(e).__name__}"
 
         self.session.add(Decision(
-            agent="decisor", model=self.provider.value,
+            agent="decisor", model=resp.provider if resp else self.provider.value,
             tokens_in=resp.tokens_in if resp else 0,
             tokens_out=resp.tokens_out if resp else 0,
             latency_ms=resp.latency_ms if resp else 0,
@@ -79,7 +79,11 @@ class Decisor:
         ))
         await self.session.commit()
         logger.info("decisor.decided", action=output_dict["action"],
-                    confidence=output_dict["confidence"], rejected=rejected_reason)
+                    confidence=output_dict["confidence"],
+                    regime=output_dict["regime"],
+                    confluences=output_dict["confluences"],
+                    reasoning=output_dict["reasoning"],
+                    rejected=rejected_reason)
         return validated
 
 

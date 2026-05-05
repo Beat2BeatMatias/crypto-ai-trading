@@ -31,6 +31,7 @@ class ConfigKey(str, Enum):
     LLM_TIMEOUT_SEC = "llm_timeout_sec"
     ORDERBOOK_LEVELS = "orderbook_levels"
     KILL_SWITCH = "kill_switch"
+    SUPERVISOR_RUN_NOW = "supervisor_run_now"
 
 
 @dataclass(frozen=True)
@@ -50,13 +51,23 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.DEFAULT_RR_RATIO: _Default("2.0", "float", "Default take-profit ratio"),
     ConfigKey.DECISOR_INTERVAL_MIN: _Default("5", "int", "Decisor frequency in minutes"),
     ConfigKey.SUPERVISOR_CRON: _Default("0 0 * * *", "string", "Supervisor schedule (UTC)"),
-    ConfigKey.DECISOR_PROVIDER: _Default("gemini-2.5-flash", "string", "Primary LLM for decisor"),
-    ConfigKey.SUPERVISOR_PROVIDER: _Default("gemini-2.5-pro", "string", "LLM for supervisor"),
-    ConfigKey.FALLBACK_PROVIDER: _Default("groq-llama-3.3-70b", "string", "Fallback LLM"),
+    ConfigKey.DECISOR_PROVIDER: _Default(
+        "groq-llama-3.3-70b", "string",
+        "Primary LLM for decisor. Options: groq-llama-3.3-70b | groq-compound-beta | gemini-2.5-flash",
+    ),
+    ConfigKey.SUPERVISOR_PROVIDER: _Default(
+        "gemini-2.5-pro", "string",
+        "LLM for supervisor. Options: gemini-2.5-pro | groq-llama-3.3-70b | groq-compound-beta",
+    ),
+    ConfigKey.FALLBACK_PROVIDER: _Default(
+        "gemini-2.5-flash", "string",
+        "Fallback LLM when primary fails. Options: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta",
+    ),
     ConfigKey.LLM_MAX_RETRIES: _Default("3", "int", "Retries on LLM failure"),
     ConfigKey.LLM_TIMEOUT_SEC: _Default("30", "int", "LLM call timeout"),
     ConfigKey.ORDERBOOK_LEVELS: _Default("10", "int", "Order book depth in context"),
     ConfigKey.KILL_SWITCH: _Default("false", "bool", "Emergency stop"),
+    ConfigKey.SUPERVISOR_RUN_NOW: _Default("false", "bool", "internal: manual supervisor trigger"),
 }
 
 

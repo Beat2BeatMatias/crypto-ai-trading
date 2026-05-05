@@ -23,7 +23,7 @@ NEUTRAL
 3. position_size_pct maximo 0.05 en bootstrap (primera semana).
 4. Si daily P&L < -1.5% -> solo HOLD.
 5. Si ATR(1h) > 1.5x promedio 7d -> reducir size 50%.
-6. Si ultimas 5 decisiones fueron HOLD valido -> seguir HOLD.
+6. Si ultimas 5 decisiones fueron HOLD valido -> seguir HOLD, EXCEPTO si aparece un setup valido completo: pullback a EMA confirmado, breakout con volumen, o reversion con confirmacion de indicadores. Una unica señal aislada no invalida el HOLD.
 
 ## Cambios vs playbook anterior
 N/A — primera version.

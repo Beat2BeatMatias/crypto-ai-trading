@@ -42,3 +42,13 @@ async def set_mode(body: ModeBody, session: Annotated[AsyncSession, Depends(_ses
     except KeyError:
         raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
     return {"ok": True, "mode": body.mode}
+
+
+@router.post("/supervisor/run")
+async def run_supervisor_now(session: Annotated[AsyncSession, Depends(_session)]):
+    store = ConfigStore(session)
+    try:
+        await store.set(ConfigKey.SUPERVISOR_RUN_NOW, "true", changed_by="user")
+    except KeyError:
+        raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
+    return {"ok": True, "queued": True}

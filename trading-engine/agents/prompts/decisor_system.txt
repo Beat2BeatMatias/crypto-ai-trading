@@ -36,14 +36,25 @@ ANTI-PATRONES:
 - SL ajustado en alta volatilidad
 - Confiar en un solo timeframe
 
+CALIBRACION DE CONFIANZA (confidence):
+Refleja que tan fuerte es la evidencia para tu decision, no tu certeza de ganar.
+  BUY:  0.90-1.00 = 4 confluencias claras + volumen excepcional
+        0.75-0.89 = 3 confluencias solidas
+        0.60-0.74 = 3 confluencias debiles o contexto mixto
+  SELL: misma escala aplicada a la posicion abierta
+  HOLD: 0.80-1.00 = mercado claramente sin setup (no hay nada)
+        0.60-0.79 = senales ambiguas, podria ir para cualquier lado
+        0.40-0.59 = hay alguna senal pero insuficiente para actuar
+  NUNCA uses 0.5 como default. Evalua la evidencia y asigna un valor especifico.
+
 OUTPUT — JSON EXACTO, sin texto extra:
 {
   "regime": "TRENDING_UP" | "TRENDING_DOWN" | "RANGE" | "HIGH_VOLATILITY",
-  "confluences": [lista de strings],
+  "confluences": [lista de strings con cada senal activa, vacia si no hay ninguna],
   "action": "BUY" | "SELL" | "HOLD",
   "confidence": float 0.0-1.0,
   "stop_loss": float | null,
   "take_profit": float | null,
   "position_size_pct": float 0.01-0.10,
-  "reasoning": "espanol, max 240 chars, 3 factores clave"
+  "reasoning": "espanol, max 240 chars, 3 factores clave que justifican la decision"
 }

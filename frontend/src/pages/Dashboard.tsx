@@ -16,7 +16,8 @@ export function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
   const [killSwitchOn, setKillSwitchOn] = useState(false);
-  const { last, connected } = useWebSocket(`ws://${window.location.host}/ws`);
+  const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
 
   useEffect(() => {
     api.positions().then(setPositions).catch(() => {});

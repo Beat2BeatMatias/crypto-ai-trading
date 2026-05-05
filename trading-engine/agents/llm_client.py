@@ -13,6 +13,7 @@ class LLMProvider(str, Enum):
     GEMINI_FLASH = "gemini-2.5-flash"
     GEMINI_PRO = "gemini-2.5-pro"
     GROQ_LLAMA = "groq-llama-3.3-70b"
+    GROQ_COMPOUND = "groq-compound-beta"
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,8 @@ class LLMClient:
             if fallback is None:
                 raise
             logger.warning("llm.primary_failed_falling_back", primary=provider.value,
-                           fallback=fallback.value, error=str(e))
+                           fallback=fallback.value, error=str(e),
+                           rate_limited=_is_rate_limit(e))
             return await self._call_with_retry(fallback, system_prompt, user_prompt)
 
     async def _call_with_retry(self, provider: LLMProvider, system_prompt: str,
@@ -51,6 +53,11 @@ class LLMClient:
                 return await self._call_provider(provider, system_prompt, user_prompt)
             except Exception as e:
                 last_err = e
+                if _is_rate_limit(e):
+                    # Rate limit: reintentar no ayuda, saltar directo al fallback
+                    logger.warning("llm.rate_limited", provider=provider.value,
+                                   error=str(e))
+                    raise
                 wait = self.backoff_base * (2 ** attempt)
                 logger.warning("llm.retry", provider=provider.value, attempt=attempt + 1,
                                error=str(e), wait_s=wait)
@@ -64,7 +71,9 @@ class LLMClient:
         if provider in (LLMProvider.GEMINI_FLASH, LLMProvider.GEMINI_PRO):
             resp = await self._call_gemini(provider, system_prompt, user_prompt)
         elif provider == LLMProvider.GROQ_LLAMA:
-            resp = await self._call_groq(system_prompt, user_prompt)
+            resp = await self._call_groq("llama-3.3-70b-versatile", system_prompt, user_prompt)
+        elif provider == LLMProvider.GROQ_COMPOUND:
+            resp = await self._call_groq("compound-beta", system_prompt, user_prompt)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -85,11 +94,11 @@ class LLMClient:
                 "tokens_in": getattr(response.usage_metadata, "prompt_token_count", 0),
                 "tokens_out": getattr(response.usage_metadata, "candidates_token_count", 0)}
 
-    async def _call_groq(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    async def _call_groq(self, model: str, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         if self.groq is None:
             raise RuntimeError("Groq client not configured")
         response = await self.groq.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=model,
             messages=[{"role": "system", "content": system_prompt},
                       {"role": "user", "content": user_prompt}],
             response_format={"type": "json_object"}, temperature=0.4,
@@ -97,3 +106,16 @@ class LLMClient:
         return {"text": response.choices[0].message.content,
                 "tokens_in": response.usage.prompt_tokens,
                 "tokens_out": response.usage.completion_tokens}
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """Detecta errores 429 de Groq y Gemini para saltar directo al fallback."""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "ratelimit" in name
+        or "rate_limit" in name
+        or "429" in msg
+        or "resource_exhausted" in msg  # Gemini usa este código
+        or "rate limit" in msg
+    )

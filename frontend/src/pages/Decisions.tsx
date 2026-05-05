@@ -30,6 +30,7 @@ export function Decisions() {
             <tr className="text-xs uppercase text-zinc-500 border-b border-zinc-800">
               <th className="text-left py-2 pr-3">TS</th>
               <th className="text-left pr-3">Agente</th>
+              <th className="text-left pr-3">Modelo</th>
               <th className="text-left pr-3">Acción</th>
               <th className="text-right pr-3">Conf</th>
               <th className="text-left">Estado</th>
@@ -41,6 +42,7 @@ export function Decisions() {
                 className={`cursor-pointer border-t border-zinc-800 hover:bg-zinc-800/40 transition-colors ${selected?.id === d.id ? "bg-zinc-800" : ""}`}>
                 <td className="py-2 pr-3 text-zinc-400 text-xs">{new Date(d.ts).toLocaleString("es-AR")}</td>
                 <td className="pr-3">{d.agent}</td>
+                <td className="pr-3 text-xs text-zinc-400 font-mono">{d.model}</td>
                 <td className={`pr-3 font-semibold ${out(d).action === "BUY" ? "text-emerald-400" : out(d).action === "SELL" ? "text-red-400" : "text-zinc-400"}`}>
                   {out(d).action ?? "—"}
                 </td>
@@ -55,7 +57,8 @@ export function Decisions() {
       <div className="rounded-xl bg-zinc-900 p-5 overflow-auto max-h-[80vh]">
         {selected ? (
           <div>
-            <h3 className="font-semibold mb-2">{out(selected).action ?? "—"}</h3>
+            <h3 className="font-semibold mb-1">{out(selected).action ?? "—"}</h3>
+            <p className="text-xs text-zinc-500 font-mono mb-3">{selected.model}</p>
             <p className="text-sm text-zinc-300 mb-4">{out(selected).reasoning ?? ""}</p>
             {selected.rejected_reason && (
               <p className="text-xs text-red-400 mb-3">Rechazada: {selected.rejected_reason}</p>

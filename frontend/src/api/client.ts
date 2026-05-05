@@ -40,6 +40,7 @@ export const api = {
   config: () => get<ConfigEntry[]>("/config"),
   setConfig: (key: string, value: string) => put(`/config/${key}`, { value }),
   killSwitch: (enabled: boolean) => post("/kill-switch", { enabled }),
+  runSupervisor: () => post("/supervisor/run", {}),
   setMode: (mode: "PAPER_TRADING" | "LIVE", confirmation: string) =>
     post("/mode", { mode, confirmation }),
   playbookActive: () => get<Playbook | null>("/playbook/active"),

@@ -66,6 +66,14 @@ async def run() -> None:
         if cb.engine_paused:
             logger.warning("engine.paused")
             return
+
+        async with session_factory() as s:
+            store = ConfigStore(s)
+            if await store.get_typed(ConfigKey.SUPERVISOR_RUN_NOW):
+                await store.set(ConfigKey.SUPERVISOR_RUN_NOW, "false", changed_by="system")
+                logger.info("supervisor.manual_trigger")
+                await supervisor_tick()
+
         async with session_factory() as s:
             store = ConfigStore(s)
             mode = await store.get(ConfigKey.MODE)
@@ -74,6 +82,9 @@ async def run() -> None:
             max_sim = await store.get_typed(ConfigKey.MAX_SIMULTANEOUS_TRADES)
             daily_stop = await store.get_typed(ConfigKey.DAILY_STOP_PCT)
             interval_min = await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN)
+            decisor_provider = LLMProvider(await store.get(ConfigKey.DECISOR_PROVIDER))
+            fallback_provider_str = await store.get(ConfigKey.FALLBACK_PROVIDER)
+            fallback_provider = LLMProvider(fallback_provider_str) if fallback_provider_str else None
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
             for tf in ("1m", "5m", "15m", "1h", "4h"):
@@ -92,7 +103,8 @@ async def run() -> None:
                 cb.record_exchange_failure()
                 return
 
-            decisor = Decisor(session=s, llm=llm, symbol=settings.symbol)
+            decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
+                              provider=decisor_provider, fallback=fallback_provider)
             ob_snap = orderbook.snapshot(levels=10)
             try:
                 decision = await decisor.decide(

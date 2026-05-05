@@ -25,10 +25,14 @@ async def _session(request: Request) -> AsyncSession:
         yield s
 
 
+_INTERNAL_KEYS = {"supervisor_run_now"}
+
+
 @router.get("/config", response_model=list[ConfigEntryOut])
 async def list_config(session: Annotated[AsyncSession, Depends(_session)]):
     rows = (await session.execute(select(ConfigEntry).order_by(ConfigEntry.key))).scalars().all()
-    return [ConfigEntryOut.model_validate(r, from_attributes=True) for r in rows]
+    return [ConfigEntryOut.model_validate(r, from_attributes=True) for r in rows
+            if r.key not in _INTERNAL_KEYS]
 
 
 @router.put("/config/{key}")

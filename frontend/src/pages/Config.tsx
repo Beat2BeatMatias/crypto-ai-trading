@@ -2,12 +2,20 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { ConfigEntry } from "../types";
 
+const SELECT_OPTIONS: Record<string, string[]> = {
+  decisor_provider:    ["groq-llama-3.3-70b", "groq-compound-beta", "gemini-2.5-flash"],
+  fallback_provider:   ["gemini-2.5-flash", "groq-llama-3.3-70b", "groq-compound-beta"],
+  supervisor_provider: ["gemini-2.5-pro", "groq-llama-3.3-70b", "groq-compound-beta"],
+  mode:                ["PAPER_TRADING", "LIVE"],
+};
+
 export function Config() {
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [liveModal, setLiveModal] = useState(false);
   const [liveConfirm, setLiveConfirm] = useState("");
   const [msg, setMsg] = useState("");
+  const [supRunning, setSupRunning] = useState(false);
 
   useEffect(() => { api.config().then(setEntries).catch(() => {}); }, []);
 
@@ -32,18 +40,35 @@ export function Config() {
     }
   };
 
+  const onRunSupervisor = async () => {
+    setSupRunning(true);
+    try {
+      await api.runSupervisor();
+      setMsg("Supervisor encolado. Se ejecutará en el próximo tick del decisor (máx. 5 min).");
+    } catch {
+      setMsg("Error al encolar el supervisor.");
+    }
+    setTimeout(() => { setMsg(""); setSupRunning(false); }, 6000);
+  };
+
   const modeEntry = entries.find(e => e.key === "mode");
 
   return (
     <div className="space-y-4">
       {msg && <div className="rounded bg-zinc-800 px-4 py-2 text-sm text-emerald-400">{msg}</div>}
 
-      {modeEntry?.value === "PAPER_TRADING" && (
-        <button onClick={() => setLiveModal(true)}
-          className="rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500">
-          Cambiar a LIVE (trading real) →
+      <div className="flex gap-3">
+        {modeEntry?.value === "PAPER_TRADING" && (
+          <button onClick={() => setLiveModal(true)}
+            className="rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500">
+            Cambiar a LIVE (trading real) →
+          </button>
+        )}
+        <button onClick={onRunSupervisor} disabled={supRunning}
+          className="rounded bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed">
+          {supRunning ? "Encolando..." : "Ejecutar Supervisor ahora"}
         </button>
-      )}
+      </div>
 
       <div className="rounded-xl bg-zinc-900 p-5">
         <h2 className="text-lg font-semibold mb-4">Configuración runtime</h2>
@@ -64,9 +89,23 @@ export function Config() {
                   {e.description && <div className="text-xs text-zinc-500 mt-0.5">{e.description}</div>}
                 </td>
                 <td className="pr-4">
-                  <input className="w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm"
-                    value={edits[e.key] ?? e.value}
-                    onChange={ev => setEdits(p => ({ ...p, [e.key]: ev.target.value }))} />
+                  {SELECT_OPTIONS[e.key] ? (
+                    <select
+                      className="w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100 cursor-pointer"
+                      value={edits[e.key] ?? e.value}
+                      onChange={ev => setEdits(p => ({ ...p, [e.key]: ev.target.value }))}
+                    >
+                      {SELECT_OPTIONS[e.key].map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm"
+                      value={edits[e.key] ?? e.value}
+                      onChange={ev => setEdits(p => ({ ...p, [e.key]: ev.target.value }))}
+                    />
+                  )}
                 </td>
                 <td className="pr-4 text-zinc-500 text-xs">{e.value_type}</td>
                 <td>

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 
-interface HealthData { ok: boolean; db: string; }
+interface ServiceStatus { ok: boolean; detail: string; }
+interface HealthData {
+  ok: boolean;
+  db: string;
+  engine: ServiceStatus;
+  binance: ServiceStatus;
+}
 
 function StatusRow({ label, ok, detail }: { label: string; ok: boolean; detail: string }) {
   return (
@@ -28,15 +34,15 @@ export function Health() {
     <div className="rounded-xl bg-zinc-900 p-5 max-w-xl">
       <h2 className="text-lg font-semibold mb-4">Estado del sistema</h2>
       <div className="space-y-2">
-        <StatusRow label="Web API" ok={data?.ok ?? false}
+        <StatusRow label="Web API"
+          ok={data?.ok ?? false}
           detail={data ? `DB: ${data.db}` : "Verificando..."} />
-        <StatusRow label="Trading Engine" ok={false}
-          detail="Heartbeat via DB — ver tabla daily_stats (v1.1)" />
-        <StatusRow label="Binance" ok={false}
-          detail="Conectividad — ver logs del engine" />
-      </div>
-      <div className="mt-4 text-xs text-zinc-600">
-        Panel de salud ampliado disponible en v1.1 (heartbeat desde DB, latencia LLM, etc.)
+        <StatusRow label="Trading Engine"
+          ok={data?.engine?.ok ?? false}
+          detail={data?.engine?.detail ?? "Verificando..."} />
+        <StatusRow label="Binance"
+          ok={data?.binance?.ok ?? false}
+          detail={data?.binance?.detail ?? "Verificando..."} />
       </div>
     </div>
   );
