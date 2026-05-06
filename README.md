@@ -4,20 +4,92 @@ Bot autónomo de day trading BTC/USDT en Binance Spot, impulsado por dos agentes
 
 Diseño completo: `docs/superpowers/specs/2026-05-02-crypto-ai-trading-design.md`
 
-## Quick start
+## Quick start con Docker Compose
+
+### Requisitos previos
+
+- [Docker](https://docs.docker.com/get-docker/) >= 24
+- [Docker Compose](https://docs.docker.com/compose/install/) >= 2 (incluido en Docker Desktop)
+
+### 1. Configurar variables de entorno
 
 ```bash
 cp .env.example .env
-# editar .env con tus API keys (ver Paso 1 y 2 del roadmap abajo)
+```
+
+Editar `.env` con las API keys necesarias (ver Paso 1 y 2 del roadmap abajo):
+
+```env
+POSTGRES_PASSWORD=tu_password_seguro
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
+BINANCE_TESTNET=true
+GEMINI_API_KEY=...
+GROQ_API_KEY=...
+```
+
+### 2. Construir las imágenes
+
+```bash
 docker-compose build
+```
+
+Esto construye los tres servicios: `trading-engine`, `web` y `frontend`. Postgres usa la imagen oficial y no requiere build.
+
+### 3. Aplicar migraciones de base de datos
+
+Solo necesario la primera vez o después de un `git pull` que incluya nuevas migraciones:
+
+```bash
 docker-compose run --rm trading-engine alembic upgrade head
+```
+
+### 4. Levantar todos los servicios
+
+```bash
 docker-compose up -d
 ```
 
-URLs:
-- Dashboard: http://localhost:3100
-- Web API: http://localhost:8100
-- Postgres: `localhost:5532`
+Servicios que se inician:
+
+| Servicio | Descripción | Puerto |
+|----------|-------------|--------|
+| `postgres` | Base de datos compartida | `5532` (host) |
+| `trading-engine` | Bot autónomo de trading (sin HTTP) | — |
+| `web` | API REST + WebSocket del dashboard | `8100` |
+| `frontend` | Dashboard React | `3100` |
+
+### 5. Verificar que todo está corriendo
+
+```bash
+docker-compose ps
+```
+
+Todos los servicios deben mostrar `Up`. El `trading-engine` tarda ~10 s en conectar a Postgres.
+
+Verificar logs del engine:
+
+```bash
+docker-compose logs -f trading-engine
+```
+
+Debe aparecer `scheduler.started` y luego eventos `ohlcv.persisted` cada ciclo.
+
+### Acceder a la app
+
+- **Dashboard:** http://localhost:3100
+- **Web API:** http://localhost:8100
+- **Postgres:** `localhost:5532` (usuario: `trader`, base: `crypto_ai_trading`)
+
+### Parar los servicios
+
+```bash
+# Parar sin borrar datos
+docker-compose down
+
+# Parar y borrar la base de datos (irreversible)
+docker-compose down -v
+```
 
 ---
 
