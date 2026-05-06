@@ -28,9 +28,12 @@ class DecisorOutput(BaseModel):
     reasoning: Annotated[str, Field(max_length=240)]
 
     @model_validator(mode="after")
-    def _buy_requires_stop_loss(self) -> "DecisorOutput":
-        if self.action == DecisorAction.BUY and self.stop_loss is None:
-            raise ValueError("stop_loss is required when action=BUY")
+    def _buy_requires_sl_and_tp(self) -> "DecisorOutput":
+        if self.action == DecisorAction.BUY:
+            if self.stop_loss is None:
+                raise ValueError("stop_loss is required when action=BUY")
+            if self.take_profit is None:
+                raise ValueError("take_profit is required when action=BUY")
         return self
 
 

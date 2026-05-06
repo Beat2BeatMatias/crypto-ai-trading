@@ -21,7 +21,7 @@ R:R MINIMO CONFIGURADO: {min_rr_ratio}:1
 REGLAS ABSOLUTAS (el Risk Gate las verifica):
 R1. position_size_pct maximo: {max_position_pct}
 R2. action=BUY requiere stop_loss OBLIGATORIO < precio_actual
-R3. action=BUY requiere take_profit recomendado > precio_actual
+R3. action=BUY requiere take_profit OBLIGATORIO > precio_actual (null = rechazo automatico)
 R4. action=BUY requiere distancia_SL >= {sl_atr_multiplier} x ATR({atr_ref_tf}) = ${atr_ref:.0f} x {sl_atr_multiplier} = ${atr_ref_min:.0f} minimo
 R5. action=BUY requiere R:R minimo {min_rr_ratio}:1
 R6. action=SELL solo valido si hay posicion LONG abierta
@@ -58,8 +58,8 @@ OUTPUT — JSON EXACTO, sin texto extra:
   "confluences": [lista de strings con cada senal activa, vacia si no hay ninguna],
   "action": "BUY" | "SELL" | "HOLD",
   "confidence": float 0.0-1.0,
-  "stop_loss": float | null,
-  "take_profit": float | null,
+  "stop_loss": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
+  "take_profit": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "position_size_pct": float 0.01-0.10,
   "reasoning": "espanol, max 240 chars, 3 factores clave que justifican la decision"
 }

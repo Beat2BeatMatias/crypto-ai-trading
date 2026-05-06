@@ -59,9 +59,11 @@ class RiskGate:
         sl_min = self.sl_atr_multiplier * atr_1h
         if sl_distance < sl_min:
             return RiskVerdict(False, f"SL distance {sl_distance:.2f} < {self.sl_atr_multiplier}*ATR {sl_min:.2f}")
-        if decision.take_profit is not None:
-            reward = decision.take_profit - current_price
-            risk = sl_distance
-            if risk > 0 and reward / risk < self.min_rr_ratio:
-                return RiskVerdict(False, f"R:R ratio {reward/risk:.2f} < {self.min_rr_ratio}")
+        if decision.take_profit is None:
+            return RiskVerdict(False, "BUY requires take_profit")
+        if decision.take_profit <= current_price:
+            return RiskVerdict(False, "take_profit must be > current_price")
+        reward = decision.take_profit - current_price
+        if sl_distance > 0 and reward / sl_distance < self.min_rr_ratio:
+            return RiskVerdict(False, f"R:R ratio {reward/sl_distance:.2f} < {self.min_rr_ratio}")
         return RiskVerdict(passed=True)

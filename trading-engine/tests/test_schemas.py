@@ -90,6 +90,19 @@ def test_hold_without_stop_loss_passes():
     assert output.stop_loss is None
 
 
+def test_buy_without_take_profit_raises():
+    # GIVEN a BUY payload missing take_profit
+    payload = _valid_buy_payload()
+    payload["take_profit"] = None
+
+    # WHEN parsed
+    # THEN ValidationError is raised
+    with pytest.raises(ValidationError) as exc_info:
+        DecisorOutput(**payload)
+
+    assert "take_profit is required when action=BUY" in str(exc_info.value)
+
+
 def test_reasoning_above_240_chars_raises():
     # GIVEN a payload with reasoning exceeding 240 characters
     payload = _valid_buy_payload()

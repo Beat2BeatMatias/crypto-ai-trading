@@ -213,18 +213,18 @@ def test_rr_below_1_5_rejected():
     assert "R:R" in verdict.reason
 
 
-def test_sl_distance_below_half_atr_rejected():
-    # GIVEN SL distance = 67000 - 66800 = 200, ATR = 500 → 0.5*ATR = 250 > 200
+def test_sl_distance_below_atr_multiplier_rejected():
+    # GIVEN SL distance = 67000 - 66800 = 200, ATR = 800 → 0.3*ATR = 240 > 200
     gate = _make_gate()
-    decision = _buy_decision(stop_loss=66800.0, take_profit=None)
-    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 500.0}
+    decision = _buy_decision(stop_loss=66800.0, take_profit=67900.0)
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 800.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
 
-    # THEN it is rejected for SL too close
+    # THEN it is rejected for SL too close to current price
     assert verdict.passed is False
-    assert "SL distance" in verdict.reason or "0.5*ATR" in verdict.reason
+    assert "SL distance" in verdict.reason
 
 
 def test_total_drawdown_breach_rejects_buy():
@@ -257,3 +257,34 @@ def test_hold_always_passes_even_with_kill_switch_and_daily_breach():
 
     # THEN HOLD always passes regardless of other conditions
     assert verdict.passed is True
+
+
+def test_buy_without_take_profit_rejected():
+    # GIVEN a BUY decision where take_profit is omitted (schema forces it via DecisorOutput)
+    # We bypass schema by patching the field directly after construction
+    gate = _make_gate()
+    decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
+    object.__setattr__(decision, "take_profit", None)
+    kwargs = {**_COMMON_KWARGS, "atr_1h": 300.0}
+
+    # WHEN validated
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    # THEN it is rejected for missing take_profit
+    assert verdict.passed is False
+    assert "take_profit" in verdict.reason
+
+
+def test_buy_with_take_profit_below_entry_rejected():
+    # GIVEN take_profit <= current_price
+    gate = _make_gate()
+    decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
+    object.__setattr__(decision, "take_profit", 66500.0)
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 300.0}
+
+    # WHEN validated
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    # THEN it is rejected because TP is not above entry
+    assert verdict.passed is False
+    assert "take_profit" in verdict.reason
