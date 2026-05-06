@@ -59,3 +59,39 @@ def test_handles_short_series_gracefully():
     }, index=pd.date_range("2026-04-01", periods=3, freq="1min", tz="UTC"))
     out = compute_indicators(short, timeframe="5m")
     assert "rsi" in out  # should not raise
+
+
+def test_atr_winsorization_filters_flash_crash_candles():
+    # GIVEN a series of normal candles followed by a testnet-style flash crash
+    # (low drops from ~82k to ~68k → TR ≈ 14 000 vs normal ~300)
+    n = 50
+    price = 82_000.0
+    closes = np.full(n, price)
+    highs  = closes + 200.0
+    lows   = closes - 200.0
+
+    # Inject two flash-crash candles at positions 30 and 40
+    lows[30] = 68_000.0   # TR ≈ 14 000
+    lows[40] = 68_000.0
+
+    df_crash = pd.DataFrame({
+        "open":   closes, "high": highs, "low": lows,
+        "close":  closes, "volume": np.full(n, 100.0),
+    }, index=pd.date_range("2026-04-01", periods=n, freq="15min", tz="UTC"))
+
+    # GIVEN a clean series with no outliers
+    df_clean = pd.DataFrame({
+        "open":   closes, "high": highs, "low": np.full(n, price - 200.0),
+        "close":  closes, "volume": np.full(n, 100.0),
+    }, index=pd.date_range("2026-04-01", periods=n, freq="15min", tz="UTC"))
+
+    # WHEN indicators are computed for both
+    out_crash = compute_indicators(df_crash, timeframe="15m")
+    out_clean = compute_indicators(df_clean, timeframe="15m")
+
+    # THEN the flash-crash ATR must not be more than 3x the clean ATR
+    # (without winsorization it would be ~6-8x)
+    assert out_crash["atr"] is not None
+    assert out_clean["atr"] is not None
+    ratio = out_crash["atr"] / out_clean["atr"]
+    assert ratio < 3.0, f"ATR inflated {ratio:.1f}x by flash-crash candles — winsorization not working"

@@ -60,14 +60,21 @@ def compute_indicators(df: pd.DataFrame, *, timeframe: str) -> dict[str, Any]:
     bb_upper = sma20 + 2 * std20
     bb_lower = sma20 - 2 * std20
 
-    # ATR — Wilder smoothing
+    # ATR — Wilder smoothing with TR winsorization.
+    # Testnet (and real flash-crashes) produce extreme candles (e.g. low=$68k when
+    # market is at $82k). A single such candle adds ~13 500 to the TR series and
+    # inflates ATR(14) by a factor of 4-5x for several hours, causing the LLM to
+    # set unreachably wide SL/TP targets. Capping TR at 3× the rolling median
+    # removes the artefact without distorting normal ATR behaviour.
     prev_close = close.shift(1)
     tr = pd.concat([
         high - low,
         (high - prev_close).abs(),
         (low - prev_close).abs(),
     ], axis=1).max(axis=1)
-    atr = tr.ewm(com=13, min_periods=14).mean()
+    tr_median = tr.rolling(20, min_periods=5).median()
+    tr_capped = tr.clip(upper=(tr_median * 3).where(tr_median.notna(), tr))
+    atr = tr_capped.ewm(com=13, min_periods=14).mean()
 
     last_close = _last_or_none(close)
     bb_upper_val = _last_or_none(bb_upper)

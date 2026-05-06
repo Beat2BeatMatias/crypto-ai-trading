@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import os
 from contextlib import asynccontextmanager
 import structlog
@@ -23,10 +24,14 @@ async def lifespan(app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
         logger.info("web.sqlite_tables_created")
 
+    from ws.feeds import ticker_broadcaster
+    ticker_task = asyncio.create_task(ticker_broadcaster())
+
     logger.info("web.started")
     try:
         yield
     finally:
+        ticker_task.cancel()
         await engine.dispose()
         logger.info("web.stopped")
 

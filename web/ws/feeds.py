@@ -1,14 +1,44 @@
 from __future__ import annotations
 import asyncio
+import os
 from datetime import datetime, timezone
+import httpx
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select, desc
-from shared.db.models import Decision, Ohlcv, Position
+from shared.db.models import Decision, Position
 from ws.manager import manager
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+_TESTNET = os.environ.get("BINANCE_TESTNET", "").lower() == "true"
+_PRICE_URL = (
+    "https://testnet.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
+    if _TESTNET
+    else "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+)
+
+
+async def ticker_broadcaster() -> None:
+    """Background task: fetches live BTC price from Binance public REST every 5s
+    and broadcasts to all connected WebSocket clients."""
+    async with httpx.AsyncClient(timeout=4) as client:
+        while True:
+            try:
+                resp = await client.get(_PRICE_URL)
+                if resp.status_code == 200:
+                    price = float(resp.json()["price"])
+                    await manager.broadcast("ticker", {
+                        "symbol": "BTC/USDT",
+                        "price": price,
+                        "ts": datetime.now(tz=timezone.utc).isoformat(),
+                    })
+                else:
+                    logger.warning("ws.ticker_http_error", status=resp.status_code)
+            except Exception as e:
+                logger.warning("ws.ticker_fetch_failed", error=str(e))
+            await asyncio.sleep(5)
 
 
 @router.websocket("/ws")
@@ -33,19 +63,6 @@ async def ws_endpoint(ws: WebSocket):
                             "confidence": d.output.get("confidence"),
                             "reasoning": d.output.get("reasoning", ""),
                         })
-                latest_ohlcv = (await s.execute(
-                    select(Ohlcv).where(Ohlcv.timeframe == "1m")
-                    .order_by(desc(Ohlcv.time)).limit(1)
-                )).scalar_one_or_none()
-                if latest_ohlcv is None:
-                    latest_ohlcv = (await s.execute(
-                        select(Ohlcv).order_by(desc(Ohlcv.time)).limit(1)
-                    )).scalar_one_or_none()
-                await manager.broadcast("ticker", {
-                    "symbol": "BTC/USDT",
-                    "price": float(latest_ohlcv.close) if latest_ohlcv and latest_ohlcv.close else None,
-                    "ts": latest_ohlcv.time.isoformat() if latest_ohlcv else None,
-                })
                 positions = (await s.execute(
                     select(Position).where(Position.status == "open")
                 )).scalars().all()
