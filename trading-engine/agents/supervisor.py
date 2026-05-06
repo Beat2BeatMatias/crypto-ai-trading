@@ -129,7 +129,8 @@ class Supervisor:
                 system_prompt = self.prompt_manager.load_system_prompt("supervisor")
                 user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
                 resp = await self.llm.call(provider=self.provider, system_prompt=system_prompt,
-                                            user_prompt=user_prompt, fallbacks=self.fallbacks)
+                                            user_prompt=user_prompt, fallbacks=self.fallbacks,
+                                            json_mode=False)
                 output["playbook"] = resp.text
                 await self.prompt_manager.save_playbook(
                     content=resp.text, model=self.provider.value,

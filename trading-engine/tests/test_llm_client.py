@@ -137,3 +137,44 @@ async def test_retry_on_transient_error_two_failures_then_success():
     assert result.text == '{"action":"HOLD"}'
     assert result.provider == LLMProvider.GEMINI_FLASH.value
     assert gemini_client.aio.models.generate_content.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_groq_json_mode_false_omits_response_format():
+    # GIVEN a Groq client configured to receive markdown (not JSON)
+    groq_resp = _make_groq_response(text="# Playbook v1\n\nContenido en markdown")
+    groq_client = _make_groq_client(groq_resp)
+    client = LLMClient(groq_client=groq_client, max_retries=1)
+
+    # WHEN calling with json_mode=False
+    result = await client.call(
+        provider=LLMProvider.GROQ_LLAMA,
+        system_prompt="Eres un supervisor de trading.",
+        user_prompt="Genera el playbook.",
+        json_mode=False,
+    )
+
+    # THEN response_format is NOT sent to Groq
+    call_kwargs = groq_client.chat.completions.create.call_args[1]
+    assert "response_format" not in call_kwargs
+    assert result.text == "# Playbook v1\n\nContenido en markdown"
+
+
+@pytest.mark.asyncio
+async def test_gemini_json_mode_false_omits_response_mime_type():
+    # GIVEN a Gemini client configured to receive markdown (not JSON)
+    gemini_resp = _make_gemini_response(text="# Playbook v1\n\nContenido en markdown")
+    gemini_client = _make_gemini_client(gemini_resp)
+    client = LLMClient(gemini_client=gemini_client, max_retries=1)
+
+    # WHEN calling with json_mode=False
+    await client.call(
+        provider=LLMProvider.GEMINI_FLASH,
+        system_prompt="Eres un supervisor de trading.",
+        user_prompt="Genera el playbook.",
+        json_mode=False,
+    )
+
+    # THEN response_mime_type is NOT in the config sent to Gemini
+    call_kwargs = gemini_client.aio.models.generate_content.call_args[1]
+    assert "response_mime_type" not in call_kwargs.get("config", {})
