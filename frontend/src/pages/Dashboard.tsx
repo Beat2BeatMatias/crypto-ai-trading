@@ -3,6 +3,12 @@ import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import type { Position, Decision, DailyStats } from "../types";
 
+interface EngineHealth {
+  ok: boolean;
+  detail: string;
+  last_decision_age_min: number | null;
+}
+
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl bg-zinc-900 p-5">
@@ -23,16 +29,41 @@ function StatRow({ label, value, valueClass = "text-zinc-200" }: {
   );
 }
 
+function EngineStatusPill({ health }: { health: EngineHealth | null }) {
+  if (!health) return null;
+  const age = health.last_decision_age_min;
+  const paused = !health.ok || (age !== null && age > 30);
+  const slow = !paused && age !== null && age > 15;
+  const dot = paused
+    ? "bg-red-400"
+    : slow
+    ? "bg-amber-400 animate-pulse"
+    : "bg-emerald-400 animate-pulse";
+  const label = paused ? "Engine pausado" : slow ? "Engine lento" : "Engine activo";
+  return (
+    <div className="flex items-center gap-2 border-l border-zinc-700 pl-4">
+      <span className={`size-2.5 rounded-full ${dot}`} />
+      <span className="text-sm text-zinc-300">{label}</span>
+      <span className="text-xs text-zinc-500">({health.detail})</span>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
   const [killSwitchOn, setKillSwitchOn] = useState(false);
   const [stats, setStats] = useState<DailyStats | null>(null);
   const [ticker, setTicker] = useState<{ symbol: string; price: number | null } | null>(null);
+  const [engineHealth, setEngineHealth] = useState<EngineHealth | null>(null);
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
 
   const loadStats = () => api.dailyStats().then(setStats).catch(() => {});
+  const loadHealth = () =>
+    fetch("/api/health").then(r => r.json())
+      .then(d => setEngineHealth(d?.engine ?? null))
+      .catch(() => {});
 
   useEffect(() => {
     api.positions().then(setPositions).catch(() => {});
@@ -42,6 +73,9 @@ export function Dashboard() {
       setKillSwitchOn(ks?.value === "true");
     }).catch(() => {});
     loadStats();
+    loadHealth();
+    const id = setInterval(loadHealth, 15_000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -72,8 +106,9 @@ export function Dashboard() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
             <span className={`size-3 rounded-full ${connected ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"}`} />
-            <span className="text-sm">{connected ? "Engine conectado" : "Desconectado — reconectando..."}</span>
+            <span className="text-sm">{connected ? "WS conectado" : "Desconectado — reconectando..."}</span>
           </div>
+          <EngineStatusPill health={engineHealth} />
           {ticker && (
             <div className="flex items-center gap-2 border-l border-zinc-700 pl-4">
               <span className="text-sm font-semibold text-zinc-400">{ticker.symbol}</span>

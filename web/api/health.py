@@ -18,9 +18,11 @@ async def health(request: Request) -> dict:
                 age_min = (datetime.now(timezone.utc) - row.ts).total_seconds() / 60
                 engine_ok = age_min < 15
                 engine_detail = f"última decisión hace {int(age_min)}m"
+                last_decision_age_min = int(age_min)
             else:
                 engine_ok = False
                 engine_detail = "sin decisiones aún"
+                last_decision_age_min = None
 
             row = (await s.execute(
                 text("SELECT time FROM ohlcv WHERE timeframe = '1m' ORDER BY time DESC LIMIT 1")
@@ -35,13 +37,13 @@ async def health(request: Request) -> dict:
 
         return {
             "ok": True, "db": "up",
-            "engine": {"ok": engine_ok, "detail": engine_detail},
+            "engine": {"ok": engine_ok, "detail": engine_detail, "last_decision_age_min": last_decision_age_min},
             "binance": {"ok": binance_ok, "detail": binance_detail},
         }
     except Exception as e:
         return {
             "ok": False, "db": str(e),
-            "engine": {"ok": False, "detail": "error de DB"},
+            "engine": {"ok": False, "detail": "error de DB", "last_decision_age_min": None},
             "binance": {"ok": False, "detail": "error de DB"},
         }
 

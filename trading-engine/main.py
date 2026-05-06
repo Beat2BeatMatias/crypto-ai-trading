@@ -104,8 +104,11 @@ async def run() -> None:
             sl_atr_multiplier = await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER)
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
-            for tf in ("1m", "5m", "15m", "1h", "4h"):
-                await collector.fetch_and_persist(timeframe=tf)
+            try:
+                for tf in ("1m", "5m", "15m", "1h", "4h"):
+                    await collector.fetch_and_persist(timeframe=tf)
+            except Exception as e:
+                logger.warning("engine.ohlcv_fetch_failed_using_cached_data", error=str(e))
             await collector.compute_and_persist_indicators()
 
             fees = FeeManager(exchange, s, symbol=settings.symbol)
@@ -115,10 +118,17 @@ async def run() -> None:
                 balance = await exchange.fetch_balance()
                 usdt = float(balance.get("free", {}).get("USDT", 0.0))
                 btc = float(balance.get("free", {}).get("BTC", 0.0))
+                cb.record_exchange_success()
             except Exception as e:
-                logger.error("engine.balance_error", error=str(e))
-                cb.record_exchange_failure()
-                return
+                logger.warning("engine.balance_unavailable_using_db_fallback", error=str(e))
+                # Exchange down: no USDT (prevents new BUYs), BTC from open positions in DB
+                usdt = 0.0
+                from sqlalchemy import select as _sel
+                from shared.db.models import Position as _Pos
+                _open = (await s.execute(
+                    _sel(_Pos).where(_Pos.status == "open")
+                )).scalars().all()
+                btc = sum(float(p.quantity_btc) for p in _open)
 
             decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
                               provider=decisor_provider, fallbacks=fallbacks)
