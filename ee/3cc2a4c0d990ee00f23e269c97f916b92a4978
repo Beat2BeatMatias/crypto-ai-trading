@@ -1,0 +1,34 @@
+trading-engine/tests/test_indicators.py
+  3bb24ce0a4ce4aac 62-97
+web/main.py
+  3bb24ce0a4ce4aac 2,27-29,34
+trading-engine/collectors/indicators.py
+  3bb24ce0a4ce4aac 63-68,75-77
+web/ws/feeds.py
+  3bb24ce0a4ce4aac 3,5,9,15-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "ee3cc2a4c0d990ee00f23e269c97f916b92a4978",
+  "prompts": {
+    "3bb24ce0a4ce4aac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce0044ca-40b5-4c8b-9390-c776a1ef8ab9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 81,
+      "total_deletions": 16,
+      "accepted_lines": 155,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_168a2cc2ff8919": {
+      "author": "mfariasfalki_meli"
+    }
+  }
+}
