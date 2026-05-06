@@ -1,0 +1,32 @@
+trading-engine/agents/supervisor.py
+  3bb24ce0a4ce4aac 132-133
+trading-engine/agents/llm_client.py
+  3bb24ce0a4ce4aac 66-67,72-73,89,93-94,108,111-112,114-115,124,127-129,131,137-138,141-149
+trading-engine/tests/test_llm_client.py
+  3bb24ce0a4ce4aac 140-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9f47fca3379b4b4987fe28a2f3be9e738a6e0972",
+  "prompts": {
+    "3bb24ce0a4ce4aac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce0044ca-40b5-4c8b-9390-c776a1ef8ab9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 82,
+      "total_deletions": 611,
+      "accepted_lines": 82,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_168a2cc2ff8919": {
+      "author": "mfariasfalki_meli"
+    }
+  }
+}
