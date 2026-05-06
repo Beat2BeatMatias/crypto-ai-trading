@@ -11,6 +11,7 @@ export interface Trade {
   status: "open" | "closed" | "cancelled";
   stop_loss: number | null; take_profit: number | null;
   close_reason: string | null; fees_usdt: number | null;
+  close_requested: boolean;
 }
 
 export interface Position {
@@ -33,6 +34,26 @@ export interface ConfigEntry {
   key: string; value: string;
   value_type: "int" | "float" | "string" | "bool" | "json";
   description: string | null;
+}
+
+export interface ConfigSuggestion {
+  key: string;
+  current: string | number;
+  suggested: string | number;
+  reason: string;
+}
+
+export interface ConfigSuggestions {
+  generated_at: string;
+  suggestions: ConfigSuggestion[];
+  summary: string;
+}
+
+export interface DailyStats {
+  trades_open: number; trades_closed: number; trades_won: number; trades_lost: number;
+  pnl_realized: number; pnl_unrealized: number; fees_total: number;
+  decisions_total: number; decisions_buy: number; decisions_sell: number;
+  decisions_hold: number; decisions_executed: number; decisions_blocked: number;
 }
 
 export interface Playbook {

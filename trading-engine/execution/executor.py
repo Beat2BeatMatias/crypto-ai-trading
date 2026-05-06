@@ -100,3 +100,31 @@ class Executor:
         await self.session.refresh(trade)
         logger.info("executor.sell_executed", trade_id=str(trade.id))
         return trade
+
+    async def record_bracket_fill(self, *, trade_id: uuid.UUID, fill_price: float,
+                                   fill_fee: float, close_reason: str) -> None:
+        """Registra el cierre de un trade cuyo SL/TP ya fue ejecutado por Binance.
+        No emite ninguna orden al exchange — solo actualiza la BD."""
+        trade = await self.session.get(Trade, trade_id)
+        if trade is None or trade.status != "open":
+            return
+        prior_fees = float(trade.fees_usdt or 0)
+        gross_pnl = (fill_price - float(trade.entry_price)) * float(trade.quantity_btc)
+        trade.exit_price = Decimal(str(fill_price))
+        trade.ts_close = datetime.now(tz=timezone.utc)
+        trade.status = "closed"
+        trade.close_reason = close_reason
+        trade.fees_usdt = Decimal(str(prior_fees + fill_fee))
+        trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - fill_fee))
+        trade.pnl_pct = Decimal(str(
+            (fill_price - float(trade.entry_price)) / float(trade.entry_price) * 100
+        ))
+        pos = (await self.session.execute(
+            select(Position).where(Position.trade_id == trade.id)
+        )).scalar_one_or_none()
+        if pos:
+            pos.status = "closed"
+            pos.updated_at = datetime.now(tz=timezone.utc)
+        await self.session.commit()
+        logger.info("executor.bracket_fill_recorded", trade_id=str(trade_id),
+                    reason=close_reason, price=fill_price, pnl=float(trade.pnl_usdt))

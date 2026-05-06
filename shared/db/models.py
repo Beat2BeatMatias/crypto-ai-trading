@@ -101,6 +101,7 @@ class Trade(Base):
     order_id_open: Mapped[str | None] = mapped_column(String(50))
     order_id_close: Mapped[str | None] = mapped_column(String(50))
     fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    close_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     __table_args__ = (
         Index("idx_trades_status", "status"),

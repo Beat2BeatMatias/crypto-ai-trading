@@ -26,12 +26,16 @@ class ConfigKey(str, Enum):
     SUPERVISOR_CRON = "supervisor_cron"
     DECISOR_PROVIDER = "decisor_provider"
     SUPERVISOR_PROVIDER = "supervisor_provider"
-    FALLBACK_PROVIDER = "fallback_provider"
+    FALLBACK_PROVIDERS = "fallback_providers"
+    SUPERVISOR_FALLBACK_PROVIDERS = "supervisor_fallback_providers"
     LLM_MAX_RETRIES = "llm_max_retries"
     LLM_TIMEOUT_SEC = "llm_timeout_sec"
     ORDERBOOK_LEVELS = "orderbook_levels"
     KILL_SWITCH = "kill_switch"
     SUPERVISOR_RUN_NOW = "supervisor_run_now"
+    ATR_TIMEFRAME = "atr_timeframe"
+    MIN_RR_RATIO = "min_rr_ratio"
+    SL_ATR_MULTIPLIER = "sl_atr_multiplier"
 
 
 @dataclass(frozen=True)
@@ -59,15 +63,33 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "gemini-2.5-pro", "string",
         "LLM for supervisor. Options: gemini-2.5-pro | groq-llama-3.3-70b | groq-compound-beta",
     ),
-    ConfigKey.FALLBACK_PROVIDER: _Default(
-        "gemini-2.5-flash", "string",
-        "Fallback LLM when primary fails. Options: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta",
+    ConfigKey.FALLBACK_PROVIDERS: _Default(
+        "gemini-2.5-flash,groq-llama-4-scout,groq-gpt-oss-120b,groq-qwen3-32b,groq-llama-3.1-8b",
+        "string",
+        "Cascada de fallback para decisor (CSV ordenado). Opciones: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta | groq-compound-mini | groq-llama-4-scout | groq-gpt-oss-120b | groq-gpt-oss-20b | groq-qwen3-32b | groq-llama-3.1-8b",
+    ),
+    ConfigKey.SUPERVISOR_FALLBACK_PROVIDERS: _Default(
+        "groq-llama-3.3-70b,groq-llama-4-scout,groq-gpt-oss-120b,gemini-2.5-flash",
+        "string",
+        "Cascada de fallback para supervisor (CSV ordenado). Mismas opciones que fallback_providers",
     ),
     ConfigKey.LLM_MAX_RETRIES: _Default("3", "int", "Retries on LLM failure"),
     ConfigKey.LLM_TIMEOUT_SEC: _Default("30", "int", "LLM call timeout"),
     ConfigKey.ORDERBOOK_LEVELS: _Default("10", "int", "Order book depth in context"),
     ConfigKey.KILL_SWITCH: _Default("false", "bool", "Emergency stop"),
     ConfigKey.SUPERVISOR_RUN_NOW: _Default("false", "bool", "internal: manual supervisor trigger"),
+    ConfigKey.ATR_TIMEFRAME: _Default(
+        "15m", "string",
+        "Timeframe del ATR usado como referencia para SL/TP. Opciones: 5m | 15m | 1h",
+    ),
+    ConfigKey.MIN_RR_RATIO: _Default(
+        "1.3", "float",
+        "R:R mínimo requerido para aprobar un BUY (reward / risk). Ej: 1.3 = ganar 1.3x lo que se arriesga",
+    ),
+    ConfigKey.SL_ATR_MULTIPLIER: _Default(
+        "0.3", "float",
+        "Multiplicador del ATR para SL mínimo. Ej: 0.3 → SL debe estar al menos 0.3×ATR abajo del precio",
+    ),
 }
 
 

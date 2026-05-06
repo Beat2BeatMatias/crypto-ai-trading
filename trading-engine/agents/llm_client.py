@@ -8,12 +8,39 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Maps each Groq provider enum value to the actual model ID in the Groq API.
+# Gemini providers use their enum value directly as model ID.
+_GROQ_MODEL_IDS: dict[str, str] = {
+    "groq-llama-3.3-70b":   "llama-3.3-70b-versatile",
+    "groq-compound-beta":   "compound-beta",
+    "groq-compound-mini":   "compound-beta-mini",
+    "groq-llama-3.1-8b":    "llama-3.1-8b-instant",
+    "groq-llama-4-scout":   "meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq-gpt-oss-120b":    "openai/gpt-oss-120b",
+    "groq-gpt-oss-20b":     "openai/gpt-oss-20b",
+    "groq-qwen3-32b":       "qwen/qwen3-32b",
+}
+
 
 class LLMProvider(str, Enum):
+    # Gemini
     GEMINI_FLASH = "gemini-2.5-flash"
-    GEMINI_PRO = "gemini-2.5-pro"
-    GROQ_LLAMA = "groq-llama-3.3-70b"
-    GROQ_COMPOUND = "groq-compound-beta"
+    GEMINI_PRO   = "gemini-2.5-pro"
+    # Groq — ordered roughly by reasoning capability (used as cascade suggestion)
+    GROQ_LLAMA        = "groq-llama-3.3-70b"
+    GROQ_COMPOUND     = "groq-compound-beta"
+    GROQ_COMPOUND_MINI = "groq-compound-mini"
+    GROQ_LLAMA4_SCOUT = "groq-llama-4-scout"
+    GROQ_GPT_OSS_120B = "groq-gpt-oss-120b"
+    GROQ_GPT_OSS_20B  = "groq-gpt-oss-20b"
+    GROQ_QWEN3_32B    = "groq-qwen3-32b"
+    GROQ_LLAMA_8B     = "groq-llama-3.1-8b"
+
+    def is_groq(self) -> bool:
+        return self.value in _GROQ_MODEL_IDS
+
+    def groq_model_id(self) -> str:
+        return _GROQ_MODEL_IDS[self.value]
 
 
 @dataclass(frozen=True)
@@ -34,16 +61,27 @@ class LLMClient:
         self.backoff_base = backoff_base
 
     async def call(self, *, provider: LLMProvider, system_prompt: str, user_prompt: str,
+                   fallbacks: list[LLMProvider] | None = None,
+                   # kept for backwards compat — single fallback wraps to list
                    fallback: LLMProvider | None = None) -> LLMResponse:
-        try:
-            return await self._call_with_retry(provider, system_prompt, user_prompt)
-        except Exception as e:
-            if fallback is None:
-                raise
-            logger.warning("llm.primary_failed_falling_back", primary=provider.value,
-                           fallback=fallback.value, error=str(e),
-                           rate_limited=_is_rate_limit(e))
-            return await self._call_with_retry(fallback, system_prompt, user_prompt)
+        cascade = [provider] + (fallbacks or ([fallback] if fallback else []))
+        last_err: Exception | None = None
+        for idx, p in enumerate(cascade):
+            try:
+                return await self._call_with_retry(p, system_prompt, user_prompt)
+            except Exception as e:
+                last_err = e
+                is_rl = _is_rate_limit(e)
+                remaining = cascade[idx + 1:]
+                if remaining:
+                    logger.warning("llm.provider_failed_trying_next",
+                                   failed=p.value, next=remaining[0].value,
+                                   rate_limited=is_rl, error=str(e))
+                else:
+                    logger.error("llm.all_providers_exhausted",
+                                 tried=[c.value for c in cascade], error=str(e))
+        assert last_err is not None
+        raise last_err
 
     async def _call_with_retry(self, provider: LLMProvider, system_prompt: str,
                                 user_prompt: str) -> LLMResponse:
@@ -54,9 +92,7 @@ class LLMClient:
             except Exception as e:
                 last_err = e
                 if _is_rate_limit(e):
-                    # Rate limit: reintentar no ayuda, saltar directo al fallback
-                    logger.warning("llm.rate_limited", provider=provider.value,
-                                   error=str(e))
+                    # Rate limit: skip retries, surface immediately to try next provider
                     raise
                 wait = self.backoff_base * (2 ** attempt)
                 logger.warning("llm.retry", provider=provider.value, attempt=attempt + 1,
@@ -68,12 +104,10 @@ class LLMClient:
     async def _call_provider(self, provider: LLMProvider, system_prompt: str,
                               user_prompt: str) -> LLMResponse:
         t0 = time.perf_counter()
-        if provider in (LLMProvider.GEMINI_FLASH, LLMProvider.GEMINI_PRO):
+        if provider.is_groq():
+            resp = await self._call_groq(provider.groq_model_id(), system_prompt, user_prompt)
+        elif provider in (LLMProvider.GEMINI_FLASH, LLMProvider.GEMINI_PRO):
             resp = await self._call_gemini(provider, system_prompt, user_prompt)
-        elif provider == LLMProvider.GROQ_LLAMA:
-            resp = await self._call_groq("llama-3.3-70b-versatile", system_prompt, user_prompt)
-        elif provider == LLMProvider.GROQ_COMPOUND:
-            resp = await self._call_groq("compound-beta", system_prompt, user_prompt)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -109,13 +143,13 @@ class LLMClient:
 
 
 def _is_rate_limit(exc: Exception) -> bool:
-    """Detecta errores 429 de Groq y Gemini para saltar directo al fallback."""
+    """Detecta errores 429 de Groq y Gemini para saltar directo al siguiente provider."""
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     return (
         "ratelimit" in name
         or "rate_limit" in name
         or "429" in msg
-        or "resource_exhausted" in msg  # Gemini usa este código
+        or "resource_exhausted" in msg
         or "rate limit" in msg
     )

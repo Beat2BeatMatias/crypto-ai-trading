@@ -35,7 +35,7 @@ allowed = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3100").split(",")
 app.add_middleware(CORSMiddleware, allow_origins=allowed, allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
-from api import health, trades, decisions, positions, balance, playbook
+from api import health, trades, decisions, positions, balance, playbook, stats, suggestions
 from api import config as cfg_api
 from api import control
 from ws import feeds
@@ -48,4 +48,6 @@ app.include_router(balance.router, prefix="/api", tags=["balance"])
 app.include_router(playbook.router, prefix="/api", tags=["playbook"])
 app.include_router(cfg_api.router, prefix="/api", tags=["config"])
 app.include_router(control.router, prefix="/api", tags=["control"])
+app.include_router(stats.router, prefix="/api", tags=["stats"])
+app.include_router(suggestions.router, prefix="/api", tags=["suggestions"])
 app.include_router(feeds.router, tags=["ws"])

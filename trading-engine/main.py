@@ -11,6 +11,7 @@ from collectors.price_collector import PriceCollector
 from collectors.orderbook_collector import OrderBookCollector
 from execution.fee_manager import FeeManager
 from execution.executor import Executor
+from execution.order_tracker import OrderTracker
 from execution.position_manager import PositionManager
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
@@ -21,6 +22,20 @@ from risk.circuit_breaker import CircuitBreaker
 from scheduler import EngineScheduler
 
 logger = structlog.get_logger()
+
+
+def _parse_providers(csv: str) -> list[LLMProvider]:
+    """Parsea CSV de provider IDs, ignorando valores inválidos."""
+    result = []
+    for token in csv.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            result.append(LLMProvider(token))
+        except ValueError:
+            logger.warning("main.invalid_provider_in_config", value=token)
+    return result
 
 
 async def run() -> None:
@@ -83,8 +98,10 @@ async def run() -> None:
             daily_stop = await store.get_typed(ConfigKey.DAILY_STOP_PCT)
             interval_min = await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN)
             decisor_provider = LLMProvider(await store.get(ConfigKey.DECISOR_PROVIDER))
-            fallback_provider_str = await store.get(ConfigKey.FALLBACK_PROVIDER)
-            fallback_provider = LLMProvider(fallback_provider_str) if fallback_provider_str else None
+            fallbacks = _parse_providers(await store.get(ConfigKey.FALLBACK_PROVIDERS))
+            atr_timeframe = await store.get(ConfigKey.ATR_TIMEFRAME)
+            min_rr_ratio = await store.get_typed(ConfigKey.MIN_RR_RATIO)
+            sl_atr_multiplier = await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER)
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
             for tf in ("1m", "5m", "15m", "1h", "4h"):
@@ -104,7 +121,7 @@ async def run() -> None:
                 return
 
             decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
-                              provider=decisor_provider, fallback=fallback_provider)
+                              provider=decisor_provider, fallbacks=fallbacks)
             ob_snap = orderbook.snapshot(levels=10)
             try:
                 decision = await decisor.decide(
@@ -112,6 +129,8 @@ async def run() -> None:
                     max_position_pct=max_pos, max_simultaneous_trades=max_sim,
                     daily_stop_pct=daily_stop, decisor_interval_min=interval_min,
                     mode=mode, taker_fee=fees.taker, maker_fee=fees.maker,
+                    atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
+                    sl_atr_multiplier=sl_atr_multiplier,
                 )
                 cb.record_llm_success()
             except Exception as e:
@@ -121,19 +140,30 @@ async def run() -> None:
 
             pm = PositionManager(s)
             open_count = await pm.count_open()
-            current_price = ob_snap.top_ask if ob_snap else 67000.0
 
             from sqlalchemy import select as sa_select, desc
-            from shared.db.models import Decision as DecisionModel, Indicators
+            from shared.db.models import Decision as DecisionModel, Indicators, Ohlcv
+
             ind_row = (await s.execute(
                 sa_select(Indicators).order_by(desc(Indicators.time)).limit(1)
             )).scalar_one_or_none()
-            atr = float((ind_row.data.get("1h", {}) or {}).get("atr") or 300) if ind_row else 300.0
+            atr = float((ind_row.data.get(atr_timeframe, {}) or {}).get("atr") or 300) if ind_row else 300.0
+
+            if ob_snap is not None:
+                current_price = ob_snap.top_ask
+            else:
+                last_ohlcv = (await s.execute(
+                    sa_select(Ohlcv).where(Ohlcv.timeframe == "1m")
+                    .order_by(desc(Ohlcv.time)).limit(1)
+                )).scalar_one_or_none()
+                current_price = float(last_ohlcv.close) if last_ohlcv else 80000.0
+                logger.warning("orderbook.unavailable_using_last_close", price=current_price)
 
             gate = RiskGate(
                 max_position_pct=max_pos, max_simultaneous_trades=max_sim,
                 daily_stop_pct=daily_stop, max_drawdown_pct=-0.10,
                 max_slippage_pct=0.003, taker_fee_pct=fees.taker,
+                min_rr_ratio=min_rr_ratio, sl_atr_multiplier=sl_atr_multiplier,
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_1h=atr,
@@ -143,6 +173,13 @@ async def run() -> None:
             )
             if not verdict.passed:
                 logger.info("decision.rejected", reason=verdict.reason)
+                latest_d = (await s.execute(
+                    sa_select(DecisionModel).where(DecisionModel.agent == "decisor")
+                    .order_by(desc(DecisionModel.ts)).limit(1)
+                )).scalar_one_or_none()
+                if latest_d is not None:
+                    latest_d.rejected_reason = verdict.reason
+                    await s.commit()
                 return
 
             latest_d = (await s.execute(
@@ -172,9 +209,20 @@ async def run() -> None:
 
     async def supervisor_tick() -> None:
         async with session_factory() as s:
-            sup = Supervisor(session=s, llm=llm, symbol=settings.symbol)
+            store = ConfigStore(s)
+            sup_provider = LLMProvider(await store.get(ConfigKey.SUPERVISOR_PROVIDER))
+            sup_fallbacks = _parse_providers(await store.get(ConfigKey.SUPERVISOR_FALLBACK_PROVIDERS))
+            current_config = {
+                "atr_timeframe": await store.get(ConfigKey.ATR_TIMEFRAME),
+                "sl_atr_multiplier": await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER),
+                "min_rr_ratio": await store.get_typed(ConfigKey.MIN_RR_RATIO),
+                "decisor_interval_min": await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN),
+                "max_position_pct": await store.get_typed(ConfigKey.MAX_POSITION_PCT),
+            }
+            sup = Supervisor(session=s, llm=llm, symbol=settings.symbol,
+                             provider=sup_provider, fallbacks=sup_fallbacks)
             try:
-                await sup.run()
+                await sup.run(current_config=current_config)
                 cb.record_llm_success()
             except Exception as e:
                 logger.error("supervisor.error", error=str(e))
@@ -192,6 +240,15 @@ async def run() -> None:
             except Exception as e:
                 logger.warning("positions.refresh_failed", error=str(e))
 
+    async def order_tracker_tick() -> None:
+        async with session_factory() as s:
+            executor = Executor(exchange, s, symbol=settings.symbol)
+            tracker = OrderTracker(exchange, s, executor, symbol=settings.symbol)
+            try:
+                await tracker.poll_once()
+            except Exception as e:
+                logger.error("order_tracker.error", error=str(e))
+
     async with session_factory() as s:
         store = ConfigStore(s)
         interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
@@ -201,6 +258,7 @@ async def run() -> None:
     sched.add_supervisor(supervisor_tick, cron=cron)
     sched.add_fee_refresh(fees_tick, hours=24)
     sched.add_position_refresh(positions_tick, seconds=30)
+    sched.add_order_tracker(order_tracker_tick, seconds=30)
     sched.start()
 
     stop_event = asyncio.Event()

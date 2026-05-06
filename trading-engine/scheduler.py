@@ -26,6 +26,10 @@ class EngineScheduler:
         self._scheduler.add_job(fn, IntervalTrigger(seconds=seconds),
                                 id="positions", replace_existing=True)
 
+    def add_order_tracker(self, fn: Callable[[], Awaitable[None]], *, seconds: int = 30) -> None:
+        self._scheduler.add_job(fn, IntervalTrigger(seconds=seconds),
+                                id="order_tracker", replace_existing=True)
+
     def start(self) -> None:
         self._scheduler.start()
         logger.info("scheduler.started")

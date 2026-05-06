@@ -15,12 +15,15 @@ Fees actuales de tu cuenta Binance:
   Taker: {taker_fee_pct:.4f}%   Maker: {maker_fee_pct:.4f}%
   Round-trip (apertura + cierre como taker): {roundtrip_fee_pct:.4f}%
 
+ATR DE REFERENCIA (timeframe {atr_ref_tf}): ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)
+R:R MINIMO CONFIGURADO: {min_rr_ratio}:1
+
 REGLAS ABSOLUTAS (el Risk Gate las verifica):
 R1. position_size_pct maximo: {max_position_pct}
 R2. action=BUY requiere stop_loss OBLIGATORIO < precio_actual
 R3. action=BUY requiere take_profit recomendado > precio_actual
-R4. action=BUY requiere distancia_SL >= 0.5 x ATR(1h)
-R5. action=BUY requiere R:R minimo 1.5:1
+R4. action=BUY requiere distancia_SL >= {sl_atr_multiplier} x ATR({atr_ref_tf}) = ${atr_ref:.0f} x {sl_atr_multiplier} = ${atr_ref_min:.0f} minimo
+R5. action=BUY requiere R:R minimo {min_rr_ratio}:1
 R6. action=SELL solo valido si hay posicion LONG abierta
 R7. NUNCA shortear (SPOT)
 R8. Si open_positions >= {max_simultaneous_trades}: solo HOLD o SELL
@@ -38,13 +41,15 @@ ANTI-PATRONES:
 
 CALIBRACION DE CONFIANZA (confidence):
 Refleja que tan fuerte es la evidencia para tu decision, no tu certeza de ganar.
-  BUY:  0.90-1.00 = 4 confluencias claras + volumen excepcional
+  BUY:  0.90-1.00 = 4+ confluencias claras + volumen excepcional
         0.75-0.89 = 3 confluencias solidas
-        0.60-0.74 = 3 confluencias debiles o contexto mixto
+        0.60-0.74 = 2 confluencias solidas (suficiente para actuar segun playbook)
+        0.50-0.59 = 2 confluencias debiles — actua con size reducido (0.03)
   SELL: misma escala aplicada a la posicion abierta
-  HOLD: 0.80-1.00 = mercado claramente sin setup (no hay nada)
-        0.60-0.79 = senales ambiguas, podria ir para cualquier lado
-        0.40-0.59 = hay alguna senal pero insuficiente para actuar
+  HOLD: 0.80-1.00 = mercado claramente sin setup (0 confluencias)
+        0.60-0.79 = senales ambiguas, solo 1 confluencia aislada
+        0.40-0.59 = NUNCA uses este rango para HOLD — si hay 2 confluencias, actua con BUY
+  IMPORTANTE: Con 2 confluencias validas del playbook, la accion correcta es BUY (no HOLD).
   NUNCA uses 0.5 como default. Evalua la evidencia y asigna un valor especifico.
 
 OUTPUT — JSON EXACTO, sin texto extra:

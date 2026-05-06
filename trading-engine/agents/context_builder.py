@@ -16,7 +16,9 @@ class ContextBuilder:
     async def build(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
                     btc_held: float, playbook_content: str, max_simultaneous_trades: int,
                     daily_stop_pct: float, decisor_interval_min: int, mode: str,
-                    taker_fee_pct: float, maker_fee_pct: float) -> dict[str, Any]:
+                    taker_fee_pct: float, maker_fee_pct: float,
+                    atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
+                    sl_atr_multiplier: float = 0.3) -> dict[str, Any]:
         ind_row = (await self.session.execute(
             select(Indicators).order_by(desc(Indicators.time)).limit(1)
         )).scalar_one_or_none()
@@ -75,6 +77,12 @@ class ContextBuilder:
             "atr_1h": self._get(ind, "1h", "atr") or 0,
             "atr_pct_1h": ((self._get(ind, "1h", "atr") or 0) / price * 100) if price else 0,
             "atr_avg_7d": self._get(ind, "1h", "atr") or 0,
+            "atr_ref": self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0,
+            "atr_ref_tf": atr_timeframe,
+            "atr_ref_pct": ((self._get(ind, atr_timeframe, "atr") or 0) / price * 100) if price else 0,
+            "atr_ref_min": (self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_multiplier,
+            "sl_atr_multiplier": sl_atr_multiplier,
+            "min_rr_ratio": min_rr_ratio,
             "volatility_label": "normal",
             "support_1h": (self._get(ind, "1h", "ema50") or 0) * 0.99,
             "resistance_1h": (self._get(ind, "1h", "ema50") or 0) * 1.01,

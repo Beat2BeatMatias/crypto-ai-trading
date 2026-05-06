@@ -1,4 +1,4 @@
-import type { Trade, Position, Decision, ConfigEntry, Playbook } from "../types";
+import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, ConfigSuggestions } from "../types";
 
 const BASE = "/api";
 
@@ -28,6 +28,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   trades: (status?: string) => get<Trade[]>(`/trades${status ? `?status=${status}` : ""}`),
+  closeTrade: (id: string) => post<Trade>(`/trades/${id}/close`, {}),
   decisions: (p?: { agent?: string; executed?: boolean }) => {
     const q = new URLSearchParams();
     if (p?.agent) q.set("agent", p.agent);
@@ -46,4 +47,6 @@ export const api = {
   playbookActive: () => get<Playbook | null>("/playbook/active"),
   playbookHistory: () => get<Playbook[]>("/playbook/history"),
   playbookActivate: (version: number) => post(`/playbook/${version}/activate`, {}),
+  dailyStats: () => get<DailyStats>("/stats/daily"),
+  configSuggestions: () => get<ConfigSuggestions | null>("/config/suggestions"),
 };

@@ -21,19 +21,21 @@ class Decisor:
     def __init__(self, *, session: AsyncSession, llm: LLMClient, symbol: str,
                  prompt_manager: PromptManager | None = None,
                  provider: LLMProvider = LLMProvider.GROQ_LLAMA,
-                 fallback: LLMProvider | None = LLMProvider.GEMINI_FLASH):
+                 fallbacks: list[LLMProvider] | None = None):
         self.session = session
         self.llm = llm
         self.symbol = symbol
         self.prompt_manager = prompt_manager or PromptManager(session)
         self.context_builder = ContextBuilder(session, symbol=symbol)
         self.provider = provider
-        self.fallback = fallback
+        self.fallbacks = fallbacks or [LLMProvider.GEMINI_FLASH]
 
     async def decide(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
                      btc_held: float, max_position_pct: float, max_simultaneous_trades: int,
                      daily_stop_pct: float, decisor_interval_min: int, mode: str,
-                     taker_fee: float, maker_fee: float) -> DecisorOutput:
+                     taker_fee: float, maker_fee: float,
+                     atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
+                     sl_atr_multiplier: float = 0.3) -> DecisorOutput:
         playbook = await self.prompt_manager.get_active_playbook()
         playbook_content = playbook.content if playbook else "# No playbook."
 
@@ -42,6 +44,8 @@ class Decisor:
             playbook_content=playbook_content, max_simultaneous_trades=max_simultaneous_trades,
             daily_stop_pct=daily_stop_pct, decisor_interval_min=decisor_interval_min,
             mode=mode, taker_fee_pct=taker_fee, maker_fee_pct=maker_fee,
+            atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
+            sl_atr_multiplier=sl_atr_multiplier,
         )
 
         system_prompt = self.prompt_manager.load_system_prompt("decisor")
@@ -52,7 +56,7 @@ class Decisor:
         try:
             resp = await self.llm.call(
                 provider=self.provider, system_prompt=system_prompt,
-                user_prompt=user_prompt, fallback=self.fallback,
+                user_prompt=user_prompt, fallbacks=self.fallbacks,
             )
             parsed = json.loads(resp.text)
             validated = DecisorOutput.model_validate(parsed)
