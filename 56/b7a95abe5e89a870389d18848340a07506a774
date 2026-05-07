@@ -1,0 +1,28 @@
+trading-engine/agents/supervisor.py
+  db29e5074282df13 113-116,120,122,124-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "56b7a95abe5e89a870389d18848340a07506a774",
+  "prompts": {
+    "db29e5074282df13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9682fed-8ccf-471b-b35c-c4d589eb88fe",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "mfariasfalki_meli",
+      "messages": [],
+      "total_additions": 257,
+      "total_deletions": 2,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_168a2cc2ff8919": {
+      "author": "mfariasfalki_meli"
+    }
+  }
+}
