@@ -213,3 +213,22 @@ class FeeSnapshot(Base):
     __table_args__ = (
         Index("idx_fee_snapshots_ts", "ts"),
     )
+
+
+class BalanceSnapshot(Base):
+    __tablename__ = "balance_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4, server_default=text("gen_random_uuid()"),
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    usdt: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    btc: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="binance")
+
+    __table_args__ = (
+        Index("idx_balance_snapshots_ts", "ts"),
+    )

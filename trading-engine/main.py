@@ -119,6 +119,9 @@ async def run() -> None:
                 usdt = float(balance.get("free", {}).get("USDT", 0.0))
                 btc = float(balance.get("free", {}).get("BTC", 0.0))
                 cb.record_exchange_success()
+                from shared.db.models import BalanceSnapshot
+                s.add(BalanceSnapshot(usdt=usdt, btc=btc, source="binance"))
+                await s.commit()
             except Exception as e:
                 logger.warning("engine.balance_unavailable_using_db_fallback", error=str(e))
                 # Exchange down: no USDT (prevents new BUYs), BTC from open positions in DB

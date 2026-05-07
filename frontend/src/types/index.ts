@@ -56,6 +56,16 @@ export interface DailyStats {
   decisions_hold: number; decisions_executed: number; decisions_blocked: number;
 }
 
+export interface Balance {
+  usdt: number;
+  btc_exchange: number;
+  btc_in_positions: number;
+  open_positions: number;
+  balance_ts: string | null;
+  balance_source: string | null;
+  realized_pnl_today: number;
+}
+
 export interface Playbook {
   id: string; version: number; ts_generated: string;
   content: string; model: string | null;

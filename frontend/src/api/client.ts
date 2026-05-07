@@ -1,4 +1,4 @@
-import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, ConfigSuggestions } from "../types";
+import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, ConfigSuggestions, Balance } from "../types";
 
 const BASE = "/api";
 
@@ -37,7 +37,7 @@ export const api = {
     return get<Decision[]>(`/decisions${qs ? `?${qs}` : ""}`);
   },
   positions: () => get<Position[]>("/positions"),
-  balance: () => get<{ btc_held: number; open_positions: number; realized_pnl_today: number }>("/balance"),
+  balance: () => get<Balance>("/balance"),
   config: () => get<ConfigEntry[]>("/config"),
   setConfig: (key: string, value: string) => put(`/config/${key}`, { value }),
   killSwitch: (enabled: boolean) => post("/kill-switch", { enabled }),

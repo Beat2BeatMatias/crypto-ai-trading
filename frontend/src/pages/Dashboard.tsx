@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
-import type { Position, Decision, DailyStats } from "../types";
+import type { Position, Decision, DailyStats, Balance } from "../types";
 
 interface EngineHealth {
   ok: boolean;
@@ -56,6 +56,7 @@ export function Dashboard() {
   const [stats, setStats] = useState<DailyStats | null>(null);
   const [ticker, setTicker] = useState<{ symbol: string; price: number | null } | null>(null);
   const [engineHealth, setEngineHealth] = useState<EngineHealth | null>(null);
+  const [balance, setBalance] = useState<Balance | null>(null);
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
 
@@ -74,8 +75,10 @@ export function Dashboard() {
     }).catch(() => {});
     loadStats();
     loadHealth();
+    api.balance().then(setBalance).catch(() => {});
     const id = setInterval(loadHealth, 15_000);
-    return () => clearInterval(id);
+    const id2 = setInterval(() => api.balance().then(setBalance).catch(() => {}), 30_000);
+    return () => { clearInterval(id); clearInterval(id2); };
   }, []);
 
   useEffect(() => {
@@ -126,7 +129,44 @@ export function Dashboard() {
         </button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card title="Balance Binance">
+          {!balance ? (
+            <p className="text-zinc-500 text-sm">Cargando...</p>
+          ) : (
+            <div className="space-y-1">
+              <StatRow
+                label="USDT disponible"
+                value={`$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                valueClass="text-emerald-400"
+              />
+              <StatRow
+                label="BTC en exchange"
+                value={`${balance.btc_exchange.toFixed(6)} BTC`}
+                valueClass="text-amber-400"
+              />
+              <StatRow
+                label="BTC en posiciones"
+                value={`${balance.btc_in_positions.toFixed(6)} BTC`}
+                valueClass="text-zinc-300"
+              />
+              {ticker?.price != null && (
+                <StatRow
+                  label="Total en USD"
+                  value={`$${((balance.usdt + balance.btc_exchange * ticker.price)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  valueClass="text-white"
+                />
+              )}
+              <div className="pt-2 text-xs text-zinc-600">
+                {balance.balance_ts
+                  ? `Actualizado ${new Date(balance.balance_ts).toLocaleTimeString("es-AR")}`
+                  : "Sin datos de Binance"}
+                {balance.balance_source === "binance" ? "" : " (fallback DB)"}
+              </div>
+            </div>
+          )}
+        </Card>
+
         <Card title="Posiciones abiertas">
           {positions.length === 0
             ? <p className="text-zinc-500 text-sm">Ninguna posición abierta.</p>
