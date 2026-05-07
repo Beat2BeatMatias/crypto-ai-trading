@@ -82,7 +82,7 @@ export function Decisions() {
             {items.map(d => (
               <tr key={d.id} onClick={() => setSelected(d)}
                 className={`cursor-pointer border-t border-zinc-800 hover:bg-zinc-800/40 transition-colors ${selected?.id === d.id ? "bg-zinc-800" : ""}`}>
-                <td className="py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap">{new Date(d.ts).toLocaleString("es-AR")}</td>
+                <td className="py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap">{new Date(d.ts).toLocaleString("es-AR", { hour12: false })}</td>
                 <td className="pr-3">{d.agent}</td>
                 <td className="pr-3 text-xs text-zinc-400 font-mono">{d.model}</td>
                 <td className={`pr-3 font-semibold ${out(d).action === "BUY" ? "text-emerald-400" : out(d).action === "SELL" ? "text-red-400" : "text-zinc-400"}`}>

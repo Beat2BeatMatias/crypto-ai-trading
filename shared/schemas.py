@@ -1,7 +1,7 @@
 from __future__ import annotations
 from enum import Enum
-from typing import Annotated
-from pydantic import BaseModel, Field, model_validator
+from typing import Annotated, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DecisorAction(str, Enum):
@@ -26,6 +26,12 @@ class DecisorOutput(BaseModel):
     take_profit: float | None
     position_size_pct: Annotated[float, Field(ge=0.0, le=0.25)]
     reasoning: Annotated[str, Field(max_length=240)]
+
+    @field_validator("position_size_pct", mode="before")
+    @classmethod
+    def _coerce_null_position_size(cls, v: Any) -> float:
+        # LLMs return null for HOLD/SELL decisions; treat as 0.0
+        return 0.0 if v is None else v
 
     @model_validator(mode="after")
     def _buy_requires_sl_and_tp(self) -> "DecisorOutput":
