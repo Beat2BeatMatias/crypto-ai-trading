@@ -110,13 +110,22 @@ class Supervisor:
                     select(Decision).where(Decision.ts >= since, Decision.agent == "decisor")
                     .order_by(Decision.ts.asc())
                 )).scalars().all()
+                # Limit to last 40 decisions to avoid exceeding provider token limits.
+                # Earlier decisions are already captured in the aggregate metrics above.
+                _MAX_DECISIONS_DUMP = 40
+                decisions_sample = decisions_since[-_MAX_DECISIONS_DUMP:]
                 decisions_dump = "\n".join([
                     json.dumps({"ts": d.ts.isoformat(), "action": d.output.get("action"),
                                 "confidence": d.output.get("confidence"),
-                                "reasoning": (d.output.get("reasoning") or "")[:120],
+                                "reasoning": (d.output.get("reasoning") or "")[:80],
                                 "executed": d.executed})
-                    for d in decisions_since
+                    for d in decisions_sample
                 ])
+                if len(decisions_since) > _MAX_DECISIONS_DUMP:
+                    decisions_dump = (
+                        f"[{len(decisions_since) - _MAX_DECISIONS_DUMP} decisiones anteriores omitidas — "
+                        f"resumen en métricas]\n" + decisions_dump
+                    )
                 ctx = {
                     **metrics,
                     "previous_version": previous.version if previous else 0,
