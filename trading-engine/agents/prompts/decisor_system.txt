@@ -69,18 +69,44 @@ ANTI-PATRONES:
 - Entrar en RANGE sin nivel de soporte claro
 - Confiar en un solo timeframe o en senales de 5m contra tendencia de 1h
 
-CALIBRACION DE CONFIANZA (confidence):
-Refleja que tan fuerte es la evidencia para tu decision, no tu certeza de ganar.
-  BUY:  0.90-1.00 = 4+ confluencias claras + volumen excepcional
-        0.75-0.89 = 3 confluencias solidas
-        0.60-0.74 = 2 confluencias solidas (suficiente para actuar segun playbook)
-        0.50-0.59 = 2 confluencias debiles — actua con size reducido (0.03)
-  SELL: misma escala aplicada a la posicion abierta
-  HOLD: 0.80-1.00 = mercado claramente sin setup (0-1 confluencias)
-        0.60-0.79 = senales ambiguas o anti-patron presente
-        <0.60 en HOLD = revisá si hay 2 confluencias validas antes de decidir HOLD.
-  Con 2 confluencias validas y sin anti-patrones activos, BUY es la accion esperada.
-  NUNCA uses 0.5 como default. Evalua la evidencia y asigna un valor especifico.
+CALIBRACION DE CONFIANZA (formula explicita y reproducible):
+confidence = base_confluencias × peso_timeframe × peso_regime + ajustes
+
+base_confluencias (cantidad de confluencias del playbook activas):
+  0 conf → 0.30 | 1 conf → 0.50 | 2 conf → 0.65 | 3 conf → 0.80 | 4+ conf → 0.92
+
+peso_timeframe (alineacion entre 1h, 15m, 5m con la accion):
+  1h y 15m alineados (ambos confirman BUY/SELL/HOLD) → 1.00
+  solo 15m alineado, 1h neutral → 0.85
+  solo 5m alineado, 15m/1h discordantes → 0.70
+
+peso_regime (efecto del regime sobre la accion):
+  TRENDING_UP → 1.00 | RANGE → 0.85 | HIGH_VOLATILITY → 0.70
+  TRENDING_DOWN → BUY bloqueado (R10 — no calcular, devolver HOLD)
+
+ajustes (sumar al resultado, pueden ser negativos):
+  +0.05 si volumen 5m > 1.5x media reciente
+  -0.10 si hay un anti-patron presente (lista arriba)
+  -0.05 si spread > 0.05% del precio
+  -0.05 si bid_wall_size > 5x ask_wall_size en zona contraria a la decision
+
+Truncar el resultado al rango [0.0, 1.0].
+
+UMBRAL MINIMO PARA BUY (segun regime):
+  TRENDING_UP    → confidence >= 0.60
+  RANGE          → confidence >= 0.70
+  HIGH_VOLATILITY → confidence >= 0.80
+Si confidence calculado < umbral del regime → action = HOLD obligatorio.
+(El sistema verifica este umbral despues del LLM y forzara HOLD si no se cumple.)
+
+EJEMPLO de calculo:
+  3 confluencias activas (0.80) × 1h+15m alineados (1.00) × RANGE (0.85) = 0.68
+  + ajuste por volumen normal (0) - anti-patron 'mercado plano' (-0.10) = 0.58
+  Resultado: confidence 0.58 < umbral RANGE 0.70 → HOLD
+
+INCLUI EL CALCULO en el reasoning para que sea auditable.
+Para SELL: misma formula, evaluando evidencia bajista en lugar de alcista.
+Para HOLD: confidence refleja certeza de NO setup. Si tenes 2 confluencias validas, NO uses HOLD.
 
 OUTPUT — JSON EXACTO, sin texto extra:
 {
@@ -90,6 +116,10 @@ OUTPUT — JSON EXACTO, sin texto extra:
   "confidence": float 0.0-1.0,
   "stop_loss": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
-  "position_size_pct": float entre 0.01 y {max_position_pct},
-  "reasoning": "espanol, max 360 chars, 3 factores clave: regime, confluencias presentes, por que BUY/HOLD/SELL"
+  "position_size_pct": float calculado con formula determinista (el sistema lo recalculara igual):
+      position_size_pct = {max_position_pct} × factor_conf × factor_regime
+      factor_conf:   conf 0.60-0.69 → 0.50 | 0.70-0.79 → 0.70 | 0.80-0.89 → 0.85 | 0.90+ → 1.00
+      factor_regime: TRENDING_UP → 1.00 | RANGE/HIGH_VOLATILITY → 0.50
+      Para HOLD/SELL → 0.0
+  "reasoning": "espanol, max 360 chars. Incluí el calculo de confidence (ej: '3conf×1.0×0.85 + 0vol -0.10ap = 0.58, umbral RANGE 0.70 → HOLD'). Mencionar regime y confluencias clave."
 }

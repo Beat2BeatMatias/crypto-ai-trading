@@ -60,6 +60,7 @@ class Decisor:
             )
             parsed = json.loads(resp.text)
             validated = DecisorOutput.model_validate(parsed)
+            validated = _apply_deterministic_overrides(validated, max_position_pct)
             output_dict = validated.model_dump()
             rejected_reason = None
         except (json.JSONDecodeError, ValidationError) as e:
@@ -97,6 +98,60 @@ def _hold_decision(reason: str) -> DecisorOutput:
         confidence=0.0, stop_loss=None, take_profit=None, position_size_pct=0.0,
         reasoning=reason,
     )
+
+
+_REGIME_CONF_THRESHOLD = {
+    MarketRegime.TRENDING_UP: 0.60,
+    MarketRegime.RANGE: 0.70,
+    MarketRegime.HIGH_VOLATILITY: 0.80,
+    MarketRegime.TRENDING_DOWN: 1.01,  # never allow BUY
+}
+
+
+def _factor_conf(confidence: float) -> float:
+    if confidence >= 0.90: return 1.00
+    if confidence >= 0.80: return 0.85
+    if confidence >= 0.70: return 0.70
+    if confidence >= 0.60: return 0.50
+    return 0.0
+
+
+def _factor_regime(regime: MarketRegime) -> float:
+    return 1.00 if regime == MarketRegime.TRENDING_UP else 0.50
+
+
+def _apply_deterministic_overrides(validated: DecisorOutput, max_position_pct: float) -> DecisorOutput:
+    """Enforce regime-specific confidence threshold and deterministic position sizing.
+
+    The LLM is instructed in the system prompt to compute these the same way, but we
+    re-apply them here so the runtime behavior cannot diverge from the documented rules.
+    """
+    if validated.action != DecisorAction.BUY:
+        return validated
+
+    threshold = _REGIME_CONF_THRESHOLD.get(validated.regime, 0.70)
+    if validated.confidence < threshold:
+        logger.info("decisor.override_below_threshold",
+                    regime=validated.regime.value, confidence=validated.confidence,
+                    threshold=threshold)
+        return validated.model_copy(update={
+            "action": DecisorAction.HOLD,
+            "stop_loss": None,
+            "take_profit": None,
+            "position_size_pct": 0.0,
+            "reasoning": f"[override] confidence {validated.confidence:.2f} < umbral "
+                         f"{threshold:.2f} en {validated.regime.value} → HOLD forzado.",
+        })
+
+    new_size = round(max_position_pct * _factor_conf(validated.confidence) *
+                     _factor_regime(validated.regime), 4)
+    new_size = max(0.01, new_size)
+    if abs(new_size - validated.position_size_pct) > 1e-6:
+        logger.info("decisor.override_size",
+                    original=validated.position_size_pct, new=new_size,
+                    confidence=validated.confidence, regime=validated.regime.value)
+        return validated.model_copy(update={"position_size_pct": new_size})
+    return validated
 
 
 def _safe_substitute(template: str, ctx: dict) -> str:
