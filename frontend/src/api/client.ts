@@ -26,6 +26,15 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return r.json();
 }
 
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.json();
+}
+
 export const api = {
   trades: (status?: string) => get<Trade[]>(`/trades${status ? `?status=${status}` : ""}`),
   closeTrade: (id: string) => post<Trade>(`/trades/${id}/close`, {}),
@@ -47,6 +56,8 @@ export const api = {
   playbookActive: () => get<Playbook | null>("/playbook/active"),
   playbookHistory: () => get<Playbook[]>("/playbook/history"),
   playbookActivate: (version: number) => post(`/playbook/${version}/activate`, {}),
+  playbookEditContent: (version: number, content: string) =>
+    patch(`/playbook/${version}/content`, { content }),
   dailyStats: () => get<DailyStats>("/stats/daily"),
   configSuggestions: () => get<ConfigSuggestions | null>("/config/suggestions"),
 };

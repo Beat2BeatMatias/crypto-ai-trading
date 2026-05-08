@@ -22,8 +22,13 @@ REGLAS ABSOLUTAS (el Risk Gate las verifica):
 R1. position_size_pct maximo: {max_position_pct}
 R2. action=BUY requiere stop_loss OBLIGATORIO < precio_actual
 R3. action=BUY requiere take_profit OBLIGATORIO > precio_actual (null = rechazo automatico)
-R4. action=BUY requiere distancia_SL >= {sl_atr_multiplier} x ATR({atr_ref_tf}) = ${atr_ref:.0f} x {sl_atr_multiplier} = ${atr_ref_min:.0f} minimo
+R4. action=BUY: distancia_SL debe estar entre {sl_atr_multiplier}x y 1.5x ATR({atr_ref_tf})
+    Minimo: ${atr_ref_min} | Maximo: ${atr_ref_max}
+    Coloca el SL justo debajo del soporte tecnico mas cercano dentro de ese rango.
+    SL mayor a 1.5x ATR = trade con mal sizing, rechazalo internamente.
 R5. action=BUY requiere R:R minimo {min_rr_ratio}:1
+    Calcula TP como: precio_actual + (distancia_SL x {min_rr_ratio})
+    Ajusta el TP al nivel de resistencia tecnica mas cercano dentro de ese rango.
 R6. action=SELL solo valido si hay posicion LONG abierta
 R7. NUNCA shortear (SPOT)
 R8. Si open_positions >= {max_simultaneous_trades}: solo HOLD o SELL

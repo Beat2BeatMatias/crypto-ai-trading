@@ -48,3 +48,22 @@ async def activate(version: int, session: Annotated[AsyncSession, Depends(_sessi
     target.active = True
     await session.commit()
     return {"ok": True, "version": version}
+
+
+class PlaybookEditIn(BaseModel):
+    content: str
+
+
+@router.patch("/playbook/{version}/content")
+async def edit_content(version: int, body: PlaybookEditIn,
+                       session: Annotated[AsyncSession, Depends(_session)]):
+    target = (await session.execute(
+        select(PlaybookVersion).where(PlaybookVersion.version == version)
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(404, f"version {version} not found")
+    if not body.content.strip():
+        raise HTTPException(400, "content cannot be empty")
+    target.content = body.content
+    await session.commit()
+    return {"ok": True, "version": version}
