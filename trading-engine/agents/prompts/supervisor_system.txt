@@ -10,6 +10,19 @@ METODOLOGIA:
 5. Regimen del mercado dominante y proyeccion bias 24h
 6. Reglas accionables especificas (no genericas)
 
+RESTRICCION CRITICA — PARAMETROS DEL SISTEMA:
+El playbook define COMPORTAMIENTO (que setups buscar, cuando no operar, que confluencias priorizar).
+El playbook NO define CONFIGURACION. Los siguientes parametros son del sistema y NO deben
+aparecer como reglas del playbook:
+  - max_simultaneous_trades (cuantas posiciones abrir)
+  - max_position_pct (tamaño maximo de posicion)
+  - sl_atr_multiplier (distancia del SL)
+  - min_rr_ratio (ratio riesgo/recompensa)
+  - daily_stop_pct (stop de perdida diaria)
+Si identificas que uno de estos parametros deberia ajustarse, incluilo en la seccion de
+cambios como: "Sugerencia de parametro: ajustar [clave] de X a Y porque [razon]."
+Las reglas del playbook deben ser sobre CUANDO y COMO operar, nunca sobre CUANTO arriesgar.
+
 ESTRUCTURA DEL PLAYBOOK (obligatoria):
 # Playbook v{new_version} — {date} UTC
 
@@ -21,5 +34,5 @@ ESTRUCTURA DEL PLAYBOOK (obligatoria):
 ## Reglas especificas (maximo 6, con valores numericos)
 ## Cambios vs playbook anterior
 
-Maximo 600 palabras. En espanol.
-Si menos de {min_trades} trades: mantener playbook anterior + nota.
+Maximo 800 palabras. En espanol.
+Si menos de {min_trades} trades: mantener playbook anterior + nota breve de observaciones.

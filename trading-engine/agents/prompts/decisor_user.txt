@@ -18,7 +18,7 @@ ORDER BOOK
   Bid wall: ${bid_wall_price:,.0f} ({bid_wall_size:.1f} BTC)
   Ask wall: ${ask_wall_price:,.0f} ({ask_wall_size:.1f} BTC)
 
-POSICIONES ({open_positions_count}/{max_simultaneous_trades})
+POSICIONES ABIERTAS: {open_positions_count} | LIMITE DEL SISTEMA: {max_simultaneous_trades}
 {positions_block}
 
 BALANCE

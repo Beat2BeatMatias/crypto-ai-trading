@@ -5,7 +5,7 @@ from decimal import Decimal
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import Decision, Trade, PlaybookVersion
+from shared.db.models import Decision, Trade, PlaybookVersion, Ohlcv, Indicators
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
 
@@ -132,6 +132,7 @@ class Supervisor:
                     "new_version": (previous.version + 1) if previous else 0,
                     "previous_playbook": previous_content,
                     "decisions_dump": decisions_dump,
+                    "decisions_sample_count": len(decisions_sample),
                     "date": datetime.now(tz=timezone.utc).date().isoformat(),
                     "min_trades": self.min_trades,
                 }
@@ -213,17 +214,51 @@ class Supervisor:
         trades = (await self.session.execute(
             select(Trade).where(Trade.ts_open >= since, Trade.status == "closed")
         )).scalars().all()
+
         wins = [t for t in trades if t.pnl_usdt and float(t.pnl_usdt) > 0]
         losses = [t for t in trades if t.pnl_usdt and float(t.pnl_usdt) < 0]
         total_pnl = sum(float(t.pnl_usdt or 0) for t in trades)
         win_rate = len(wins) / len(trades) * 100 if trades else 0.0
         avg_win = sum(float(t.pnl_usdt) for t in wins) / len(wins) if wins else 0.0
         avg_loss = sum(float(t.pnl_usdt) for t in losses) / len(losses) if losses else 0.0
+        avg_win_pct = sum(float(t.pnl_pct or 0) for t in wins) / len(wins) if wins else 0.0
+        avg_loss_pct = sum(float(t.pnl_pct or 0) for t in losses) / len(losses) if losses else 0.0
+        avg_holding = (sum(
+            (t.ts_close - t.ts_open).total_seconds() / 60
+            for t in trades if t.ts_close and t.ts_open
+        ) / len(trades)) if trades else 0
+
+        # Close reason breakdown
+        close_reasons = {"sl_triggered": 0, "tp_triggered": 0, "bracket_fill": 0, "manual_close": 0}
+        for t in trades:
+            key = t.close_reason or "manual_close"
+            close_reasons[key] = close_reasons.get(key, 0) + 1
+
         action_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
         for d in decisions:
             a = d.output.get("action", "HOLD")
             action_counts[a] = action_counts.get(a, 0) + 1
         n = max(len(decisions), 1)
+
+        # Price data from OHLCV 1h
+        ohlcv_rows = (await self.session.execute(
+            select(Ohlcv).where(Ohlcv.timeframe == "1h", Ohlcv.time >= since)
+            .order_by(Ohlcv.time.asc())
+        )).scalars().all()
+        open_btc = float(ohlcv_rows[0].open) if ohlcv_rows else 0
+        close_btc = float(ohlcv_rows[-1].close) if ohlcv_rows else 0
+        low_24h = min(float(r.low) for r in ohlcv_rows) if ohlcv_rows else 0
+        high_24h = max(float(r.high) for r in ohlcv_rows) if ohlcv_rows else 0
+        pct_24h = ((close_btc - open_btc) / open_btc * 100) if open_btc else 0
+
+        # ATR average from indicators
+        ind_row = (await self.session.execute(
+            select(Indicators).order_by(Indicators.time.desc()).limit(1)
+        )).scalar_one_or_none()
+        atr_1h = float((ind_row.data.get("1h", {}) or {}).get("atr") or 0) if ind_row else 0
+        atr_pct = (atr_1h / close_btc * 100) if close_btc else 0
+        vol_label = "alta" if atr_pct > 2.0 else "baja" if atr_pct < 0.5 else "normal"
+
         return {
             "total_decisions": len(decisions),
             "buy_count": action_counts["BUY"],
@@ -238,9 +273,22 @@ class Supervisor:
             "profit_factor": (sum(float(t.pnl_usdt) for t in wins) /
                               abs(sum(float(t.pnl_usdt) for t in losses))) if losses else 0,
             "avg_win": round(avg_win, 2),
-            "avg_win_pct": 0.0, "avg_loss": round(avg_loss, 2), "avg_loss_pct": 0.0,
-            "total_pnl": round(total_pnl, 2), "total_pnl_pct": 0.0,
-            "max_dd_pct": 0.0, "avg_holding_min": 0,
-            "open_btc": 0, "close_btc": 0, "low_24h": 0, "high_24h": 0,
-            "pct_24h": 0, "atr_avg": 0, "atr_pct": 0, "vol_label": "normal",
+            "avg_win_pct": round(avg_win_pct, 3),
+            "avg_loss": round(avg_loss, 2),
+            "avg_loss_pct": round(avg_loss_pct, 3),
+            "avg_holding_min": round(avg_holding),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_pct": 0.0,
+            "max_dd_pct": 0.0,
+            "sl_hits": close_reasons.get("sl_triggered", 0),
+            "tp_hits": close_reasons.get("tp_triggered", 0) + close_reasons.get("bracket_fill", 0),
+            "manual_closes": close_reasons.get("manual_close", 0),
+            "open_btc": round(open_btc),
+            "close_btc": round(close_btc),
+            "low_24h": round(low_24h),
+            "high_24h": round(high_24h),
+            "pct_24h": round(pct_24h, 2),
+            "atr_avg": round(atr_1h),
+            "atr_pct": round(atr_pct, 2),
+            "vol_label": vol_label,
         }

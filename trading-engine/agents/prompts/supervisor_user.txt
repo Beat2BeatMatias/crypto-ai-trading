@@ -6,15 +6,20 @@ METRICAS (ultimas 24h):
   Trades cerrados: {closed_trades}
   Win rate: {win_rate:.1f}%
   Profit factor: {profit_factor:.2f}
-  Avg win: ${avg_win:+,.2f} ({avg_win_pct:+.2f}%)
-  Avg loss: ${avg_loss:+,.2f} ({avg_loss_pct:+.2f}%)
+  Avg win: ${avg_win:+,.2f} ({avg_win_pct:+.3f}%)
+  Avg loss: ${avg_loss:+,.2f} ({avg_loss_pct:+.3f}%)
   P&L total: ${total_pnl:+,.2f}
+  Holding promedio: {avg_holding_min} min
+
+CIERRE DE TRADES:
+  SL tocado: {sl_hits} | TP alcanzado: {tp_hits} | Cierre manual: {manual_closes}
 
 MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%)
-  ATR(1h) avg: ${atr_avg:.0f} | Volumen: {vol_label}
+  Rango 24h: ${low_24h:,.0f} - ${high_24h:,.0f}
+  ATR(1h) avg: ${atr_avg:,.0f} ({atr_pct:.2f}%) | Volatilidad: {vol_label}
 
-DECISIONES Y OUTCOMES:
+DECISIONES Y OUTCOMES (ultimas {decisions_sample_count} de {total_decisions}):
 {decisions_dump}
 
 PLAYBOOK ANTERIOR (v{previous_version}):

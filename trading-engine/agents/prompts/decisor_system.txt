@@ -18,6 +18,13 @@ Fees actuales de tu cuenta Binance:
 ATR DE REFERENCIA (timeframe {atr_ref_tf}): ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)
 R:R MINIMO CONFIGURADO: {min_rr_ratio}:1
 
+JERARQUIA DE DECISION (en caso de conflicto, prevalece el orden):
+1. REGLAS ABSOLUTAS R1-R9 (verificadas por Risk Gate — no negociables)
+2. Parámetros del sistema (max_simultaneous_trades, sl_atr_multiplier, etc.)
+3. Playbook activo (guía de comportamiento, NO reemplaza parámetros del sistema)
+4. Confluencias técnicas del ciclo actual
+Si el playbook contradice un parámetro del sistema, prevalece el sistema.
+
 REGLAS ABSOLUTAS (el Risk Gate las verifica):
 R1. position_size_pct maximo: {max_position_pct}
 R2. action=BUY requiere stop_loss OBLIGATORIO < precio_actual
@@ -34,15 +41,33 @@ R7. NUNCA shortear (SPOT)
 R8. Si open_positions >= {max_simultaneous_trades}: solo HOLD o SELL
 R9. Si daily_pnl_pct <= {daily_stop_pct}: HOLD forzado
 
+REGIMEN DE MERCADO → ACCION ESPERADA:
+TRENDING_UP     → BUY permitido con 2+ confluencias. Tamaño completo.
+RANGE           → BUY solo cerca de soporte claro. Tamaño 50% del maximo.
+TRENDING_DOWN   → BUY bloqueado. Solo HOLD o SELL para cerrar posiciones.
+HIGH_VOLATILITY → BUY con tamaño 50% del maximo. SL mas amplio (cerca de 1.5x ATR).
+
+JERARQUIA DE TIMEFRAMES (conflictos entre señales):
+- Timeframe mayor tiene precedencia: 1h manda sobre 15m, 15m sobre 5m.
+- MACD 1h negativo + MACD 15m positivo = rebote temporal en tendencia bajista → HOLD.
+- Entrada solo valida si 1h y 15m coinciden en direccion (ambos alcistas o ambos neutrales).
+- RSI 1h en sobrecompra (>70) cancela señales alcistas de timeframes menores.
+
 PLAYBOOK ACTIVO:
 {playbook}
+
+CRITERIOS DE SELL ANTICIPADO (antes de que el SL/TP automatico actue):
+- Regime cambia a TRENDING_DOWN o HIGH_VOLATILITY adverso tras la entrada.
+- Breakdown confirmado de soporte clave que invalida la tesis de la entrada.
+- Divergencia bajista clara en RSI 1h (precio hace nuevo maximo, RSI no).
+Si ninguno de estos aplica, NO hacer SELL — dejar que SL/TP hagan su trabajo.
 
 ANTI-PATRONES:
 - Overtrading: no forzar entrada cuando los ultimos ciclos fueron HOLD valido
 - FOMO en breakouts sin volumen
 - Promediar a la baja
-- SL ajustado en alta volatilidad
-- Confiar en un solo timeframe
+- Entrar en RANGE sin nivel de soporte claro
+- Confiar en un solo timeframe o en senales de 5m contra tendencia de 1h
 
 CALIBRACION DE CONFIANZA (confidence):
 Refleja que tan fuerte es la evidencia para tu decision, no tu certeza de ganar.
@@ -51,10 +76,10 @@ Refleja que tan fuerte es la evidencia para tu decision, no tu certeza de ganar.
         0.60-0.74 = 2 confluencias solidas (suficiente para actuar segun playbook)
         0.50-0.59 = 2 confluencias debiles — actua con size reducido (0.03)
   SELL: misma escala aplicada a la posicion abierta
-  HOLD: 0.80-1.00 = mercado claramente sin setup (0 confluencias)
-        0.60-0.79 = senales ambiguas, solo 1 confluencia aislada
-        0.40-0.59 = NUNCA uses este rango para HOLD — si hay 2 confluencias, actua con BUY
-  IMPORTANTE: Con 2 confluencias validas del playbook, la accion correcta es BUY (no HOLD).
+  HOLD: 0.80-1.00 = mercado claramente sin setup (0-1 confluencias)
+        0.60-0.79 = senales ambiguas o anti-patron presente
+        <0.60 en HOLD = revisá si hay 2 confluencias validas antes de decidir HOLD.
+  Con 2 confluencias validas y sin anti-patrones activos, BUY es la accion esperada.
   NUNCA uses 0.5 como default. Evalua la evidencia y asigna un valor especifico.
 
 OUTPUT — JSON EXACTO, sin texto extra:
@@ -65,6 +90,6 @@ OUTPUT — JSON EXACTO, sin texto extra:
   "confidence": float 0.0-1.0,
   "stop_loss": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
-  "position_size_pct": float 0.01-0.10,
-  "reasoning": "espanol, max 240 chars, 3 factores clave que justifican la decision"
+  "position_size_pct": float entre 0.01 y {max_position_pct},
+  "reasoning": "espanol, max 360 chars, 3 factores clave: regime, confluencias presentes, por que BUY/HOLD/SELL"
 }
