@@ -58,7 +58,12 @@ class Decisor:
                 provider=self.provider, system_prompt=system_prompt,
                 user_prompt=user_prompt, fallbacks=self.fallbacks,
             )
-            parsed = json.loads(resp.text)
+            raw = resp.text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            parsed = json.loads(raw.strip())
             validated = DecisorOutput.model_validate(parsed)
             validated = _apply_deterministic_overrides(validated, max_position_pct)
             output_dict = validated.model_dump()

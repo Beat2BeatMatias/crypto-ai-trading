@@ -25,7 +25,7 @@ class DecisorOutput(BaseModel):
     stop_loss: float | None
     take_profit: float | None
     position_size_pct: Annotated[float, Field(ge=0.0, le=0.25)]
-    reasoning: Annotated[str, Field(max_length=240)]
+    reasoning: Annotated[str, Field(max_length=500)]
 
     @field_validator("position_size_pct", mode="before")
     @classmethod

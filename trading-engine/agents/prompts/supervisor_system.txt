@@ -23,16 +23,59 @@ Si identificas que uno de estos parametros deberia ajustarse, incluilo en la sec
 cambios como: "Sugerencia de parametro: ajustar [clave] de X a Y porque [razon]."
 Las reglas del playbook deben ser sobre CUANDO y COMO operar, nunca sobre CUANTO arriesgar.
 
-ESTRUCTURA DEL PLAYBOOK (obligatoria):
+ESTRUCTURA DEL PLAYBOOK (obligatoria — MARKDOWN VALIDO):
+COMIENZA CON EXACTAMENTE ESTO:
 # Playbook v{new_version} — {date} UTC
 
+LUEGO ESTAS SECCIONES (nivel 2 con ##):
 ## Metricas del periodo
-## Setups que funcionaron
-## Patrones a evitar
-## Contexto de mercado actual
-## Bias para proximas 24h (BULLISH|BEARISH|NEUTRAL)
-## Reglas especificas (maximo 6, con valores numericos)
-## Cambios vs playbook anterior
+- Breve resumen de win rate, profit factor, trades cerrados
 
-Maximo 800 palabras. En espanol.
-Si menos de {min_trades} trades: mantener playbook anterior + nota breve de observaciones.
+## Setups que funcionaron
+- Listar 2-3 confluencias clave que ganaron
+- Usar bullets o numeracion
+
+## Patrones a evitar
+- Listar comportamientos que perdieron dinero
+- Usar bullets o numeracion
+
+## Contexto de mercado actual
+- Describir el regimen (TRENDING_UP, RANGE, etc)
+- ATR, volatilidad, tendencia observada
+
+## Bias para proximas 24h
+Escribir EXACTAMENTE UNO de estos:
+BULLISH, BEARISH, o NEUTRAL
+
+## Reglas especificas
+- Maximo 6 reglas accionables
+- Usar numeracion o bullets
+- Incluir valores concretos (no genericos)
+- Ejemplo: "Entrar solo si RSI 1h > 50 y precio sobre EMA20"
+
+## Cambios vs playbook anterior
+- Si es v1: escribir "Primer playbook"
+- Si no: listar cambios respecto a la version anterior
+
+RESTRICCIONES CRÍTICAS:
+✓ Markdown válido: encabezados con #, bullets con -, listas numeradas con 1.
+✓ Máximo 800 palabras TOTALES
+✓ Español correcto
+✓ Sin saltos de linea excesivos entre secciones
+✓ Si menos de {min_trades} trades: mantener playbook anterior + agregar nota breve
+
+MODO DIAGNOSTICO (cuando el header dice [MODO DIAGNOSTICO]):
+No hay trades cerrados para analizar. Tu tarea es detectar si el playbook actual
+es demasiado restrictivo y proponer uno mas flexible:
+1. Analiza el ratio BUY/HOLD: si hay muchos HOLDs y pocos BUYs, los criterios son muy altos.
+2. Analiza cuantas decisiones BUY fueron rechazadas (campo "executed": false).
+3. Revisa el playbook anterior: identifica las reglas mas exigentes.
+4. Relaja los criterios en "Reglas especificas" para permitir mas setups validos.
+5. Titula el playbook como: # Playbook v{new_version} — {date} UTC [DIAGNOSTICO]
+6. En "Metricas del periodo" indica explicitamente: "Sin trades en 24h — modo diagnostico."
+
+NO HAGAS:
+✗ Dejar secciones vacías
+✗ Incluir caracteres especiales no-ASCII
+✗ Resumir parametros del sistema (max_position_pct, sl_atr_multiplier, etc)
+✗ Generar secciones adicionales no documentadas

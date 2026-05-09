@@ -61,6 +61,24 @@ _trades_table = Table(
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
+    Column("close_requested", Boolean, default=False),
+)
+
+_ohlcv_table = Table(
+    "ohlcv", _sqlite_metadata,
+    Column("time", DateTime, primary_key=True),
+    Column("timeframe", String(4), primary_key=True),
+    Column("open", Numeric(18, 8)),
+    Column("high", Numeric(18, 8)),
+    Column("low", Numeric(18, 8)),
+    Column("close", Numeric(18, 8)),
+    Column("volume", Numeric(24, 8)),
+)
+
+_indicators_table = Table(
+    "indicators", _sqlite_metadata,
+    Column("time", DateTime, primary_key=True),
+    Column("data", JSON, nullable=False),
 )
 
 _playbook_versions_table = Table(
@@ -210,17 +228,52 @@ async def test_run_persists_supervisor_decision_row(session, fake_llm):
     assert len(sup_decisions) == 1
 
 
-async def test_run_with_zero_trades_skips_llm(session):
+async def test_run_with_zero_trades_calls_llm_in_diagnostic_mode(session, fake_llm):
     # GIVEN no closed trades exist
     await session.execute(delete(Trade))
     await session.commit()
 
-    llm = MagicMock()
-    llm.call = AsyncMock()
-    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=3)
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=3)
 
-    # WHEN run() is called with insufficient data
+    # WHEN run() is called without enough trades
     await sup.run()
 
-    # THEN the LLM is never called
-    assert llm.call.call_count == 0
+    # THEN the LLM is still called (diagnostic mode)
+    assert fake_llm.call.call_count >= 1
+
+
+async def test_run_with_zero_trades_saves_playbook_in_diagnostic_mode(session, fake_llm):
+    # GIVEN no closed trades exist
+    await session.execute(delete(Trade))
+    await session.commit()
+
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=3)
+
+    # WHEN run() is called in diagnostic mode
+    await sup.run()
+
+    # THEN a new playbook version is saved
+    versions = (await session.execute(
+        select(PlaybookVersion).order_by(PlaybookVersion.version)
+    )).scalars().all()
+    assert len(versions) == 2
+    assert versions[1].active is True
+    assert versions[1].trades_analyzed == 0
+
+
+async def test_run_with_zero_trades_marks_decision_as_diagnostic(session, fake_llm):
+    # GIVEN no closed trades exist
+    await session.execute(delete(Trade))
+    await session.commit()
+
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=3)
+
+    # WHEN run() is called
+    await sup.run()
+
+    # THEN the supervisor Decision row records mode="diagnostic" and executed=True
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    assert sup_decision.executed is True
+    assert sup_decision.output.get("mode") == "diagnostic"

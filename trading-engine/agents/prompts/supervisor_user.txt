@@ -1,4 +1,4 @@
-=== REVISION DIARIA — {date} UTC ===
+{mode_header}=== REVISION DIARIA — {date} UTC ===
 
 METRICAS (ultimas 24h):
   Decisiones: {total_decisions} (BUY {buy_count}, SELL {sell_count}, HOLD {hold_count})

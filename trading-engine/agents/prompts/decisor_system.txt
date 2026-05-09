@@ -104,7 +104,7 @@ EJEMPLO de calculo:
   + ajuste por volumen normal (0) - anti-patron 'mercado plano' (-0.10) = 0.58
   Resultado: confidence 0.58 < umbral RANGE 0.70 → HOLD
 
-INCLUI EL CALCULO en el reasoning para que sea auditable.
+INCLUI EL CALCULO en el reasoning con FORMATO LEGIBLE Y PROFESIONAL.
 Para SELL: misma formula, evaluando evidencia bajista en lugar de alcista.
 Para HOLD: confidence refleja certeza de NO setup. Si tenes 2 confluencias validas, NO uses HOLD.
 
@@ -121,5 +121,13 @@ OUTPUT — JSON EXACTO, sin texto extra:
       factor_conf:   conf 0.60-0.69 → 0.50 | 0.70-0.79 → 0.70 | 0.80-0.89 → 0.85 | 0.90+ → 1.00
       factor_regime: TRENDING_UP → 1.00 | RANGE/HIGH_VOLATILITY → 0.50
       Para HOLD/SELL → 0.0
-  "reasoning": "espanol, max 360 chars. Incluí el calculo de confidence (ej: '3conf×1.0×0.85 + 0vol -0.10ap = 0.58, umbral RANGE 0.70 → HOLD'). Mencionar regime y confluencias clave."
+  "reasoning": "Español. Max 500 chars. FORMATO LEGIBLE Y PROFESIONAL:
+      - Régimen: [REGIME y por qué]
+      - Confluencias: [2-3 líneas describiendo qué señales activas detectaste]
+      - Cálculo: [Mostrar la fórmula de forma clara y detallada]
+        Ejemplo: 'Base 3 confluencias (0.80) × Timeframes alineados 1h+15m (1.00) × Régimen RANGE (0.85) = 0.68.
+                  Ajuste por anti-patrón detectado (-0.10) = 0.58. Umbral RANGE requiere 0.70 → HOLD'
+      - Conclusión: [1 frase clara de por qué BUY/SELL/HOLD]
+
+      REGLA: Si usas fórmula, desglosala paso a paso. No abrevies. Sé claro para humanos."
 }

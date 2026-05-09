@@ -99,70 +99,81 @@ class Supervisor:
         ctx = None
         output: dict = {}
 
-        if metrics["closed_trades"] < self.min_trades:
-            logger.info("supervisor.insufficient_data", closed=metrics["closed_trades"])
-            rejected_reason = f"insufficient_data: {metrics['closed_trades']} < {self.min_trades}"
-        else:
-            try:
-                previous = await self.prompt_manager.get_active_playbook()
-                previous_content = previous.content if previous else "# (vacio)"
-                decisions_since = (await self.session.execute(
-                    select(Decision).where(Decision.ts >= since, Decision.agent == "decisor")
-                    .order_by(Decision.ts.asc())
-                )).scalars().all()
-                # Limit to last 40 decisions to avoid exceeding provider token limits.
-                # Earlier decisions are already captured in the aggregate metrics above.
-                _MAX_DECISIONS_DUMP = 40
-                decisions_sample = decisions_since[-_MAX_DECISIONS_DUMP:]
-                decisions_dump = "\n".join([
-                    json.dumps({"ts": d.ts.isoformat(), "action": d.output.get("action"),
-                                "confidence": d.output.get("confidence"),
-                                "reasoning": (d.output.get("reasoning") or "")[:80],
-                                "executed": d.executed})
-                    for d in decisions_sample
-                ])
-                if len(decisions_since) > _MAX_DECISIONS_DUMP:
-                    decisions_dump = (
-                        f"[{len(decisions_since) - _MAX_DECISIONS_DUMP} decisiones anteriores omitidas — "
-                        f"resumen en métricas]\n" + decisions_dump
-                    )
-                ctx = {
-                    **metrics,
-                    "previous_version": previous.version if previous else 0,
-                    "new_version": (previous.version + 1) if previous else 0,
-                    "previous_playbook": previous_content,
-                    "decisions_dump": decisions_dump,
-                    "decisions_sample_count": len(decisions_sample),
-                    "date": datetime.now(tz=timezone.utc).date().isoformat(),
-                    "min_trades": self.min_trades,
-                }
-                system_prompt = self.prompt_manager.load_system_prompt("supervisor")
-                user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
-                resp = await self.llm.call(provider=self.provider, system_prompt=system_prompt,
-                                            user_prompt=user_prompt, fallbacks=self.fallbacks,
-                                            json_mode=False)
-                output["playbook"] = resp.text
-                await self.prompt_manager.save_playbook(
-                    content=resp.text, model=self.provider.value,
-                    trades_analyzed=metrics["closed_trades"],
-                    win_rate=metrics["win_rate"],
-                    pnl_summary={"pnl_usdt": metrics["total_pnl"], "avg_win": metrics["avg_win"]},
+        mode = "diagnostic" if metrics["closed_trades"] < self.min_trades else "normal"
+        if mode == "diagnostic":
+            logger.info("supervisor.diagnostic_mode", closed=metrics["closed_trades"],
+                        min_trades=self.min_trades)
+
+        try:
+            previous = await self.prompt_manager.get_active_playbook()
+            previous_content = previous.content if previous else "# (vacio)"
+            decisions_since = (await self.session.execute(
+                select(Decision).where(Decision.ts >= since, Decision.agent == "decisor")
+                .order_by(Decision.ts.asc())
+            )).scalars().all()
+            # Limit to last 40 decisions to avoid exceeding provider token limits.
+            # Earlier decisions are already captured in the aggregate metrics above.
+            _MAX_DECISIONS_DUMP = 40
+            decisions_sample = decisions_since[-_MAX_DECISIONS_DUMP:]
+            decisions_dump = "\n".join([
+                json.dumps({"ts": d.ts.isoformat(), "action": d.output.get("action"),
+                            "confidence": d.output.get("confidence"),
+                            "reasoning": (d.output.get("reasoning") or "")[:80],
+                            "executed": d.executed})
+                for d in decisions_sample
+            ])
+            if len(decisions_since) > _MAX_DECISIONS_DUMP:
+                decisions_dump = (
+                    f"[{len(decisions_since) - _MAX_DECISIONS_DUMP} decisiones anteriores omitidas — "
+                    f"resumen en metricas]\n" + decisions_dump
                 )
-                logger.info("supervisor.playbook_saved", version=ctx["new_version"])
 
-                # Segunda llamada LLM: sugerencias de configuración
-                if current_config:
-                    try:
-                        suggestions = await self._generate_config_suggestions(metrics, current_config)
-                        output["config_suggestions"] = suggestions
-                        logger.info("supervisor.suggestions_generated",
-                                    count=len(suggestions.get("suggestions", [])))
-                    except Exception as e:
-                        logger.warning("supervisor.suggestions_failed", error=str(e))
+            mode_header = (
+                "\n[MODO DIAGNOSTICO] Sin trades cerrados en 24h. "
+                "Analiza si el playbook actual es demasiado restrictivo y flexibilizalo.\n"
+                if mode == "diagnostic" else ""
+            )
 
-            except Exception as e:
-                logger.error("supervisor.error", error=str(e))
-                rejected_reason = f"llm_error: {type(e).__name__}"
+            ctx = {
+                **metrics,
+                "mode": mode,
+                "mode_header": mode_header,
+                "previous_version": previous.version if previous else 0,
+                "new_version": (previous.version + 1) if previous else 0,
+                "previous_playbook": previous_content,
+                "decisions_dump": decisions_dump,
+                "decisions_sample_count": len(decisions_sample),
+                "date": datetime.now(tz=timezone.utc).date().isoformat(),
+                "min_trades": self.min_trades,
+            }
+            system_prompt = self.prompt_manager.load_system_prompt("supervisor")
+            user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
+            resp = await self.llm.call(provider=self.provider, system_prompt=system_prompt,
+                                        user_prompt=user_prompt, fallbacks=self.fallbacks,
+                                        json_mode=False)
+            output["playbook"] = resp.text
+            output["mode"] = mode
+            await self.prompt_manager.save_playbook(
+                content=resp.text, model=self.provider.value,
+                trades_analyzed=metrics["closed_trades"],
+                win_rate=metrics["win_rate"],
+                pnl_summary={"pnl_usdt": metrics["total_pnl"], "avg_win": metrics["avg_win"]},
+            )
+            logger.info("supervisor.playbook_saved", version=ctx["new_version"], mode=mode)
+
+            # Segunda llamada LLM: sugerencias de configuración
+            if current_config:
+                try:
+                    suggestions = await self._generate_config_suggestions(metrics, current_config)
+                    output["config_suggestions"] = suggestions
+                    logger.info("supervisor.suggestions_generated",
+                                count=len(suggestions.get("suggestions", [])))
+                except Exception as e:
+                    logger.warning("supervisor.suggestions_failed", error=str(e))
+
+        except Exception as e:
+            logger.error("supervisor.error", error=str(e))
+            rejected_reason = f"llm_error: {type(e).__name__}"
 
         self.session.add(Decision(
             ts=datetime.now(tz=timezone.utc),

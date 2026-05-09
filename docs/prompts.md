@@ -105,7 +105,15 @@ OUTPUT — JSON EXACTO, sin texto extra:
   "stop_loss": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "position_size_pct": float entre 0.01 y {max_position_pct},
-  "reasoning": "espanol, max 360 chars, 3 factores clave: regime, confluencias presentes, por que BUY/HOLD/SELL"
+  "reasoning": "Español, max 500 chars. Formato legible y profesional:
+    - Régimen: [describe el régimen y contexto]
+    - Confluencias: [lista 2-3 señales activas]
+    - Cálculo: [desglosar fórmula paso a paso si hay]
+    - Conclusión: [1 frase clara del por qué de la decisión]
+    
+    Ejemplo:
+    'Régimen RANGE. Confluencias: RSI 15m en sobrecompra (75), EMA20 rechazando. 
+     Cálculo: 2conf×1.0×0.85 = 0.70, sin ajustes. Confianza 0.70 = umbral RANGE → BUY válido con size 50%.'"
 }
 ```
 
@@ -180,19 +188,52 @@ Si identificas que uno de estos parametros deberia ajustarse, incluilo en la sec
 cambios como: "Sugerencia de parametro: ajustar [clave] de X a Y porque [razon]."
 Las reglas del playbook deben ser sobre CUANDO y COMO operar, nunca sobre CUANTO arriesgar.
 
-ESTRUCTURA DEL PLAYBOOK (obligatoria):
+ESTRUCTURA DEL PLAYBOOK (obligatoria — MARKDOWN VALIDO):
+COMIENZA CON EXACTAMENTE ESTO:
 # Playbook v{new_version} — {date} UTC
 
+LUEGO ESTAS SECCIONES (nivel 2 con ##):
 ## Metricas del periodo
-## Setups que funcionaron
-## Patrones a evitar
-## Contexto de mercado actual
-## Bias para proximas 24h (BULLISH|BEARISH|NEUTRAL)
-## Reglas especificas (maximo 6, con valores numericos)
-## Cambios vs playbook anterior
+- Breve resumen de win rate, profit factor, trades cerrados
 
-Maximo 800 palabras. En espanol.
-Si menos de {min_trades} trades: mantener playbook anterior + nota breve de observaciones.
+## Setups que funcionaron
+- Listar 2-3 confluencias clave que ganaron
+- Usar bullets o numeracion
+
+## Patrones a evitar
+- Listar comportamientos que perdieron dinero
+- Usar bullets o numeracion
+
+## Contexto de mercado actual
+- Describir el regimen (TRENDING_UP, RANGE, etc)
+- ATR, volatilidad, tendencia observada
+
+## Bias para proximas 24h
+Escribir EXACTAMENTE UNO de estos:
+BULLISH, BEARISH, o NEUTRAL
+
+## Reglas especificas
+- Maximo 6 reglas accionables
+- Usar numeracion o bullets
+- Incluir valores concretos (no genericos)
+- Ejemplo: "Entrar solo si RSI 1h > 50 y precio sobre EMA20"
+
+## Cambios vs playbook anterior
+- Si es v1: escribir "Primer playbook"
+- Si no: listar cambios respecto a la version anterior
+
+RESTRICCIONES CRÍTICAS:
+✓ Markdown válido: encabezados con #, bullets con -, listas numeradas con 1.
+✓ Máximo 800 palabras TOTALES
+✓ Español correcto
+✓ Sin saltos de linea excesivos entre secciones
+✓ Si menos de {min_trades} trades: mantener playbook anterior + agregar nota breve
+
+NO HAGAS:
+✗ Dejar secciones vacías
+✗ Incluir caracteres especiales no-ASCII
+✗ Resumir parametros del sistema (max_position_pct, sl_atr_multiplier, etc)
+✗ Generar secciones adicionales no documentadas
 ```
 
 ### User prompt
