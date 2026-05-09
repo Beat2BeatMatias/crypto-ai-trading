@@ -33,6 +33,13 @@ class DecisorOutput(BaseModel):
         # LLMs return null for HOLD/SELL decisions; treat as 0.0
         return 0.0 if v is None else v
 
+    @field_validator("reasoning", mode="before")
+    @classmethod
+    def _truncate_reasoning(cls, v: Any) -> Any:
+        if isinstance(v, str) and len(v) > 500:
+            return v[:497] + "..."
+        return v
+
     @model_validator(mode="after")
     def _buy_requires_sl_and_tp(self) -> "DecisorOutput":
         if self.action == DecisorAction.BUY:

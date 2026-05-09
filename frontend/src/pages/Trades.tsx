@@ -55,14 +55,52 @@ function rrRatio(entry: number, sl: number | null, tp: number | null): string {
 
 export function Trades() {
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [filter, setFilter] = useState<"all" | "open" | "closed">("all");
   const { closing, requestClose } = useCloseTrade(setTrades);
-  useEffect(() => { api.trades().then(setTrades).catch(() => {}); }, []);
+
+  useEffect(() => {
+    const status = filter === "all" ? undefined : filter;
+    api.trades(status).then(setTrades).catch(() => {});
+  }, [filter]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Historial de trades</h2>
         <span className="text-xs text-zinc-500">{trades.length} trade{trades.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setFilter("all")}
+          className={`text-xs px-3 py-1.5 rounded transition-colors ${
+            filter === "all"
+              ? "bg-blue-900 text-blue-200 font-semibold"
+              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+          }`}
+        >
+          Todos
+        </button>
+        <button
+          onClick={() => setFilter("open")}
+          className={`text-xs px-3 py-1.5 rounded transition-colors ${
+            filter === "open"
+              ? "bg-blue-900/70 text-blue-200 font-semibold"
+              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+          }`}
+        >
+          Abiertos
+        </button>
+        <button
+          onClick={() => setFilter("closed")}
+          className={`text-xs px-3 py-1.5 rounded transition-colors ${
+            filter === "closed"
+              ? "bg-blue-900/70 text-blue-200 font-semibold"
+              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+          }`}
+        >
+          Cerrados
+        </button>
       </div>
 
       {trades.length === 0 && (
