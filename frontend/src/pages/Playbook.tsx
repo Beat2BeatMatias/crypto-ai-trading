@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { api } from "../api/client";
 import type { Playbook } from "../types";
 
@@ -109,10 +110,34 @@ export function PlaybookPage() {
               El playbook es leído por el Decisor en cada ciclo. Los cambios se aplican en el próximo tick.
             </p>
           </div>
+        ) : active?.content ? (
+          <div className="text-sm text-zinc-300 leading-relaxed [&>h1]:text-xl [&>h1]:font-bold [&>h1]:text-zinc-100 [&>h1]:mt-4 [&>h1]:mb-2 [&>h2]:text-base [&>h2]:font-semibold [&>h2]:text-zinc-200 [&>h2]:mt-4 [&>h2]:mb-1.5 [&>h2]:border-b [&>h2]:border-zinc-700 [&>h2]:pb-1 [&>h3]:text-sm [&>h3]:font-semibold [&>h3]:text-zinc-300 [&>h3]:mt-3 [&>h3]:mb-1 [&>p]:mb-2 [&>ul]:list-disc [&>ul]:ml-4 [&>ul]:mb-2 [&>ul]:space-y-0.5 [&>ol]:list-decimal [&>ol]:ml-4 [&>ol]:mb-2 [&>ol]:space-y-0.5">
+            <ReactMarkdown
+              components={{
+                h1: ({ children }) => <h1 className="text-xl font-bold text-zinc-100 mt-4 mb-2">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-base font-semibold text-zinc-200 mt-4 mb-1.5 border-b border-zinc-700 pb-1">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-sm font-semibold text-zinc-300 mt-3 mb-1">{children}</h3>,
+                p: ({ children }) => <p className="text-sm text-zinc-300 leading-relaxed mb-2">{children}</p>,
+                ul: ({ children }) => <ul className="list-disc ml-4 mb-2 space-y-0.5">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal ml-4 mb-2 space-y-0.5">{children}</ol>,
+                li: ({ children }) => <li className="text-sm text-zinc-300">{children}</li>,
+                strong: ({ children }) => <strong className="font-semibold text-zinc-100">{children}</strong>,
+                em: ({ children }) => <em className="italic text-zinc-400">{children}</em>,
+                code: ({ className, children }) => {
+                  const isBlock = !!className;
+                  return isBlock
+                    ? <code className="block bg-zinc-800 rounded p-3 text-xs font-mono text-emerald-300 my-2 overflow-x-auto">{children}</code>
+                    : <code className="bg-zinc-800 rounded px-1 py-0.5 text-xs font-mono text-emerald-300">{children}</code>;
+                },
+                pre: ({ children }) => <pre className="bg-zinc-800 rounded p-3 overflow-x-auto my-2 text-xs">{children}</pre>,
+                hr: () => <hr className="border-zinc-700 my-3" />,
+              }}
+            >
+              {active.content}
+            </ReactMarkdown>
+          </div>
         ) : (
-          <pre className="whitespace-pre-wrap text-sm text-zinc-300 leading-relaxed">
-            {active?.content ?? "Sin playbook. El Supervisor generará uno al primer ciclo."}
-          </pre>
+          <p className="text-zinc-500 text-sm">Sin playbook. El Supervisor generará uno al primer ciclo.</p>
         )}
       </div>
 
