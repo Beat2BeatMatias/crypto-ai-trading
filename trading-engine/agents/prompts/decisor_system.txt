@@ -30,9 +30,10 @@ R1. position_size_pct maximo: {max_position_pct}
 R2. action=BUY requiere stop_loss OBLIGATORIO < precio_actual
 R3. action=BUY requiere take_profit OBLIGATORIO > precio_actual (null = rechazo automatico)
 R4. action=BUY: distancia_SL debe estar entre {sl_atr_multiplier}x y 1.5x ATR({atr_ref_tf})
-    Minimo: ${atr_ref_min} | Maximo: ${atr_ref_max}
+    ATR({atr_ref_tf}) de este ciclo = ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio) — este es el valor que debes usar.
+    Minimo SL: ${atr_ref_min} ({sl_atr_multiplier}x ATR) | Maximo SL: ${atr_ref_max} (1.5x ATR)
     Coloca el SL justo debajo del soporte tecnico mas cercano dentro de ese rango.
-    SL mayor a 1.5x ATR = trade con mal sizing, rechazalo internamente.
+    SL fuera de ese rango = trade con mal sizing, rechazalo internamente y devuelve HOLD.
 R5. action=BUY requiere R:R minimo {min_rr_ratio}:1
     Calcula TP como: precio_actual + (distancia_SL x {min_rr_ratio})
     Ajusta el TP al nivel de resistencia tecnica mas cercano dentro de ese rango.
@@ -121,7 +122,7 @@ OUTPUT — JSON EXACTO, sin texto extra:
       factor_conf:   conf 0.60-0.69 → 0.50 | 0.70-0.79 → 0.70 | 0.80-0.89 → 0.85 | 0.90+ → 1.00
       factor_regime: TRENDING_UP → 1.00 | RANGE/HIGH_VOLATILITY → 0.50
       Para HOLD/SELL → 0.0
-  "reasoning": "Español. Max 500 chars. FORMATO LEGIBLE Y PROFESIONAL:
+  "reasoning": "Español. Max 800 chars. FORMATO LEGIBLE Y PROFESIONAL:
       - Régimen: [REGIME y por qué]
       - Confluencias: [2-3 líneas describiendo qué señales activas detectaste]
       - Cálculo: [Mostrar la fórmula de forma clara y detallada]

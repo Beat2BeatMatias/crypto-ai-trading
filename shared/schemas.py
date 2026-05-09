@@ -25,7 +25,7 @@ class DecisorOutput(BaseModel):
     stop_loss: float | None
     take_profit: float | None
     position_size_pct: Annotated[float, Field(ge=0.0, le=0.25)]
-    reasoning: Annotated[str, Field(max_length=500)]
+    reasoning: Annotated[str, Field(max_length=800)]
 
     @field_validator("position_size_pct", mode="before")
     @classmethod
@@ -36,8 +36,8 @@ class DecisorOutput(BaseModel):
     @field_validator("reasoning", mode="before")
     @classmethod
     def _truncate_reasoning(cls, v: Any) -> Any:
-        if isinstance(v, str) and len(v) > 500:
-            return v[:497] + "..."
+        if isinstance(v, str) and len(v) > 800:
+            return v[:797] + "..."
         return v
 
     @model_validator(mode="after")
