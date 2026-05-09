@@ -93,6 +93,56 @@ docker-compose down -v
 
 ---
 
+## Troubleshooting
+
+### Frontend no buildea — `npm install` se cuelga (problema DNS)
+
+**Síntoma:** `docker-compose build` se queda colgado en el paso `RUN npm install` sin dar error. También `npm install` local se cuelga. `curl registry.npmjs.org` devuelve `Could not resolve host`.
+
+**Causa:** El DNS local (del router o del ISP) no resuelve `registry.npmjs.org`. El puerto UDP 53 hacia servidores DNS externos también está bloqueado, por lo que cambiar el nameserver no ayuda.
+
+**Diagnóstico:**
+
+```bash
+# Confirmar que es un problema DNS (debe devolver HTTP 200)
+curl -I --resolve "registry.npmjs.org:443:104.16.18.35" https://registry.npmjs.org/
+
+# Si devuelve 200, el problema es DNS. Si falla, es conectividad de red.
+```
+
+**Solución:** fijar la IP del registry en `/etc/hosts` para bypassear el DNS.
+
+```bash
+# 1. Obtener la IP actual del registry
+curl -s "https://dns.google/resolve?name=registry.npmjs.org&type=A" | grep -o '"data":"[^"]*"' | head -1
+
+# 2. Agregar la entrada en /etc/hosts (reemplazá X.X.X.X con la IP del paso anterior)
+echo "X.X.X.X registry.npmjs.org" | sudo tee -a /etc/hosts
+
+# 3. Verificar que resuelve
+curl -I https://registry.npmjs.org/
+```
+
+El Dockerfile ya incluye la misma entrada para el build de Docker. Si la IP cambió, actualizarla también ahí:
+
+```bash
+# Borrar la entrada vieja del host
+sudo sed -i '' '/registry.npmjs.org/d' /etc/hosts
+
+# Agregar la nueva
+echo "X.X.X.X registry.npmjs.org" | sudo tee -a /etc/hosts
+```
+
+Y en `frontend/Dockerfile`, actualizar la línea:
+
+```dockerfile
+RUN echo "X.X.X.X registry.npmjs.org" >> /etc/hosts && \
+```
+
+**Cuándo volver a hacer esto:** si en el futuro `npm install` vuelve a colgarse, la IP de Cloudflare rotó. Repetir el paso 1 para obtener la nueva IP y actualizar ambos lugares.
+
+---
+
 ## Roadmap hacia LIVE trading
 
 ### Estado actual
