@@ -69,6 +69,6 @@ class RiskGate:
         if decision.take_profit <= current_price:
             return RiskVerdict(False, "take_profit must be > current_price")
         reward = decision.take_profit - current_price
-        if sl_distance > 0 and reward / sl_distance < self.min_rr_ratio:
-            return RiskVerdict(False, f"R:R ratio {reward/sl_distance:.2f} < {self.min_rr_ratio}")
+        if sl_distance > 0 and reward / sl_distance <= self.min_rr_ratio:
+            return RiskVerdict(False, f"R:R ratio {reward/sl_distance:.2f} <= {self.min_rr_ratio}")
         return RiskVerdict(passed=True)
