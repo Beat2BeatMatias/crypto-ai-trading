@@ -72,6 +72,7 @@ export function Decisions() {
           <thead>
             <tr className="text-xs uppercase text-zinc-500 border-b border-zinc-800">
               <th className="text-left py-2 pr-3">TS</th>
+              <th className="text-left pr-3">ID</th>
               <th className="text-left pr-3">Agente</th>
               <th className="text-left pr-3">Modelo</th>
               <th className="text-left pr-3">Acción</th>
@@ -84,6 +85,7 @@ export function Decisions() {
               <tr key={d.id} onClick={() => setSelected(d)}
                 className={`cursor-pointer border-t border-zinc-800 hover:bg-zinc-800/40 transition-colors ${selected?.id === d.id ? "bg-zinc-800" : ""}`}>
                 <td className="py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap">{new Date(d.ts).toLocaleString("es-AR", { hour12: false })}</td>
+                <td className="pr-3 text-xs text-zinc-500 font-mono">{d.id.substring(0, 8)}</td>
                 <td className="pr-3">{d.agent}</td>
                 <td className="pr-3 text-xs text-zinc-400 font-mono">{d.model}</td>
                 <td className="pr-3 font-semibold">
@@ -143,7 +145,11 @@ export function Decisions() {
                   </>
               }
             </div>
-            <p className="text-xs text-zinc-500 font-mono mb-3">{selected.model}</p>
+            <div className="mb-3 space-y-1 text-xs text-zinc-500">
+              <p className="font-mono">{selected.model}</p>
+              <p>ID: <span className="text-zinc-400">{selected.id}</span></p>
+              <p>{new Date(selected.ts).toLocaleString("es-AR", { hour12: false })}</p>
+            </div>
 
             {/* Razonamiento del LLM */}
             <p className="text-sm text-zinc-300 mb-4 leading-relaxed">{out(selected).reasoning ?? ""}</p>
