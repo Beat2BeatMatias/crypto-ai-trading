@@ -10,7 +10,7 @@ INDICADORES TECNICOS
   1h:  RSI {rsi_1h:.0f} | MACD {macd_1h:+.1f}/{sig_1h:+.1f}
        EMA20 {ema20_1h:,.0f} EMA50 {ema50_1h:,.0f} EMA200 {ema200_1h:,.0f}
   4h:  RSI {rsi_4h:.0f} | EMA20 {ema20_4h:,.0f} EMA50 {ema50_4h:,.0f}
-  ATR(1h): ${atr_1h:.0f} ({atr_pct_1h:.2f}%)
+  ATR(1h) [solo tendencia — NO usar para SL]: ${atr_1h:.0f} ({atr_pct_1h:.2f}%)
 
 ORDER BOOK
   Spread: ${spread:.2f} ({spread_pct:.4f}%)

@@ -74,7 +74,7 @@ async def run() -> None:
         await fee_mgr.refresh()
 
     orderbook = OrderBookCollector(symbol=settings.symbol, exchange=exchange)
-    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)  # defaults; updated each tick from config
     sched = EngineScheduler()
 
     async def decisor_tick() -> None:
@@ -102,6 +102,37 @@ async def run() -> None:
             atr_timeframe = await store.get(ConfigKey.ATR_TIMEFRAME)
             min_rr_ratio = await store.get_typed(ConfigKey.MIN_RR_RATIO)
             sl_atr_multiplier = await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER)
+            max_drawdown_pct = await store.get_typed(ConfigKey.MAX_DRAWDOWN_PCT)
+            max_slippage_pct = await store.get_typed(ConfigKey.MAX_SLIPPAGE_PCT)
+            cb.update_thresholds(daily_stop_pct=daily_stop, max_drawdown_pct=max_drawdown_pct)
+            calibration = {
+                "sl_atr_max_multiplier": await store.get_typed(ConfigKey.SL_ATR_MAX_MULTIPLIER),
+                "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
+                "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
+                "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
+                "rsi_overbought_1h": await store.get_typed(ConfigKey.RSI_OVERBOUGHT_1H),
+                "conf_base_0": await store.get_typed(ConfigKey.CONF_BASE_0),
+                "conf_base_1": await store.get_typed(ConfigKey.CONF_BASE_1),
+                "conf_base_2": await store.get_typed(ConfigKey.CONF_BASE_2),
+                "conf_base_3": await store.get_typed(ConfigKey.CONF_BASE_3),
+                "conf_base_4plus": await store.get_typed(ConfigKey.CONF_BASE_4PLUS),
+                "peso_timeframe_partial": await store.get_typed(ConfigKey.PESO_TIMEFRAME_PARTIAL),
+                "peso_timeframe_minimal": await store.get_typed(ConfigKey.PESO_TIMEFRAME_MINIMAL),
+                "peso_regime_range": await store.get_typed(ConfigKey.PESO_REGIME_RANGE),
+                "peso_regime_high_vol": await store.get_typed(ConfigKey.PESO_REGIME_HIGH_VOL),
+                "adj_volume_boost": await store.get_typed(ConfigKey.ADJ_VOLUME_BOOST),
+                "adj_volume_ratio": await store.get_typed(ConfigKey.ADJ_VOLUME_RATIO),
+                "adj_antipattern_penalty": await store.get_typed(ConfigKey.ADJ_ANTIPATTERN_PENALTY),
+                "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
+                "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
+                "adj_orderbook_penalty": await store.get_typed(ConfigKey.ADJ_ORDERBOOK_PENALTY),
+                "adj_orderbook_ratio": await store.get_typed(ConfigKey.ADJ_ORDERBOOK_RATIO),
+                "factor_conf_60": await store.get_typed(ConfigKey.FACTOR_CONF_60),
+                "factor_conf_70": await store.get_typed(ConfigKey.FACTOR_CONF_70),
+                "factor_conf_80": await store.get_typed(ConfigKey.FACTOR_CONF_80),
+                "factor_conf_90": await store.get_typed(ConfigKey.FACTOR_CONF_90),
+                "factor_regime_non_trending": await store.get_typed(ConfigKey.FACTOR_REGIME_NON_TRENDING),
+            }
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
             try:
@@ -143,7 +174,7 @@ async def run() -> None:
                     daily_stop_pct=daily_stop, decisor_interval_min=interval_min,
                     mode=mode, taker_fee=fees.taker, maker_fee=fees.maker,
                     atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
-                    sl_atr_multiplier=sl_atr_multiplier,
+                    sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
                 )
                 cb.record_llm_success()
             except Exception as e:
@@ -174,9 +205,10 @@ async def run() -> None:
 
             gate = RiskGate(
                 max_position_pct=max_pos, max_simultaneous_trades=max_sim,
-                daily_stop_pct=daily_stop, max_drawdown_pct=-0.10,
-                max_slippage_pct=0.003, taker_fee_pct=fees.taker,
+                daily_stop_pct=daily_stop, max_drawdown_pct=max_drawdown_pct,
+                max_slippage_pct=max_slippage_pct, taker_fee_pct=fees.taker,
                 min_rr_ratio=min_rr_ratio, sl_atr_multiplier=sl_atr_multiplier,
+                sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_1h=atr,
@@ -231,6 +263,9 @@ async def run() -> None:
                 "min_rr_ratio": await store.get_typed(ConfigKey.MIN_RR_RATIO),
                 "decisor_interval_min": await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN),
                 "max_position_pct": await store.get_typed(ConfigKey.MAX_POSITION_PCT),
+                "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
+                "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
+                "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
             }
             sup = Supervisor(session=s, llm=llm, symbol=settings.symbol,
                              provider=sup_provider, fallbacks=sup_fallbacks)

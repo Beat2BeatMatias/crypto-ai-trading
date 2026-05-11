@@ -36,6 +36,40 @@ class ConfigKey(str, Enum):
     ATR_TIMEFRAME = "atr_timeframe"
     MIN_RR_RATIO = "min_rr_ratio"
     SL_ATR_MULTIPLIER = "sl_atr_multiplier"
+    # SL range
+    SL_ATR_MAX_MULTIPLIER = "sl_atr_max_multiplier"
+    # Confidence thresholds by regime
+    CONF_THRESHOLD_TRENDING_UP = "conf_threshold_trending_up"
+    CONF_THRESHOLD_RANGE = "conf_threshold_range"
+    CONF_THRESHOLD_HIGH_VOL = "conf_threshold_high_vol"
+    # RSI overbought filter
+    RSI_OVERBOUGHT_1H = "rsi_overbought_1h"
+    # Confidence formula — base confluencias table
+    CONF_BASE_0 = "conf_base_0"
+    CONF_BASE_1 = "conf_base_1"
+    CONF_BASE_2 = "conf_base_2"
+    CONF_BASE_3 = "conf_base_3"
+    CONF_BASE_4PLUS = "conf_base_4plus"
+    # Confidence formula — peso timeframe
+    PESO_TIMEFRAME_PARTIAL = "peso_timeframe_partial"
+    PESO_TIMEFRAME_MINIMAL = "peso_timeframe_minimal"
+    # Confidence formula — peso regime
+    PESO_REGIME_RANGE = "peso_regime_range"
+    PESO_REGIME_HIGH_VOL = "peso_regime_high_vol"
+    # Confidence formula — ajustes
+    ADJ_VOLUME_BOOST = "adj_volume_boost"
+    ADJ_VOLUME_RATIO = "adj_volume_ratio"
+    ADJ_ANTIPATTERN_PENALTY = "adj_antipattern_penalty"
+    ADJ_SPREAD_PENALTY = "adj_spread_penalty"
+    ADJ_SPREAD_THRESHOLD_PCT = "adj_spread_threshold_pct"
+    ADJ_ORDERBOOK_PENALTY = "adj_orderbook_penalty"
+    ADJ_ORDERBOOK_RATIO = "adj_orderbook_ratio"
+    # Position sizing factors
+    FACTOR_CONF_60 = "factor_conf_60"
+    FACTOR_CONF_70 = "factor_conf_70"
+    FACTOR_CONF_80 = "factor_conf_80"
+    FACTOR_CONF_90 = "factor_conf_90"
+    FACTOR_REGIME_NON_TRENDING = "factor_regime_non_trending"
 
 
 @dataclass(frozen=True)
@@ -78,18 +112,35 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.ORDERBOOK_LEVELS: _Default("10", "int", "Order book depth in context"),
     ConfigKey.KILL_SWITCH: _Default("false", "bool", "Emergency stop"),
     ConfigKey.SUPERVISOR_RUN_NOW: _Default("false", "bool", "internal: manual supervisor trigger"),
-    ConfigKey.ATR_TIMEFRAME: _Default(
-        "15m", "string",
-        "Timeframe del ATR usado como referencia para SL/TP. Opciones: 5m | 15m | 1h",
-    ),
-    ConfigKey.MIN_RR_RATIO: _Default(
-        "1.3", "float",
-        "R:R mínimo requerido para aprobar un BUY (reward / risk). Ej: 1.3 = ganar 1.3x lo que se arriesga",
-    ),
-    ConfigKey.SL_ATR_MULTIPLIER: _Default(
-        "0.3", "float",
-        "Multiplicador del ATR para SL mínimo. Ej: 0.3 → SL debe estar al menos 0.3×ATR abajo del precio",
-    ),
+    ConfigKey.ATR_TIMEFRAME: _Default("15m", "string", "ATR reference timeframe. Options: 5m | 15m | 1h"),
+    ConfigKey.MIN_RR_RATIO: _Default("1.3", "float", "Min reward/risk ratio for BUY approval"),
+    ConfigKey.SL_ATR_MULTIPLIER: _Default("0.3", "float", "Min SL distance as ATR multiplier"),
+    ConfigKey.SL_ATR_MAX_MULTIPLIER: _Default("1.5", "float", "Max SL distance as ATR multiplier"),
+    ConfigKey.CONF_THRESHOLD_TRENDING_UP: _Default("0.60", "float", "Min confidence for BUY — TRENDING_UP"),
+    ConfigKey.CONF_THRESHOLD_RANGE: _Default("0.70", "float", "Min confidence for BUY — RANGE"),
+    ConfigKey.CONF_THRESHOLD_HIGH_VOL: _Default("0.80", "float", "Min confidence for BUY — HIGH_VOLATILITY"),
+    ConfigKey.RSI_OVERBOUGHT_1H: _Default("70", "int", "RSI 1h overbought threshold"),
+    ConfigKey.CONF_BASE_0: _Default("0.30", "float", "Base confidence — 0 confluences"),
+    ConfigKey.CONF_BASE_1: _Default("0.50", "float", "Base confidence — 1 confluence"),
+    ConfigKey.CONF_BASE_2: _Default("0.65", "float", "Base confidence — 2 confluences"),
+    ConfigKey.CONF_BASE_3: _Default("0.80", "float", "Base confidence — 3 confluences"),
+    ConfigKey.CONF_BASE_4PLUS: _Default("0.92", "float", "Base confidence — 4+ confluences"),
+    ConfigKey.PESO_TIMEFRAME_PARTIAL: _Default("0.85", "float", "Timeframe weight — 15m only aligned"),
+    ConfigKey.PESO_TIMEFRAME_MINIMAL: _Default("0.70", "float", "Timeframe weight — 5m only aligned"),
+    ConfigKey.PESO_REGIME_RANGE: _Default("0.85", "float", "Regime weight — RANGE"),
+    ConfigKey.PESO_REGIME_HIGH_VOL: _Default("0.70", "float", "Regime weight — HIGH_VOLATILITY"),
+    ConfigKey.ADJ_VOLUME_BOOST: _Default("0.05", "float", "Confidence boost — volume > ratio×avg"),
+    ConfigKey.ADJ_VOLUME_RATIO: _Default("1.5", "float", "Volume ratio to trigger ADJ_VOLUME_BOOST"),
+    ConfigKey.ADJ_ANTIPATTERN_PENALTY: _Default("-0.10", "float", "Confidence penalty — anti-pattern present"),
+    ConfigKey.ADJ_SPREAD_PENALTY: _Default("-0.05", "float", "Confidence penalty — spread > threshold"),
+    ConfigKey.ADJ_SPREAD_THRESHOLD_PCT: _Default("0.05", "float", "Spread threshold (%) for ADJ_SPREAD_PENALTY"),
+    ConfigKey.ADJ_ORDERBOOK_PENALTY: _Default("-0.05", "float", "Confidence penalty — bid wall > ratio×ask"),
+    ConfigKey.ADJ_ORDERBOOK_RATIO: _Default("5.0", "float", "Bid/ask ratio to trigger ADJ_ORDERBOOK_PENALTY"),
+    ConfigKey.FACTOR_CONF_60: _Default("0.50", "float", "Size factor — confidence 0.60-0.69"),
+    ConfigKey.FACTOR_CONF_70: _Default("0.70", "float", "Size factor — confidence 0.70-0.79"),
+    ConfigKey.FACTOR_CONF_80: _Default("0.85", "float", "Size factor — confidence 0.80-0.89"),
+    ConfigKey.FACTOR_CONF_90: _Default("1.00", "float", "Size factor — confidence 0.90+"),
+    ConfigKey.FACTOR_REGIME_NON_TRENDING: _Default("0.50", "float", "Size factor — RANGE | HIGH_VOLATILITY"),
 }
 
 
@@ -153,7 +204,7 @@ class ConfigStore:
 
 def _cast(value: str, value_type: str) -> Any:
     if value_type == "int":
-        return int(value)
+        return int(float(value))  # float() first handles "5.0" stored as string
     if value_type == "float":
         return float(value)
     if value_type == "bool":

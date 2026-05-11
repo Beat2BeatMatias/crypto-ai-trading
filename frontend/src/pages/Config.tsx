@@ -44,6 +44,10 @@ type FieldDef = {
   parse?: (v: string) => number;
 };
 
+const fmt2 = (v: number) => v.toFixed(2);
+const fmt1 = (v: number) => v.toFixed(1);
+const fmtPct1 = (v: number) => `${(v * 100).toFixed(0)}%`;
+
 const FIELD_DEFS: Record<string, FieldDef> = {
   sl_atr_multiplier: {
     label: "Multiplicador SL (ATR)",
@@ -130,19 +134,211 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     description: "Expresión cron que define cuándo corre el supervisor automáticamente (UTC).",
     type: "text",
   },
+
+  // ── Umbrales de decisión ──────────────────────────────────────────────────
+  sl_atr_max_multiplier: {
+    label: "Multiplicador SL máximo (ATR)",
+    description: "Distancia máxima del Stop Loss en múltiplos del ATR. SL más amplio que este es rechazado.",
+    type: "slider", min: 0.5, max: 3.0, step: 0.1, unit: "× ATR",
+    format: fmt1, parse: parseFloat,
+  },
+  rsi_overbought_1h: {
+    label: "RSI sobrecompra — 1h",
+    description: "Si RSI 1h supera este umbral, se cancelan señales alcistas de timeframes menores.",
+    type: "slider", min: 60, max: 85, step: 1, unit: "",
+    format: v => String(v), parse: parseInt,
+  },
+  conf_threshold_trending_up: {
+    label: "Umbral confianza — TRENDING_UP",
+    description: "Confianza mínima para ejecutar BUY en régimen alcista. Menor valor = más trades.",
+    type: "slider", min: 0.40, max: 0.85, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_threshold_range: {
+    label: "Umbral confianza — RANGE",
+    description: "Confianza mínima para ejecutar BUY en régimen lateral. Más exigente que TRENDING_UP.",
+    type: "slider", min: 0.50, max: 0.90, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_threshold_high_vol: {
+    label: "Umbral confianza — HIGH_VOLATILITY",
+    description: "Confianza mínima para ejecutar BUY en alta volatilidad. Más exigente que RANGE.",
+    type: "slider", min: 0.60, max: 0.95, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+
+  // ── Fórmula de confianza — base confluencias ──────────────────────────────
+  conf_base_0: {
+    label: "Base — 0 confluencias",
+    description: "Confianza base cuando no hay ninguna confluencia activa del playbook.",
+    type: "slider", min: 0.10, max: 0.50, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_base_1: {
+    label: "Base — 1 confluencia",
+    description: "Confianza base con 1 confluencia activa.",
+    type: "slider", min: 0.30, max: 0.65, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_base_2: {
+    label: "Base — 2 confluencias",
+    description: "Confianza base con 2 confluencias activas.",
+    type: "slider", min: 0.45, max: 0.80, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_base_3: {
+    label: "Base — 3 confluencias",
+    description: "Confianza base con 3 confluencias activas.",
+    type: "slider", min: 0.60, max: 0.90, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_base_4plus: {
+    label: "Base — 4+ confluencias",
+    description: "Confianza base con 4 o más confluencias activas.",
+    type: "slider", min: 0.75, max: 1.00, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+
+  // ── Fórmula de confianza — pesos timeframe ────────────────────────────────
+  peso_timeframe_partial: {
+    label: "Peso timeframe — solo 15m",
+    description: "Multiplicador cuando solo el 15m confirma la dirección y el 1h es neutral.",
+    type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  peso_timeframe_minimal: {
+    label: "Peso timeframe — solo 5m",
+    description: "Multiplicador cuando solo el 5m confirma, con 15m y 1h discordantes.",
+    type: "slider", min: 0.40, max: 0.90, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+
+  // ── Fórmula de confianza — pesos régimen ─────────────────────────────────
+  peso_regime_range: {
+    label: "Peso régimen — RANGE",
+    description: "Multiplicador de confianza base cuando el mercado está en rango lateral.",
+    type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  peso_regime_high_vol: {
+    label: "Peso régimen — HIGH_VOLATILITY",
+    description: "Multiplicador de confianza base en alta volatilidad. Generalmente menor que RANGE.",
+    type: "slider", min: 0.40, max: 0.90, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+
+  // ── Fórmula de confianza — ajustes ────────────────────────────────────────
+  adj_volume_boost: {
+    label: "Ajuste — boost por volumen",
+    description: "Se suma a la confianza cuando el volumen del 5m supera el ratio configurado × la media.",
+    type: "slider", min: 0.00, max: 0.15, step: 0.01, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  adj_volume_ratio: {
+    label: "Ratio de volumen (boost)",
+    description: "Múltiplo de la media de volumen 5m requerido para activar el boost de confianza.",
+    type: "slider", min: 1.0, max: 3.0, step: 0.1, unit: "× avg",
+    format: fmt1, parse: parseFloat,
+  },
+  adj_antipattern_penalty: {
+    label: "Ajuste — penalización anti-patrón",
+    description: "Se resta a la confianza cuando se detecta un anti-patrón (FOMO, overtrading, etc.).",
+    type: "slider", min: -0.25, max: 0.00, step: 0.01, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  adj_spread_penalty: {
+    label: "Ajuste — penalización spread",
+    description: "Se resta a la confianza cuando el spread supera el umbral configurado.",
+    type: "slider", min: -0.15, max: 0.00, step: 0.01, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  adj_spread_threshold_pct: {
+    label: "Umbral spread (penalización)",
+    description: "Spread máximo (% del precio) antes de aplicar la penalización de confianza.",
+    type: "slider", min: 0.01, max: 0.20, step: 0.01, unit: "%",
+    format: v => `${(v * 100).toFixed(2)}%`, parse: parseFloat,
+  },
+  adj_orderbook_penalty: {
+    label: "Ajuste — penalización order book",
+    description: "Se resta a la confianza cuando el bid_wall supera el ratio sobre ask_wall en zona contraria.",
+    type: "slider", min: -0.15, max: 0.00, step: 0.01, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  adj_orderbook_ratio: {
+    label: "Ratio bid/ask wall (penalización)",
+    description: "Múltiplo bid_wall / ask_wall que activa la penalización de order book.",
+    type: "slider", min: 2.0, max: 10.0, step: 0.5, unit: "× ask",
+    format: fmt1, parse: parseFloat,
+  },
+
+  // ── Sizing factors ────────────────────────────────────────────────────────
+  factor_conf_60: {
+    label: "Factor sizing — confianza 0.60-0.69",
+    description: "Fracción del max_position_pct usada cuando la confianza está en el rango mínimo.",
+    type: "slider", min: 0.20, max: 0.80, step: 0.05, unit: "",
+    format: fmtPct1, parse: parseFloat,
+  },
+  factor_conf_70: {
+    label: "Factor sizing — confianza 0.70-0.79",
+    description: "Fracción del max_position_pct usada con confianza media.",
+    type: "slider", min: 0.30, max: 0.90, step: 0.05, unit: "",
+    format: fmtPct1, parse: parseFloat,
+  },
+  factor_conf_80: {
+    label: "Factor sizing — confianza 0.80-0.89",
+    description: "Fracción del max_position_pct usada con confianza alta.",
+    type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
+    format: fmtPct1, parse: parseFloat,
+  },
+  factor_conf_90: {
+    label: "Factor sizing — confianza 0.90+",
+    description: "Fracción del max_position_pct usada con confianza máxima.",
+    type: "slider", min: 0.70, max: 1.00, step: 0.05, unit: "",
+    format: fmtPct1, parse: parseFloat,
+  },
+  factor_regime_non_trending: {
+    label: "Factor sizing — RANGE | HIGH_VOLATILITY",
+    description: "Fracción del sizing base aplicada en regímenes no tendenciales (RANGE o alta volatilidad).",
+    type: "slider", min: 0.20, max: 0.80, step: 0.05, unit: "",
+    format: fmtPct1, parse: parseFloat,
+  },
 };
 
 const GROUPS: { title: string; keys: string[]; color: string }[] = [
   {
     title: "Gestión de riesgo",
     color: "amber",
-    keys: ["sl_atr_multiplier", "min_rr_ratio", "max_position_pct", "max_simultaneous_trades",
-           "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe"],
+    keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "max_position_pct",
+           "max_simultaneous_trades", "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct",
+           "atr_timeframe"],
   },
   {
     title: "Motor de decisiones",
     color: "emerald",
     keys: ["decisor_interval_min", "kill_switch"],
+  },
+  {
+    title: "Umbrales de confianza",
+    color: "sky",
+    keys: ["rsi_overbought_1h", "conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol"],
+  },
+  {
+    title: "Fórmula de confianza",
+    color: "violet",
+    keys: [
+      "conf_base_0", "conf_base_1", "conf_base_2", "conf_base_3", "conf_base_4plus",
+      "peso_timeframe_partial", "peso_timeframe_minimal",
+      "peso_regime_range", "peso_regime_high_vol",
+      "adj_volume_boost", "adj_volume_ratio",
+      "adj_antipattern_penalty",
+      "adj_spread_penalty", "adj_spread_threshold_pct",
+      "adj_orderbook_penalty", "adj_orderbook_ratio",
+    ],
+  },
+  {
+    title: "Sizing de posición",
+    color: "rose",
+    keys: ["factor_conf_60", "factor_conf_70", "factor_conf_80", "factor_conf_90", "factor_regime_non_trending"],
   },
   {
     title: "Modelos LLM",
@@ -373,6 +569,9 @@ function FallbackChain({ label, configKey, currentValue, onSave }: {
 const COLOR_CLASSES: Record<string, { border: string; title: string; dot: string }> = {
   amber:   { border: "border-amber-800/40",   title: "text-amber-300",   dot: "bg-amber-400" },
   emerald: { border: "border-emerald-800/40", title: "text-emerald-300", dot: "bg-emerald-400" },
+  sky:     { border: "border-sky-800/40",     title: "text-sky-300",     dot: "bg-sky-400" },
+  violet:  { border: "border-violet-800/40",  title: "text-violet-300",  dot: "bg-violet-400" },
+  rose:    { border: "border-rose-800/40",    title: "text-rose-300",    dot: "bg-rose-400" },
   indigo:  { border: "border-indigo-800/40",  title: "text-indigo-300",  dot: "bg-indigo-400" },
   zinc:    { border: "border-zinc-700",        title: "text-zinc-300",    dot: "bg-zinc-400" },
 };

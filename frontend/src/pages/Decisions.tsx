@@ -36,6 +36,7 @@ export function Decisions() {
   const out = (d: Decision) => d.output as {
     action?: string; confidence?: number; reasoning?: string;
     stop_loss?: number; take_profit?: number; position_size_pct?: number; confluences?: string[];
+    mode?: string;
   };
 
   const isBuyRejected = (d: Decision) =>
@@ -85,8 +86,15 @@ export function Decisions() {
                 <td className="py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap">{new Date(d.ts).toLocaleString("es-AR", { hour12: false })}</td>
                 <td className="pr-3">{d.agent}</td>
                 <td className="pr-3 text-xs text-zinc-400 font-mono">{d.model}</td>
-                <td className={`pr-3 font-semibold ${out(d).action === "BUY" ? "text-emerald-400" : out(d).action === "SELL" ? "text-red-400" : "text-zinc-400"}`}>
-                  {out(d).action ?? "—"}
+                <td className="pr-3 font-semibold">
+                  {d.agent === "supervisor"
+                    ? out(d).mode === "diagnostic"
+                      ? <span className="text-xs bg-amber-900/50 text-amber-300 px-2 py-0.5 rounded font-normal">Diagnóstico</span>
+                      : <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded font-normal">Normal</span>
+                    : <span className={out(d).action === "BUY" ? "text-emerald-400" : out(d).action === "SELL" ? "text-red-400" : "text-zinc-400"}>
+                        {out(d).action ?? "—"}
+                      </span>
+                  }
                 </td>
                 <td className="text-right pr-3">{((out(d).confidence ?? 0) * 100).toFixed(0)}%</td>
                 <td className="py-1">
@@ -114,14 +122,25 @@ export function Decisions() {
         {selected ? (
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <h3 className={`font-semibold text-lg ${out(selected).action === "BUY" ? "text-emerald-400" : out(selected).action === "SELL" ? "text-red-400" : "text-zinc-300"}`}>
-                {out(selected).action ?? "—"}
-              </h3>
-              {selected.executed
-                ? <span className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-0.5 rounded">ejecutado</span>
-                : selected.rejected_reason
-                  ? <span className="text-xs bg-red-900/50 text-red-300 px-2 py-0.5 rounded">bloqueado</span>
-                  : null
+              {selected.agent === "supervisor"
+                ? <>
+                    <h3 className="font-semibold text-lg text-zinc-300">Supervisor</h3>
+                    {out(selected).mode === "diagnostic"
+                      ? <span className="text-xs bg-amber-900/50 text-amber-300 px-2 py-0.5 rounded">Diagnóstico</span>
+                      : <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded">Normal</span>
+                    }
+                  </>
+                : <>
+                    <h3 className={`font-semibold text-lg ${out(selected).action === "BUY" ? "text-emerald-400" : out(selected).action === "SELL" ? "text-red-400" : "text-zinc-300"}`}>
+                      {out(selected).action ?? "—"}
+                    </h3>
+                    {selected.executed
+                      ? <span className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-0.5 rounded">ejecutado</span>
+                      : selected.rejected_reason
+                        ? <span className="text-xs bg-red-900/50 text-red-300 px-2 py-0.5 rounded">bloqueado</span>
+                        : null
+                    }
+                  </>
               }
             </div>
             <p className="text-xs text-zinc-500 font-mono mb-3">{selected.model}</p>

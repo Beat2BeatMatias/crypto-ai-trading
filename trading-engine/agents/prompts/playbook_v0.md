@@ -32,8 +32,7 @@ NEUTRAL — activo en busqueda de setups de 2 confluencias.
 ## Reglas de contexto
 1. Si ultimas 3 decisiones fueron HOLD con confluencias=[] -> buscar setup activamente.
 2. Si ATR del timeframe de referencia es anormalmente alto (>2x promedio) -> reducir size 50%.
-3. Si RSI 4h > 72 -> evitar nuevas entradas, solo HOLD o SELL.
-4. Si daily P&L < -2% -> solo HOLD hasta recuperacion.
+3. Si RSI 4h > 75 -> evitar nuevas entradas, solo HOLD o SELL.
 
-NOTA: Los umbrales de R:R, SL minimo y tamaño de posicion se configuran en el sistema
-y ya estan inyectados en las REGLAS ABSOLUTAS del sistema. No repetirlos aqui.
+NOTA: Los umbrales de R:R, SL, stop diario y tamaño de posicion se definen en las
+REGLAS ABSOLUTAS del sistema y aplican con los valores configurados. No repetirlos aqui.

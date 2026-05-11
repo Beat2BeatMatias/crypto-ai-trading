@@ -8,8 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Decision, Trade, PlaybookVersion, Ohlcv, Indicators
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
+from shared.config_store import ConfigKey, ConfigStore
 
 logger = structlog.get_logger()
+
+# Safe ranges for auto-applying supervisor suggestions.
+# Values outside these bounds are rejected to guard against LLM hallucinations.
+# daily_stop_pct and max_drawdown_pct are intentionally excluded — too critical for auto-apply.
+_SAFE_BOUNDS: dict[str, tuple] = {
+    "sl_atr_multiplier": (0.1, 0.8),
+    "min_rr_ratio": (1.0, 3.0),
+    "decisor_interval_min": (5, 60),
+    "max_position_pct": (0.01, 0.20),
+    "conf_threshold_trending_up": (0.40, 0.85),
+    "conf_threshold_range": (0.50, 0.90),
+    "conf_threshold_high_vol": (0.60, 0.95),
+}
+_VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
 
 _CONFIG_SUGGESTION_PROMPT = """Eres un analista cuantitativo de risk management. Basándote en las métricas
 de trading del período, sugiere los valores óptimos para los parámetros de configuración del sistema.
@@ -31,6 +46,9 @@ CONFIGURACIÓN ACTUAL:
 - min_rr_ratio: {min_rr_ratio}
 - decisor_interval_min: {decisor_interval_min}
 - max_position_pct: {max_position_pct}
+- conf_threshold_trending_up: {conf_threshold_trending_up}
+- conf_threshold_range: {conf_threshold_range}
+- conf_threshold_high_vol: {conf_threshold_high_vol}
 
 OPCIONES VÁLIDAS:
 - atr_timeframe: "5m" | "15m" | "1h"
@@ -38,6 +56,9 @@ OPCIONES VÁLIDAS:
 - min_rr_ratio: 1.0 a 3.0
 - decisor_interval_min: 5 a 60
 - max_position_pct: 0.01 a 0.20
+- conf_threshold_trending_up: 0.40 a 0.85 (umbral de confianza para BUY en tendencia alcista)
+- conf_threshold_range: 0.50 a 0.90 (umbral de confianza para BUY en rango)
+- conf_threshold_high_vol: 0.60 a 0.95 (umbral de confianza para BUY en alta volatilidad)
 
 Responde ÚNICAMENTE con JSON válido, sin texto extra:
 {{
@@ -69,6 +90,24 @@ Responde ÚNICAMENTE con JSON válido, sin texto extra:
     {{
       "key": "max_position_pct",
       "current": "{max_position_pct}",
+      "suggested": valor_numerico,
+      "reason": "explicación breve en español"
+    }},
+    {{
+      "key": "conf_threshold_trending_up",
+      "current": "{conf_threshold_trending_up}",
+      "suggested": valor_numerico,
+      "reason": "explicación breve en español"
+    }},
+    {{
+      "key": "conf_threshold_range",
+      "current": "{conf_threshold_range}",
+      "suggested": valor_numerico,
+      "reason": "explicación breve en español"
+    }},
+    {{
+      "key": "conf_threshold_high_vol",
+      "current": "{conf_threshold_high_vol}",
       "suggested": valor_numerico,
       "reason": "explicación breve en español"
     }}
@@ -130,7 +169,9 @@ class Supervisor:
 
             mode_header = (
                 "\n[MODO DIAGNOSTICO] Sin trades cerrados en 24h. "
-                "Analiza si el playbook actual es demasiado restrictivo y flexibilizalo.\n"
+                "Diagnostica por que no se ejecutaron trades: puede ser mercado lateral/bajista (HOLD correcto), "
+                "playbook demasiado restrictivo, o entradas bloqueadas por el Risk Gate. "
+                "Analiza las metricas y el contexto de mercado antes de decidir si ajustar el playbook.\n"
                 if mode == "diagnostic" else ""
             )
 
@@ -161,13 +202,17 @@ class Supervisor:
             )
             logger.info("supervisor.playbook_saved", version=ctx["new_version"], mode=mode)
 
-            # Segunda llamada LLM: sugerencias de configuración
+            # Segunda llamada LLM: sugerencias de configuración y auto-apply dentro de guardrails
             if current_config:
                 try:
                     suggestions = await self._generate_config_suggestions(metrics, current_config)
+                    applied, rejected = await self._apply_config_suggestions(suggestions)
                     output["config_suggestions"] = suggestions
-                    logger.info("supervisor.suggestions_generated",
-                                count=len(suggestions.get("suggestions", [])))
+                    output["config_applied"] = applied
+                    output["config_rejected"] = rejected
+                    logger.info("supervisor.suggestions_processed",
+                                total=len(suggestions.get("suggestions", [])),
+                                applied=len(applied), rejected=len(rejected))
                 except Exception as e:
                     logger.warning("supervisor.suggestions_failed", error=str(e))
 
@@ -188,6 +233,50 @@ class Supervisor:
         ))
         await self.session.commit()
 
+    async def _apply_config_suggestions(self, suggestions: dict) -> tuple[list[dict], list[dict]]:
+        """Apply suggestions that are within safe bounds; return (applied, rejected) lists."""
+        applied: list[dict] = []
+        rejected: list[dict] = []
+        store = ConfigStore(self.session)
+
+        for s in suggestions.get("suggestions", []):
+            key = s.get("key", "")
+            suggested = s.get("suggested")
+            current = s.get("current")
+            reason = s.get("reason", "")
+
+            if suggested is None or suggested == current:
+                continue
+
+            if key == "atr_timeframe":
+                if str(suggested) not in _VALID_ATR_TIMEFRAMES:
+                    rejected.append({**s, "reject_reason": f"valor '{suggested}' no es un timeframe válido"})
+                    continue
+                await store.set(ConfigKey(key), str(suggested), changed_by="supervisor")
+                applied.append(s)
+                logger.info("supervisor.config_applied", key=key, old=current, new=suggested, reason=reason)
+
+            elif key in _SAFE_BOUNDS:
+                lo, hi = _SAFE_BOUNDS[key]
+                try:
+                    val = float(suggested)
+                except (TypeError, ValueError):
+                    rejected.append({**s, "reject_reason": "valor no numérico"})
+                    continue
+                if not (lo <= val <= hi):
+                    rejected.append({**s, "reject_reason": f"{val} fuera del rango permitido [{lo}, {hi}]"})
+                    logger.warning("supervisor.config_rejected_out_of_bounds",
+                                   key=key, suggested=val, lo=lo, hi=hi)
+                    continue
+                await store.set(ConfigKey(key), str(val), changed_by="supervisor")
+                applied.append(s)
+                logger.info("supervisor.config_applied", key=key, old=current, new=val, reason=reason)
+
+            else:
+                rejected.append({**s, "reject_reason": "parámetro no elegible para auto-apply"})
+
+        return applied, rejected
+
     async def _generate_config_suggestions(self, metrics: dict, current_config: dict) -> dict:
         prompt = _CONFIG_SUGGESTION_PROMPT.format(
             closed_trades=metrics["closed_trades"],
@@ -206,6 +295,9 @@ class Supervisor:
             min_rr_ratio=current_config.get("min_rr_ratio", 1.3),
             decisor_interval_min=current_config.get("decisor_interval_min", 10),
             max_position_pct=current_config.get("max_position_pct", 0.05),
+            conf_threshold_trending_up=current_config.get("conf_threshold_trending_up", 0.60),
+            conf_threshold_range=current_config.get("conf_threshold_range", 0.70),
+            conf_threshold_high_vol=current_config.get("conf_threshold_high_vol", 0.80),
         )
         resp = await self.llm.call(
             provider=self.provider, system_prompt="", user_prompt=prompt,

@@ -44,3 +44,7 @@ class CircuitBreaker:
 
     def record_exchange_success(self) -> None:
         self._exchange_consecutive_failures = 0
+
+    def update_thresholds(self, *, daily_stop_pct: float, max_drawdown_pct: float) -> None:
+        self.daily_stop_pct = daily_stop_pct
+        self.max_drawdown_pct = max_drawdown_pct

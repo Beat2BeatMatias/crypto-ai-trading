@@ -23,6 +23,22 @@ Si identificas que uno de estos parametros deberia ajustarse, incluilo en la sec
 cambios como: "Sugerencia de parametro: ajustar [clave] de X a Y porque [razon]."
 Las reglas del playbook deben ser sobre CUANDO y COMO operar, nunca sobre CUANTO arriesgar.
 
+VALORES EN EL PLAYBOOK — USAR NUMEROS REALES:
+Cuando el playbook mencione umbrales numericos, escribi el valor concreto, no nombres de variable.
+Correcto: "Si RSI 4h > 75 → evitar entrada" | "Volumen > 1.5x media reciente"
+Incorrecto: "Si RSI 4h > {rsi_overbought_4h} → evitar entrada"
+Los valores de config que aplican al playbook te son provistos en el contexto de analisis.
+
+OBLIGACION DE SINCRONIZACION — DRIFT CONFIG:
+Si el playbook anterior contiene un valor numerico para un parametro del sistema (ej: "daily P&L < -2%",
+"posicion maxima 15%", "RR minimo 1.5"), ese valor contradice la config y crea inconsistencia.
+Al detectarlo DEBES:
+1. Eliminar ese valor del nuevo playbook.
+2. Agregar en "Cambios vs playbook anterior": "[SYNC] Eliminado valor hardcodeado de [parametro]:
+   era [valor_playbook], config actual es {config_value}. Ajustar config si el cambio es intencional."
+3. Si el cambio es fundamentado por datos de performance, agregar sugestion de parametro segun lo indicado arriba.
+La config es la unica fuente de verdad. El playbook no puede tener valores que contraigan la config.
+
 ESTRUCTURA DEL PLAYBOOK (obligatoria — MARKDOWN VALIDO):
 COMIENZA CON EXACTAMENTE ESTO:
 # Playbook v{new_version} — {date} UTC
@@ -65,14 +81,28 @@ RESTRICCIONES CRÍTICAS:
 ✓ Si menos de {min_trades} trades: mantener playbook anterior + agregar nota breve
 
 MODO DIAGNOSTICO (cuando el header dice [MODO DIAGNOSTICO]):
-No hay trades cerrados para analizar. Tu tarea es detectar si el playbook actual
-es demasiado restrictivo y proponer uno mas flexible:
-1. Analiza el ratio BUY/HOLD: si hay muchos HOLDs y pocos BUYs, los criterios son muy altos.
-2. Analiza cuantas decisiones BUY fueron rechazadas (campo "executed": false).
-3. Revisa el playbook anterior: identifica las reglas mas exigentes.
-4. Relaja los criterios en "Reglas especificas" para permitir mas setups validos.
-5. Titula el playbook como: # Playbook v{new_version} — {date} UTC [DIAGNOSTICO]
-6. En "Metricas del periodo" indica explicitamente: "Sin trades en 24h — modo diagnostico."
+No hay trades cerrados para analizar. Tu tarea es diagnosticar POR QUE no se ejecutaron trades
+y decidir si el playbook necesita ajustarse. Sigue estos pasos en orden:
+
+1. DIAGNOSTICAR LA CAUSA — evalua cual de estos escenarios aplica:
+   a) Mercado desfavorable: BTC en tendencia bajista, rango comprimido o volatilidad muy baja
+      → los HOLDs son correctos, NO flexibilizar. Mantener o endurecer criterios.
+   b) Playbook demasiado restrictivo: muchos BUYs con alta confianza que igual se descartan
+      → revisar reglas especificas e identificar cuales filtran setups validos.
+   c) Risk Gate bloqueando: muchos BUYs con "executed": false por restricciones de riesgo
+      → el problema es de configuracion, no del playbook. Sugerir ajuste de parametros.
+   d) Poca actividad del decisor: pocos BUYs en total (ratio BUY < 10%)
+      → el decisor esta viendo poco potencial. Puede ser mercado o criterios altos.
+
+2. DECIDIR LA ACCION en base al diagnostico:
+   - Si causa (a): mantener playbook, actualizar "Contexto de mercado" y "Bias" con la situacion actual.
+   - Si causa (b): relajar solo las reglas especificas que estan filtrando setups validos.
+   - Si causa (c): mantener playbook, agregar sugerencia de parametro de configuracion.
+   - Si causa (d): analizar si el mercado justifica el HOLD o si los criterios son excesivos.
+
+3. En "Metricas del periodo" indica: "Sin trades en 24h — modo diagnostico. Causa identificada: [causa]."
+4. Titula el playbook como: # Playbook v{new_version} — {date} UTC [DIAGNOSTICO]
+5. En "Cambios vs playbook anterior" justifica explicitamente si se flexibiliza, endurece o mantiene.
 
 NO HAGAS:
 ✗ Dejar secciones vacías

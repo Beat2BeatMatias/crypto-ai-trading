@@ -14,11 +14,13 @@ class ContextBuilder:
         self.symbol = symbol
 
     async def build(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
-                    btc_held: float, playbook_content: str, max_simultaneous_trades: int,
-                    daily_stop_pct: float, decisor_interval_min: int, mode: str,
+                    btc_held: float, playbook_content: str, max_position_pct: float,
+                    max_simultaneous_trades: int, daily_stop_pct: float,
+                    decisor_interval_min: int, mode: str,
                     taker_fee_pct: float, maker_fee_pct: float,
                     atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
-                    sl_atr_multiplier: float = 0.3) -> dict[str, Any]:
+                    sl_atr_multiplier: float = 0.3,
+                    calibration: dict | None = None) -> dict[str, Any]:
         ind_row = (await self.session.execute(
             select(Indicators).order_by(desc(Indicators.time)).limit(1)
         )).scalar_one_or_none()
@@ -35,14 +37,16 @@ class ContextBuilder:
 
         price = self._get(ind, "1h", "last_close") or self._get(ind, "5m", "last_close") or 0.0
         roundtrip_fee_pct = taker_fee_pct * 2
+        cal = calibration or {}
+        sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
 
-        return {
+        ctx = {
             "timestamp_utc": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "mode": mode,
             "decisor_interval_min": decisor_interval_min,
             "max_simultaneous_trades": max_simultaneous_trades,
             "daily_stop_pct": daily_stop_pct * 100,
-            "max_position_pct": 0.10,
+            "max_position_pct": max_position_pct,
             "playbook": playbook_content,
             "taker_fee_pct": taker_fee_pct * 100,
             "maker_fee_pct": maker_fee_pct * 100,
@@ -81,7 +85,7 @@ class ContextBuilder:
             "atr_ref_tf": atr_timeframe,
             "atr_ref_pct": ((self._get(ind, atr_timeframe, "atr") or 0) / price * 100) if price else 0,
             "atr_ref_min": round((self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_multiplier),
-            "atr_ref_max": round((self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * 1.5),
+            "atr_ref_max": round((self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_max),
             "sl_atr_multiplier": sl_atr_multiplier,
             "min_rr_ratio": min_rr_ratio,
             "volatility_label": "normal",
@@ -116,6 +120,10 @@ class ContextBuilder:
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
             "last_decision_ago": "n/a",
         }
+        # Merge calibration values so all {variable} references in the prompt resolve correctly.
+        if cal:
+            ctx.update(cal)
+        return ctx
 
     @staticmethod
     def _get(ind: dict[str, Any], tf: str, key: str) -> Any:
