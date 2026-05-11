@@ -131,11 +131,11 @@ export function Trades() {
               }`}>{t.status.toUpperCase()}</span>
 
               <span className="text-xs text-zinc-500">
-                {new Date(t.ts_open).toLocaleString("es-AR")}
+                {new Date(t.ts_open).toLocaleString("es-AR", { hour12: false })}
               </span>
               {t.ts_close && (
                 <span className="text-xs text-zinc-600">
-                  → {new Date(t.ts_close).toLocaleString("es-AR")}
+                  → {new Date(t.ts_close).toLocaleString("es-AR", { hour12: false })}
                 </span>
               )}
               {t.close_reason && (
