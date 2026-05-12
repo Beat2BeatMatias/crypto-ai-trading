@@ -100,5 +100,6 @@ def compute_indicators(df: pd.DataFrame, *, timeframe: str) -> dict[str, Any]:
         "bb_pct": bb_pct,
         "atr": _last_or_none(atr),
         "volume_avg_20": _last_or_none(df["volume"].rolling(20).mean()),
+        "volume_current": _last_or_none(df["volume"]),
         "last_close": last_close,
     }

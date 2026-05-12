@@ -95,3 +95,26 @@ def test_atr_winsorization_filters_flash_crash_candles():
     assert out_clean["atr"] is not None
     ratio = out_crash["atr"] / out_clean["atr"]
     assert ratio < 3.0, f"ATR inflated {ratio:.1f}x by flash-crash candles — winsorization not working"
+
+
+def test_compute_indicators_includes_volume_current():
+    import numpy as np
+    import pandas as pd
+    from collectors.indicators import compute_indicators
+
+    np.random.seed(42)
+    n = 30
+    closes = 95000 + np.cumsum(np.random.randn(n) * 100)
+    df = pd.DataFrame({
+        "open": closes - 50,
+        "high": closes + 100,
+        "low": closes - 100,
+        "close": closes,
+        "volume": np.full(n, 5.0),
+    })
+    df.loc[df.index[-1], "volume"] = 7.5  # override last candle
+
+    result = compute_indicators(df, timeframe="5m")
+
+    assert result["volume_current"] == pytest.approx(7.5)
+    assert result["volume_avg_20"] is not None
