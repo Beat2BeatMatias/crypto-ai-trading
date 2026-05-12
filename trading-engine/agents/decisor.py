@@ -36,7 +36,8 @@ class Decisor:
                      taker_fee: float, maker_fee: float,
                      atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
                      sl_atr_multiplier: float = 0.3,
-                     calibration: dict | None = None) -> DecisorOutput:
+                     calibration: dict | None = None,
+                     current_drawdown_pct: float = 0.0) -> DecisorOutput:
         playbook = await self.prompt_manager.get_active_playbook()
         playbook_content = playbook.content if playbook else "# No playbook."
 
@@ -48,6 +49,7 @@ class Decisor:
             mode=mode, taker_fee_pct=taker_fee, maker_fee_pct=maker_fee,
             atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
             sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
+            current_drawdown_pct=current_drawdown_pct,
         )
         # Resolve any {config_variable} placeholders in the playbook using the full context,
         # so config changes propagate automatically without editing the playbook manually.

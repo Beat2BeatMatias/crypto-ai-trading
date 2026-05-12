@@ -211,10 +211,12 @@ async def run() -> None:
                 sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
             )
             verdict = gate.validate(
-                decision=decision, current_price=current_price, atr_1h=atr,
+                decision=decision, current_price=current_price, atr_ref=atr,
                 open_positions_count=open_count, daily_pnl_pct=0.0,
                 total_drawdown_pct=0.0, kill_switch=kill,
                 usdt_balance=usdt, btc_held=btc,
+                roundtrip_fee_pct=fees.taker * 2 * 100,
+                min_fees_to_tp_ratio=float(calibration.get("min_fees_to_tp_ratio", 3.0)),
             )
             if not verdict.passed:
                 logger.info("decision.rejected", reason=verdict.reason)
