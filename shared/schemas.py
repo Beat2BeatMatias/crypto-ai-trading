@@ -57,6 +57,15 @@ class DecisorOutput(BaseModel):
                 raise ValueError("take_profit is required when action=BUY")
         return self
 
+    @model_validator(mode="after")
+    def _recompute_confidence(self) -> "DecisorOutput":
+        # Recompute confidence deterministically from its components.
+        # The LLM is instructed to set all three consistently, but we enforce
+        # the invariant here so runtime behavior cannot diverge.
+        computed = self.confidence_base + self.confidence_adjustment
+        self.confidence = max(0.0, min(1.0, computed))
+        return self
+
 
 class TradeOutcome(BaseModel):
     pnl_usdt: float

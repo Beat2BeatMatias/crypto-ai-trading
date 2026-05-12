@@ -10,6 +10,8 @@ def _valid_buy_payload() -> dict:
         "regime": "TRENDING_UP",
         "confluences": ["RSI oversold 5m", "EMA50 support 1h"],
         "action": "BUY",
+        "confidence_base": 0.70,
+        "confidence_adjustment": 0.05,
         "confidence": 0.75,
         "stop_loss": 60000.0,
         "take_profit": 62000.0,
@@ -103,12 +105,16 @@ def test_buy_without_take_profit_raises():
     assert "take_profit is required when action=BUY" in str(exc_info.value)
 
 
-def test_reasoning_above_240_chars_raises():
-    # GIVEN a payload with reasoning exceeding 240 characters
+def test_reasoning_above_800_chars_truncated():
+    # GIVEN a payload with reasoning exceeding 800 characters
+    # (max_length=800 was raised in feat/705f649; the _truncate_reasoning validator
+    # silently truncates instead of raising, so we verify the truncation behaviour)
     payload = _valid_buy_payload()
-    payload["reasoning"] = "x" * 241
+    payload["reasoning"] = "x" * 900
 
     # WHEN parsed
-    # THEN ValidationError is raised
-    with pytest.raises(ValidationError):
-        DecisorOutput(**payload)
+    output = DecisorOutput(**payload)
+
+    # THEN reasoning is truncated to 800 chars (797 + "...")
+    assert len(output.reasoning) == 800
+    assert output.reasoning.endswith("...")
