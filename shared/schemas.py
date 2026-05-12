@@ -57,6 +57,7 @@ class DecisorOutput(BaseModel):
                 raise ValueError("take_profit is required when action=BUY")
         return self
 
+    # Runs after _buy_requires_sl_and_tp — order matters in Pydantic v2 (mode="after" runs in definition order).
     @model_validator(mode="after")
     def _recompute_confidence(self) -> "DecisorOutput":
         # Recompute confidence deterministically from its components.

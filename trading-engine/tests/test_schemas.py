@@ -90,6 +90,7 @@ def test_hold_without_stop_loss_passes():
     # THEN no error and action is HOLD
     assert output.action == DecisorAction.HOLD
     assert output.stop_loss is None
+    assert output.confidence == pytest.approx(0.0)  # recomputed from confidence_base=0.0 + confidence_adjustment=0.0
 
 
 def test_buy_without_take_profit_raises():
