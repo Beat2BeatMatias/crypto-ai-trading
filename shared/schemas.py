@@ -21,10 +21,13 @@ class DecisorOutput(BaseModel):
     regime: MarketRegime
     confluences: list[str] = Field(default_factory=list, max_length=10)
     action: DecisorAction
+    confidence_base: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+    confidence_adjustment: Annotated[float, Field(ge=-0.20, le=0.20)] = 0.0
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
     stop_loss: float | None
     take_profit: float | None
     position_size_pct: Annotated[float, Field(ge=0.0, le=0.25)]
+    expected_holding_min: Annotated[int, Field(ge=1)] = 1
     reasoning: Annotated[str, Field(max_length=800)]
 
     @field_validator("position_size_pct", mode="before")
@@ -32,6 +35,11 @@ class DecisorOutput(BaseModel):
     def _coerce_null_position_size(cls, v: Any) -> float:
         # LLMs return null for HOLD/SELL decisions; treat as 0.0
         return 0.0 if v is None else v
+
+    @field_validator("expected_holding_min", mode="before")
+    @classmethod
+    def _coerce_null_holding(cls, v: Any) -> int:
+        return 1 if v is None else v
 
     @field_validator("reasoning", mode="before")
     @classmethod

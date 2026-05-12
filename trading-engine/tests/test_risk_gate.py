@@ -288,3 +288,25 @@ def test_buy_with_take_profit_below_entry_rejected():
     # THEN it is rejected because TP is not above entry
     assert verdict.passed is False
     assert "take_profit" in verdict.reason
+
+
+def test_decisor_output_accepts_new_v2_fields():
+    # GIVEN a BUY decision with the 3 new v2 fields
+    decision = DecisorOutput(
+        regime=MarketRegime.TRENDING_UP,
+        confluences=["A_solida"],
+        action=DecisorAction.BUY,
+        confidence_base=0.65,
+        confidence_adjustment=0.05,
+        confidence=0.70,
+        stop_loss=66000.0,
+        take_profit=69000.0,
+        position_size_pct=0.10,
+        expected_holding_min=45,
+        reasoning="Test.",
+    )
+
+    # THEN the fields are stored correctly
+    assert decision.confidence_base == pytest.approx(0.65)
+    assert decision.confidence_adjustment == pytest.approx(0.05)
+    assert decision.expected_holding_min == 45

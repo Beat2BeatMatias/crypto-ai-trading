@@ -106,8 +106,9 @@ class Decisor:
 def _hold_decision(reason: str) -> DecisorOutput:
     return DecisorOutput(
         regime=MarketRegime.RANGE, confluences=[], action=DecisorAction.HOLD,
-        confidence=0.0, stop_loss=None, take_profit=None, position_size_pct=0.0,
-        reasoning=reason,
+        confidence_base=0.0, confidence_adjustment=0.0, confidence=0.0,
+        stop_loss=None, take_profit=None, position_size_pct=0.0,
+        expected_holding_min=1, reasoning=reason,
     )
 
 
