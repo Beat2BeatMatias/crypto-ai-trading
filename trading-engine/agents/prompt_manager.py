@@ -62,6 +62,20 @@ class PromptManager:
         return new
 
 
+class _Missing:
+    """Sentinel for a missing context key — renders as {key} or {key:spec} in the output."""
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def __format__(self, spec: str) -> str:
+        if spec:
+            return "{" + self._key + ":" + spec + "}"
+        return "{" + self._key + "}"
+
+    def __str__(self) -> str:
+        return "{" + self._key + "}"
+
+
 class _DefaultDict(dict):
-    def __missing__(self, key):
-        return "{" + key + "}"
+    def __missing__(self, key: str) -> "_Missing":
+        return _Missing(key)
