@@ -174,12 +174,25 @@ def _apply_deterministic_overrides(validated: DecisorOutput, max_position_pct: f
 
 
 def _safe_substitute(template: str, ctx: dict) -> str:
-    """Replace only {valid_identifier} placeholders that exist in ctx.
-    Leaves all other curly-brace content (JSON examples, pipes, etc.) untouched."""
+    """Replace {identifier} and {identifier:format_spec} placeholders found in ctx.
+
+    Leaves unresolvable patterns (key not in ctx, invalid spec) untouched.
+    Safe for templates that contain literal braces in JSON examples — those use
+    quoted keys like {"regime": ...} which don't match the identifier regex.
+    """
     def replace(match: re.Match) -> str:
         key = match.group(1)
-        return str(ctx[key]) if key in ctx else match.group(0)
-    return re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}', replace, template)
+        fmt = match.group(2)  # e.g. ":.4f" or None
+        if key not in ctx:
+            return match.group(0)
+        value = ctx[key]
+        if fmt:
+            try:
+                return format(value, fmt.lstrip(":"))
+            except (ValueError, TypeError):
+                return str(value)
+        return str(value)
+    return re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)(:[^}]*)?\}', replace, template)
 
 
 def _serialize(value: Any) -> Any:
