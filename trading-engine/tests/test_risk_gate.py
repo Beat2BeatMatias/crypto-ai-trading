@@ -74,7 +74,7 @@ def _hold_decision() -> DecisorOutput:
 
 _COMMON_KWARGS = dict(
     current_price=67000.0,
-    atr_1h=500.0,
+    atr_ref=500.0,
     open_positions_count=0,
     daily_pnl_pct=0.0,
     total_drawdown_pct=-0.05,
@@ -203,7 +203,7 @@ def test_rr_below_1_5_rejected():
     # Use atr_1h=300 so 0.5*ATR=150 < SL_distance=200 (passes ATR check, fails R:R)
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66800.0, take_profit=67100.0)
-    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 300.0}
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
@@ -217,7 +217,7 @@ def test_sl_distance_below_atr_multiplier_rejected():
     # GIVEN SL distance = 67000 - 66800 = 200, ATR = 800 → 0.3*ATR = 240 > 200
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66800.0, take_profit=67900.0)
-    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 800.0}
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 800.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
@@ -265,7 +265,7 @@ def test_buy_without_take_profit_rejected():
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
     object.__setattr__(decision, "take_profit", None)
-    kwargs = {**_COMMON_KWARGS, "atr_1h": 300.0}
+    kwargs = {**_COMMON_KWARGS, "atr_ref": 300.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
@@ -280,7 +280,7 @@ def test_buy_with_take_profit_below_entry_rejected():
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
     object.__setattr__(decision, "take_profit", 66500.0)
-    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_1h": 300.0}
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
@@ -310,3 +310,46 @@ def test_decisor_output_accepts_new_v2_fields():
     assert decision.confidence_base == pytest.approx(0.65)
     assert decision.confidence_adjustment == pytest.approx(0.05)
     assert decision.expected_holding_min == 45
+
+
+def test_r10_buy_rejected_when_tp_move_insufficient_vs_fees():
+    # GIVEN roundtrip_fee_pct=0.2%, min_fees_to_tp_ratio=3.0
+    # take_profit=67400: move=(67400-67000)/67000*100=0.597% < 3.0*0.2=0.6% → R10 rejects
+    # sl_distance=200, atr_ref=300: 0.3*300=90 < 200 ✓, 1.5*300=450 > 200 ✓
+    # reward=400, risk=200, R:R=2.0 > 1.3 ✓ → passes R5, fails R10
+    gate = _make_gate()
+    decision = _buy_decision(stop_loss=66800.0, take_profit=67400.0)
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0,
+              "roundtrip_fee_pct": 0.2, "min_fees_to_tp_ratio": 3.0}
+
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    assert verdict.passed is False
+    assert "R10" in verdict.reason
+
+
+def test_r10_buy_passes_when_tp_move_covers_fees():
+    # GIVEN roundtrip_fee_pct=0.2%, min_fees_to_tp_ratio=3.0
+    # take_profit=67500: move=(67500-67000)/67000*100=0.746% > 0.6% → passes R10
+    # sl_distance=200, atr_ref=300 ✓; reward=500, risk=200, R:R=2.5 > 1.3 ✓
+    gate = _make_gate()
+    decision = _buy_decision(stop_loss=66800.0, take_profit=67500.0)
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0,
+              "roundtrip_fee_pct": 0.2, "min_fees_to_tp_ratio": 3.0}
+
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    assert verdict.passed is True
+
+
+def test_r10_skipped_when_roundtrip_fee_zero():
+    # GIVEN roundtrip_fee_pct=0 (testnet) — R10 must not apply
+    # take_profit=67500: valid R:R, but tiny move would fail R10 if applied
+    gate = _make_gate()
+    decision = _buy_decision(stop_loss=66800.0, take_profit=67500.0)
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0,
+              "roundtrip_fee_pct": 0.0, "min_fees_to_tp_ratio": 3.0}
+
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    assert verdict.passed is True

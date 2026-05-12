@@ -23,9 +23,11 @@ class RiskGate:
         self.sl_atr_multiplier = sl_atr_multiplier
         self.sl_atr_max_multiplier = sl_atr_max_multiplier
 
-    def validate(self, *, decision: DecisorOutput, current_price: float, atr_1h: float,
+    def validate(self, *, decision: DecisorOutput, current_price: float, atr_ref: float,
                  open_positions_count: int, daily_pnl_pct: float, total_drawdown_pct: float,
-                 kill_switch: bool, usdt_balance: float, btc_held: float) -> RiskVerdict:
+                 kill_switch: bool, usdt_balance: float, btc_held: float,
+                 roundtrip_fee_pct: float = 0.0,
+                 min_fees_to_tp_ratio: float = 3.0) -> RiskVerdict:
         # HOLD always passes
         if decision.action == DecisorAction.HOLD:
             return RiskVerdict(passed=True)
@@ -58,8 +60,8 @@ class RiskGate:
         if daily_pnl_pct <= self.daily_stop_pct:
             return RiskVerdict(False, f"daily P&L breach: {daily_pnl_pct:.4f}")
         sl_distance = current_price - decision.stop_loss
-        sl_min = self.sl_atr_multiplier * atr_1h
-        sl_max = self.sl_atr_max_multiplier * atr_1h
+        sl_min = self.sl_atr_multiplier * atr_ref
+        sl_max = self.sl_atr_max_multiplier * atr_ref
         if sl_distance < sl_min:
             return RiskVerdict(False, f"SL distance {sl_distance:.2f} < {self.sl_atr_multiplier}*ATR {sl_min:.2f}")
         if sl_distance > sl_max:
@@ -71,4 +73,15 @@ class RiskGate:
         reward = decision.take_profit - current_price
         if sl_distance > 0 and reward / sl_distance <= self.min_rr_ratio:
             return RiskVerdict(False, f"R:R ratio {reward/sl_distance:.2f} <= {self.min_rr_ratio}")
+
+        # R10: TP move must cover round-trip fees (skipped in testnet where fees = 0)
+        if roundtrip_fee_pct > 0:
+            move_pct = (decision.take_profit - current_price) / current_price * 100
+            min_move = min_fees_to_tp_ratio * roundtrip_fee_pct
+            if move_pct < min_move:
+                return RiskVerdict(
+                    False,
+                    f"R10: TP move ({move_pct:.3f}%) < {min_fees_to_tp_ratio}×fees ({min_move:.3f}%)",
+                )
+
         return RiskVerdict(passed=True)
