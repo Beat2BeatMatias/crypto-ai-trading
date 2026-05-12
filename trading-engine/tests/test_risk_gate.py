@@ -91,7 +91,7 @@ _COMMON_KWARGS = dict(
 def test_valid_buy_passes_all_checks():
     # GIVEN a valid BUY decision meeting all constraints
     gate = _make_gate()
-    decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0, position_size_pct=0.10)
+    decision = _buy_decision(stop_loss=66600.0, take_profit=68000.0, position_size_pct=0.10)
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **_COMMON_KWARGS)
@@ -265,7 +265,7 @@ def test_buy_without_take_profit_rejected():
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
     object.__setattr__(decision, "take_profit", None)
-    kwargs = {**_COMMON_KWARGS, "atr_ref": 300.0}
+    kwargs = {**_COMMON_KWARGS, "atr_ref": 800.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
@@ -280,7 +280,7 @@ def test_buy_with_take_profit_below_entry_rejected():
     gate = _make_gate()
     decision = _buy_decision(stop_loss=66000.0, take_profit=69500.0)
     object.__setattr__(decision, "take_profit", 66500.0)
-    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0}
+    kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 800.0}
 
     # WHEN validated
     verdict = gate.validate(decision=decision, **kwargs)
