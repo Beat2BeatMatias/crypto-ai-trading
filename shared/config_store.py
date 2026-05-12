@@ -70,6 +70,13 @@ class ConfigKey(str, Enum):
     FACTOR_CONF_80 = "factor_conf_80"
     FACTOR_CONF_90 = "factor_conf_90"
     FACTOR_REGIME_NON_TRENDING = "factor_regime_non_trending"
+    # Decisor v2 — operational parameters
+    MIN_FEES_TO_TP_RATIO = "min_fees_to_tp_ratio"
+    MIN_CONFLUENCES_BUY = "min_confluences_buy"
+    COOLDOWN_AFTER_SELL_MIN = "cooldown_after_sell_min"
+    SUBJECTIVE_ADJ_MAX = "subjective_adj_max"
+    EXPECTED_HOLDING_MAX_MIN = "expected_holding_max_min"
+    CONFLUENCE_WEAK_FACTOR = "confluence_weak_factor"
 
 
 @dataclass(frozen=True)
@@ -141,6 +148,30 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.FACTOR_CONF_80: _Default("0.85", "float", "Size factor — confidence 0.80-0.89"),
     ConfigKey.FACTOR_CONF_90: _Default("1.00", "float", "Size factor — confidence 0.90+"),
     ConfigKey.FACTOR_REGIME_NON_TRENDING: _Default("0.50", "float", "Size factor — RANGE | HIGH_VOLATILITY"),
+    ConfigKey.MIN_FEES_TO_TP_RATIO: _Default(
+        "3.0", "float",
+        "Min TP movement as multiple of round-trip fees for BUY approval (R10). Range 1.5–6.0.",
+    ),
+    ConfigKey.MIN_CONFLUENCES_BUY: _Default(
+        "2", "int",
+        "Minimum number of confluences required to allow BUY. Range 1–4.",
+    ),
+    ConfigKey.COOLDOWN_AFTER_SELL_MIN: _Default(
+        "15", "int",
+        "Minutes of cooldown after a SELL before next BUY is allowed. Range 0–120.",
+    ),
+    ConfigKey.SUBJECTIVE_ADJ_MAX: _Default(
+        "0.10", "float",
+        "Maximum allowed subjective confidence adjustment (±). Range 0.00–0.20.",
+    ),
+    ConfigKey.EXPECTED_HOLDING_MAX_MIN: _Default(
+        "240", "int",
+        "Maximum expected holding time in minutes; used for zombie-trade detection. Range 30–1440.",
+    ),
+    ConfigKey.CONFLUENCE_WEAK_FACTOR: _Default(
+        "0.5", "float",
+        "Multiplier applied to a weak confluence vs a solid one in confidence calc. Range 0.0–1.0.",
+    ),
 }
 
 
