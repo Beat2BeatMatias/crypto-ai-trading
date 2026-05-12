@@ -174,6 +174,7 @@ async def _build(session: AsyncSession, **overrides) -> dict:
         mode="PAPER_TRADING",
         taker_fee_pct=0.001,
         maker_fee_pct=0.001,
+        current_drawdown_pct=0.0,
     )
     defaults.update(overrides)
     return await builder.build(**defaults)
@@ -239,3 +240,50 @@ async def test_roundtrip_fee_pct_equals_taker_times_two(session: AsyncSession):
     # THEN roundtrip_fee_pct is taker * 2 expressed as a percentage
     assert ctx["taker_fee_pct"] == pytest.approx(0.1)       # 0.001 * 100
     assert ctx["roundtrip_fee_pct"] == pytest.approx(0.2)   # 0.001 * 2 * 100
+
+
+@pytest.mark.asyncio
+async def test_atr_timeframe_key_in_context(session: AsyncSession):
+    # GIVEN atr_timeframe="5m"
+    ctx = await _build(session, atr_timeframe="5m")
+
+    # THEN explicit atr_timeframe key is present
+    assert "atr_timeframe" in ctx
+    assert ctx["atr_timeframe"] == "5m"
+
+
+@pytest.mark.asyncio
+async def test_current_drawdown_pct_passed_through(session: AsyncSession):
+    # GIVEN current_drawdown_pct=-0.05
+    ctx = await _build(session, current_drawdown_pct=-0.05)
+
+    # THEN it is present in the context
+    assert ctx["current_drawdown_pct"] == pytest.approx(-0.05)
+
+
+@pytest.mark.asyncio
+async def test_volume_keys_default_to_zero_when_no_data(session: AsyncSession):
+    # GIVEN no volume data in indicators (fixture only has 1h data, no volume_current)
+    ctx = await _build(session, atr_timeframe="1h")
+
+    # THEN volume keys are present with 0.0 defaults
+    assert "volume_current" in ctx
+    assert "volume_avg20" in ctx
+    assert "volume_ratio" in ctx
+    assert ctx["volume_current"] == pytest.approx(0.0)
+    assert ctx["volume_avg20"] == pytest.approx(0.0)
+    assert ctx["volume_ratio"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_new_config_v2_keys_present_with_defaults(session: AsyncSession):
+    # GIVEN no calibration overrides
+    ctx = await _build(session)
+
+    # THEN all 6 new config vars are present with their defaults
+    assert ctx["min_fees_to_tp_ratio"] == pytest.approx(3.0)
+    assert ctx["min_confluences_buy"] == 2
+    assert ctx["cooldown_after_sell_min"] == 15
+    assert ctx["subjective_adj_max"] == pytest.approx(0.10)
+    assert ctx["expected_holding_max_min"] == 240
+    assert ctx["confluence_weak_factor"] == pytest.approx(0.5)

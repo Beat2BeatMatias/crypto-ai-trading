@@ -14,13 +14,14 @@ class ContextBuilder:
         self.symbol = symbol
 
     async def build(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
-                    btc_held: float, playbook_content: str, max_position_pct: float,
+                    btc_held: float, playbook_content: str, max_position_pct: float = 0.10,
                     max_simultaneous_trades: int, daily_stop_pct: float,
                     decisor_interval_min: int, mode: str,
                     taker_fee_pct: float, maker_fee_pct: float,
                     atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
                     sl_atr_multiplier: float = 0.3,
-                    calibration: dict | None = None) -> dict[str, Any]:
+                    calibration: dict | None = None,
+                    current_drawdown_pct: float = 0.0) -> dict[str, Any]:
         ind_row = (await self.session.execute(
             select(Indicators).order_by(desc(Indicators.time)).limit(1)
         )).scalar_one_or_none()
@@ -39,6 +40,18 @@ class ContextBuilder:
         roundtrip_fee_pct = taker_fee_pct * 2
         cal = calibration or {}
         sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
+
+        vol_tf = self._get(ind, atr_timeframe, "volume_current")
+        vol_avg = self._get(ind, atr_timeframe, "volume_avg_20")
+        volume_ratio = (vol_tf / vol_avg) if (vol_tf and vol_avg and vol_avg > 0) else 0.0
+        bid_wall_dist_pct = (
+            (orderbook.bid_wall_price - price) / price * 100
+            if orderbook and price > 0 else 0.0
+        )
+        ask_wall_dist_pct = (
+            (orderbook.ask_wall_price - price) / price * 100
+            if orderbook and price > 0 else 0.0
+        )
 
         ctx = {
             "timestamp_utc": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
@@ -119,6 +132,20 @@ class ContextBuilder:
             "last_confidence": last_decisions[0].output.get("confidence", 0) if last_decisions else 0,
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
             "last_decision_ago": "n/a",
+            "atr_timeframe": atr_timeframe,
+            "sl_atr_max_multiplier": sl_atr_max,
+            "volume_current": vol_tf or 0.0,
+            "volume_avg20": vol_avg or 0.0,
+            "volume_ratio": volume_ratio,
+            "bid_wall_dist_pct": bid_wall_dist_pct,
+            "ask_wall_dist_pct": ask_wall_dist_pct,
+            "current_drawdown_pct": current_drawdown_pct,
+            "min_fees_to_tp_ratio": cal.get("min_fees_to_tp_ratio", 3.0),
+            "min_confluences_buy": cal.get("min_confluences_buy", 2),
+            "cooldown_after_sell_min": cal.get("cooldown_after_sell_min", 15),
+            "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
+            "expected_holding_max_min": cal.get("expected_holding_max_min", 240),
+            "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
         }
         # Merge calibration values so all {variable} references in the prompt resolve correctly.
         if cal:
