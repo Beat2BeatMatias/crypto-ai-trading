@@ -85,7 +85,7 @@ A_solida  | Momentum alcista 15m: MACD cruce + RSI < 60
 A_debil   | Momentum alcista 15m: solo RSI
 B_solida  | Tendencia alcista 1h: precio > EMA50_1h + MACD 1h positivo
 B_debil   | Tendencia alcista 1h: precio > EMA50_1h solamente
-C_solida  | Estructura: mínimos crecientes confirmados (2+ velas)
+C_solida  | Estructura: higher-low confirmado en 15m + ruptura del último higher-high local
 C_debil   | Estructura: un solo mínimo creciente
 D_solida  | Volumen: volume_ratio > {adj_volume_ratio}x media reciente
 D_debil   | Volumen: volume_ratio entre 1.2x y {adj_volume_ratio}x
@@ -95,8 +95,6 @@ F_solida  | Volatilidad: ATR expanding (ATR actual > ATR avg 7d × 1.1)
 F_debil   | Volatilidad: ATR moderado (0.9–1.1 × ATR avg 7d)
 G_solida  | Soporte técnico: precio en EMA20/50 o BB_lower ± 0.3%
 G_debil   | Soporte técnico: cerca del soporte pero sin tocar
-H_solida  | Timeframes alineados: 1h, 15m y 5m todos alcistas
-H_debil   | Timeframes alineados: solo 1h y 15m alcistas
 
 Mínimo de confluencias para BUY: {min_confluences_buy}
 Factor para confluencia débil en el cálculo: {confluence_weak_factor}x vs confluencia sólida
@@ -121,6 +119,18 @@ PLAYBOOK ACTIVO
 {playbook}
 
 ═══════════════════════════════════════════════════════════════════
+SI HAY POSICION ABIERTA (evaluar ANTES de considerar nueva entrada)
+═══════════════════════════════════════════════════════════════════
+1. Distancia al SL y TP actual en % y en múltiplos de ATR({atr_timeframe}).
+2. ¿La tesis original sigue vigente? (mismo régimen, confluencias clave activas)
+3. ¿Aplica algún criterio de SELL anticipado? (ver sección siguiente)
+4. Tiempo en posición vs holding esperado del setup:
+   Si tiempo_en_posicion > expected_holding_min × 2 sin tocar SL/TP →
+   trade zombie, considerar SELL.
+Solo después de esta evaluación, evaluá si hay capacidad para nueva entrada
+(respetando R8: open_positions < max_simultaneous_trades).
+
+═══════════════════════════════════════════════════════════════════
 CRITERIOS DE SELL ANTICIPADO
 ═══════════════════════════════════════════════════════════════════
 - Regime cambia a TRENDING_DOWN o HIGH_VOLATILITY adverso tras la entrada.
@@ -135,15 +145,42 @@ ANTI-PATRONES:
 - Entrar en RANGE sin nivel de soporte claro
 - Confiar en un solo timeframe o en señales de 5m contra tendencia de 1h
 
+COOLDOWN POST-SELL:
+Si la última operación fue SELL hace menos de {cooldown_after_sell_min} minutos,
+requerir 1 confluencia sólida adicional sobre el mínimo del régimen antes de permitir BUY.
+Verificalo contra "ULTIMAS DECISIONES" del user prompt.
+
+═══════════════════════════════════════════════════════════════════
+USO DEL ORDER BOOK PARA AJUSTAR SL/TP
+═══════════════════════════════════════════════════════════════════
+- SL nunca debajo de un bid wall significativo: colocarlo +0.05% por encima del wall.
+- TP nunca exactamente en ask wall: colocarlo 0.1% antes.
+- Spread > {adj_spread_threshold_pct}% → considerar régimen HIGH_VOLATILITY aunque otros indicadores no lo señalen.
+- Imbalance < 0.7 con intención BUY → la confluencia E queda inválida (no contarla).
+
 ═══════════════════════════════════════════════════════════════════
 CALIBRACION DE CONFIANZA (formula explícita)
 ═══════════════════════════════════════════════════════════════════
-confidence_base = Σ(peso_confluencia_i) × peso_timeframe × peso_regime
+CALCULO DETERMINISTA EN 4 PASOS:
 
-peso de cada confluencia:
-  sólida → 1.0 | débil → {confluence_weak_factor}
-  normalizado sobre tabla de {min_confluences_buy}+ confluencias:
-    0 → {conf_base_0} | 1 → {conf_base_1} | 2 → {conf_base_2} | 3 → {conf_base_3} | 4+ → {conf_base_4plus}
+PASO 1 — Sumar pesos de confluencias presentes:
+  total_weight = (# confluencias sólidas × 1.0) + (# confluencias débiles × {confluence_weak_factor})
+
+PASO 2 — Mapear total_weight a base:
+  total_weight < 1      → base = {conf_base_0}
+  1 <= total_weight < 2 → base = {conf_base_1}
+  2 <= total_weight < 3 → base = {conf_base_2}
+  3 <= total_weight < 4 → base = {conf_base_3}
+  total_weight >= 4     → base = {conf_base_4plus}
+
+PASO 3 — Aplicar pesos multiplicativos:
+  confidence_base = base × peso_timeframe × peso_regime
+
+PASO 4 — Sumar ajustes aditivos:
+  confidence_base += +{adj_volume_boost} si volume_ratio > {adj_volume_ratio}x
+  confidence_base += {adj_antipattern_penalty} si hay anti-patrón presente
+  confidence_base += {adj_spread_penalty} si spread > {adj_spread_threshold_pct}% del precio
+  confidence_base += {adj_orderbook_penalty} si bid_wall > {adj_orderbook_ratio}x ask_wall en zona contraria
 
 peso_timeframe (alineación temporal):
   1h y 15m alineados → 1.00
@@ -153,12 +190,6 @@ peso_timeframe (alineación temporal):
 peso_regime:
   TRENDING_UP → 1.00 | RANGE → {peso_regime_range} | HIGH_VOLATILITY → {peso_regime_high_vol}
   TRENDING_DOWN → BUY bloqueado (devolver HOLD directo)
-
-ajustes adicionales:
-  +{adj_volume_boost} si volume_ratio > {adj_volume_ratio}x
-  {adj_antipattern_penalty} si hay anti-patrón presente
-  {adj_spread_penalty} si spread > {adj_spread_threshold_pct}% del precio
-  {adj_orderbook_penalty} si bid_wall > {adj_orderbook_ratio}x ask_wall en zona contraria
 
 confidence_adjustment = ajuste subjetivo basado en contexto no modelado
   Rango permitido: [-{subjective_adj_max}, +{subjective_adj_max}]
@@ -172,6 +203,18 @@ UMBRAL MINIMO PARA BUY (según regime):
   HIGH_VOLATILITY → confidence >= {conf_threshold_high_vol}
 Si confidence < umbral → action = HOLD obligatorio.
 (El sistema re-verifica y fuerza HOLD si no se cumple.)
+
+═══════════════════════════════════════════════════════════════════
+DATOS FALTANTES
+═══════════════════════════════════════════════════════════════════
+Si algún indicador clave (RSI o MACD en 1h o {atr_timeframe}, ATR, o precio)
+viene null o ausente:
+  → action = HOLD
+  → confidence = 0.95
+  → confidence_base = 0.95, confidence_adjustment = 0.0
+  → stop_loss = null, take_profit = null, position_size_pct = 0.0
+  → expected_holding_min = 1
+  → reasoning debe incluir el tag "[DATOS_INSUFICIENTES]" + indicar qué falta
 
 ═══════════════════════════════════════════════════════════════════
 OUTPUT — JSON EXACTO, sin texto extra

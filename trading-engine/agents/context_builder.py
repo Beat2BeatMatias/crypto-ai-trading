@@ -41,6 +41,21 @@ class ContextBuilder:
         cal = calibration or {}
         sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
 
+        # ATR 7-day average: query historical rows for the configured timeframe.
+        _tf_rows_per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}
+        hist_limit = _tf_rows_per_day.get(atr_timeframe, 96) * 7
+        hist_rows = (await self.session.execute(
+            select(Indicators).order_by(desc(Indicators.time)).limit(hist_limit)
+        )).scalars().all()
+        atr_hist_values = [
+            float((row.data.get(atr_timeframe, {}) or {}).get("atr") or 0)
+            for row in hist_rows
+            if (row.data.get(atr_timeframe, {}) or {}).get("atr")
+        ]
+        atr_ref_val = float(self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0)
+        atr_avg_7d_val = sum(atr_hist_values) / len(atr_hist_values) if atr_hist_values else atr_ref_val
+        atr_expanding = atr_ref_val > atr_avg_7d_val * 1.1 if atr_avg_7d_val > 0 else False
+
         vol_tf = self._get(ind, atr_timeframe, "volume_current")
         vol_avg = self._get(ind, atr_timeframe, "volume_avg_20")
         volume_ratio = (vol_tf / vol_avg) if (vol_tf and vol_avg and vol_avg > 0) else 0.0
@@ -93,7 +108,8 @@ class ContextBuilder:
             "ema200_4h": self._get(ind, "4h", "ema200") or 0,
             "atr_1h": self._get(ind, "1h", "atr") or 0,
             "atr_pct_1h": ((self._get(ind, "1h", "atr") or 0) / price * 100) if price else 0,
-            "atr_avg_7d": self._get(ind, "1h", "atr") or 0,
+            "atr_avg_7d": atr_avg_7d_val,
+            "atr_expanding": atr_expanding,
             "atr_ref": self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0,
             "atr_ref_tf": atr_timeframe,
             "atr_ref_pct": ((self._get(ind, atr_timeframe, "atr") or 0) / price * 100) if price else 0,
@@ -169,9 +185,14 @@ class ContextBuilder:
     def _format_last_decisions(decisions: list) -> str:
         if not decisions:
             return "  Sin decisiones previas."
-        return "\n".join(
-            f"  [{d.ts.strftime('%H:%M')} UTC] {d.output.get('action','?')} "
-            f"(conf {float(d.output.get('confidence',0)):.2f}): "
-            f"\"{d.output.get('reasoning','')[:100]}\""
-            for d in decisions
-        )
+        lines = []
+        for d in decisions:
+            outcome = (d.outcome or {}).get("close_reason", "")
+            outcome_str = f" [outcome={outcome}]" if outcome else ""
+            lines.append(
+                f"  [{d.ts.strftime('%Y-%m-%dT%H:%M:%SZ')}] "
+                f"action={d.output.get('action','?')} "
+                f"confidence={float(d.output.get('confidence', 0)):.2f}"
+                f"{outcome_str}"
+            )
+        return "\n".join(lines)
