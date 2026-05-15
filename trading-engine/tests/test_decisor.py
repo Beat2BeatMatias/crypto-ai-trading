@@ -85,6 +85,7 @@ _trades_table = Table(
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
+    Column("close_requested", Boolean, default=False),  # migration 002
 )
 
 _playbook_versions_table = Table(
@@ -217,12 +218,15 @@ def _make_prompt_manager() -> PromptManager:
 
 _VALID_LLM_RESPONSE = json.dumps({
     "regime": "TRENDING_UP",
-    "confluences": ["RSI oversold", "EMA cross"],
+    "confluences": ["B", "C", "G"],
     "action": "BUY",
+    "confidence_base": 0.85,
+    "confidence_adjustment": 0.0,
     "confidence": 0.85,
     "stop_loss": 93000.0,
     "take_profit": 98000.0,
     "position_size_pct": 0.10,
+    "expected_holding_min": 30,
     "reasoning": "Strong uptrend confirmed by multiple indicators.",
 })
 
@@ -255,7 +259,7 @@ async def test_valid_llm_response_persists_decision_with_action_buy(session: Asy
         symbol="BTC/USDT",
         prompt_manager=pm,
         provider=LLMProvider.GEMINI_FLASH,
-        fallback=None,
+        fallbacks=[],
     )
 
     # WHEN deciding
@@ -288,7 +292,7 @@ async def test_invalid_json_from_llm_persists_decision_with_action_hold(session:
         symbol="BTC/USDT",
         prompt_manager=pm,
         provider=LLMProvider.GEMINI_FLASH,
-        fallback=None,
+        fallbacks=[],
     )
 
     # WHEN deciding

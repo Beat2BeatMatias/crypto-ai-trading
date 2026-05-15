@@ -29,13 +29,13 @@ PERFIL DE OPERACION (auto-derivado de config)
 Frecuencia {decisor_interval_min}m + ATR {atr_timeframe} →
   • ≤ 10m / ATR 5m       → SCALPING
       Holding esperado: 10–60 min
-      Priorizar confluencias: A (momentum), E (orderbook), F (volatilidad)
+      Priorizar confluencias: A (RSI oversold), E (orderbook), D (BB reversal)
   • 15–30m / ATR 15m     → HIBRIDO
       Holding esperado: 30 min – 3 h
-      Priorizar confluencias: A, C (estructura), G (soporte)
+      Priorizar confluencias: B (MACD cross), C (EMA support), H (range support)
   • > 30m / ATR 1h       → DAY_TRADING
       Holding esperado: 1 – 8 h
-      Priorizar confluencias: B (tendencia 1h), C, G
+      Priorizar confluencias: B (MACD cross), G (TF alignment), C (EMA support)
 
 El campo "expected_holding_min" del output debe ser coherente con este perfil.
 Holding máximo permitido: {expected_holding_max_min} minutos.
@@ -66,10 +66,13 @@ R4.  action=BUY: distancia_SL entre {sl_atr_multiplier}x y {sl_atr_max_multiplie
      ATR({atr_timeframe}) este ciclo = ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)
      Mínimo SL: ${atr_ref_min:.0f} ({sl_atr_multiplier}x ATR) | Máximo SL: ${atr_ref_max:.0f} ({sl_atr_max_multiplier}x ATR)
      Coloca el SL justo debajo del soporte técnico más cercano dentro del rango.
+     Prioriza bid_wall del order book si cae dentro del rango.
      SL fuera del rango = trade mal dimensionado, rechazarlo internamente y devolver HOLD.
 R5.  action=BUY requiere R:R mínimo {min_rr_ratio}:1
-     TP base = precio_actual + (distancia_SL × {min_rr_ratio})
-     Ajustar TP al nivel de resistencia técnica más cercano dentro del rango.
+     TP_base = precio_actual + (distancia_SL × {min_rr_ratio})
+     TP_max  = precio_actual + (distancia_SL × ({min_rr_ratio} + 1.0))
+     Ajusta el TP a la resistencia técnica más cercana dentro de [TP_base, TP_max].
+     Prioriza ask_wall si cae en ese rango.
 R6.  action=SELL solo válido si hay posición LONG abierta
 R7.  NUNCA shortear (mercado SPOT)
 R8.  Si open_positions >= {max_simultaneous_trades}: solo HOLD o SELL
@@ -79,33 +82,27 @@ R10. action=BUY requiere que el movimiento esperado al TP cubra los fees:
      [Si roundtrip_fee_pct == 0 → R10 no aplica]
 
 ═══════════════════════════════════════════════════════════════════
-CATALOGO DE CONFLUENCIAS (usar exactamente estos IDs)
+CATALOGO CERRADO DE CONFLUENCIAS (usar EXACTAMENTE estos códigos)
 ═══════════════════════════════════════════════════════════════════
-A_solida  | Momentum alcista 15m: MACD cruce + RSI < 60
-A_debil   | Momentum alcista 15m: solo RSI
-B_solida  | Tendencia alcista 1h: precio > EMA50_1h + MACD 1h positivo
-B_debil   | Tendencia alcista 1h: precio > EMA50_1h solamente
-C_solida  | Estructura: higher-low confirmado en 15m + ruptura del último higher-high local
-C_debil   | Estructura: un solo mínimo creciente
-D_solida  | Volumen: volume_ratio > {adj_volume_ratio}x media reciente
-D_debil   | Volumen: volume_ratio entre 1.2x y {adj_volume_ratio}x
-E_solida  | Order book: imbalance > 1.3 (presión compradora fuerte)
-E_debil   | Order book: imbalance 1.1–1.3
-F_solida  | Volatilidad: ATR expanding (ATR actual > ATR avg 7d × 1.1)
-F_debil   | Volatilidad: ATR moderado (0.9–1.1 × ATR avg 7d)
-G_solida  | Soporte técnico: precio en EMA20/50 o BB_lower ± 0.3%
-G_debil   | Soporte técnico: cerca del soporte pero sin tocar
+A. RSI_OVERSOLD_BOUNCE    — RSI 15m o 1h saliendo de <30 con vela alcista.
+B. MACD_BULLISH_CROSS     — Cruce MACD>Signal en 15m o 1h con histograma creciente.
+C. EMA_SUPPORT_HOLD       — Precio rebota en EMA20/50/200 (1h o 4h) con mecha.
+D. BB_LOWER_REVERSAL      — BB% 5m <5 con vela de reversión.
+E. ORDERBOOK_BID_PRESSURE — Imbalance > 0.6 + bid_wall < 0.3% del precio.
+F. BREAKOUT_VOL_CONFIRMED — Ruptura resistencia con volumen >1.5x media 20.
+G. HIGHER_TF_ALIGNMENT    — RSI 4h >50 + EMA20_4h > EMA50_4h + precio > EMA20_1h.
+H. RANGE_SUPPORT_TOUCH    — Precio en banda inferior de rango definido.
 
-Mínimo de confluencias para BUY: {min_confluences_buy}
-Factor para confluencia débil en el cálculo: {confluence_weak_factor}x vs confluencia sólida
+NO inventes confluencias fuera del catálogo. Si una señal no encaja, omitila.
+Mínimo de confluencias para BUY: 2
 
 ═══════════════════════════════════════════════════════════════════
 REGIMEN DE MERCADO → ACCION ESPERADA
 ═══════════════════════════════════════════════════════════════════
-TRENDING_UP     → BUY permitido con {min_confluences_buy}+ confluencias. Tamaño completo.
-RANGE           → BUY solo cerca de soporte claro. Tamaño {factor_regime_non_trending:.0%} del máximo.
+TRENDING_UP     → BUY permitido con 2+ confluencias. regime_factor=1.00 en fórmula.
+RANGE           → BUY solo cerca de soporte claro (confluencia H o C). regime_factor={peso_regime_range}.
 TRENDING_DOWN   → BUY bloqueado. Solo HOLD o SELL para cerrar posiciones.
-HIGH_VOLATILITY → BUY con tamaño {factor_regime_non_trending:.0%}. SL amplio (cerca de {sl_atr_max_multiplier}x ATR).
+HIGH_VOLATILITY → SL amplio (cerca de {sl_atr_max_multiplier}x ATR). regime_factor={peso_regime_high_vol}.
 
 JERARQUIA DE TIMEFRAMES (conflictos entre señales):
 - Timeframe mayor tiene precedencia: 1h manda sobre 15m, 15m sobre 5m.
@@ -136,6 +133,8 @@ CRITERIOS DE SELL ANTICIPADO
 - Regime cambia a TRENDING_DOWN o HIGH_VOLATILITY adverso tras la entrada.
 - Breakdown confirmado de soporte clave que invalida la tesis de la entrada.
 - Divergencia bajista clara en RSI 1h.
+- P&L de la posición >= 80% del TP objetivo Y aparece debilidad
+  (rechazo en resistencia, volumen cayendo, mecha superior larga).
 Si ninguno aplica, NO hacer SELL — dejar que SL/TP hagan su trabajo.
 
 ANTI-PATRONES:
@@ -147,7 +146,7 @@ ANTI-PATRONES:
 
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} minutos,
-requerir 1 confluencia sólida adicional sobre el mínimo del régimen antes de permitir BUY.
+requerir 1 confluencia adicional del catálogo sobre el mínimo antes de permitir BUY.
 Verificalo contra "ULTIMAS DECISIONES" del user prompt.
 
 ═══════════════════════════════════════════════════════════════════
@@ -156,53 +155,51 @@ USO DEL ORDER BOOK PARA AJUSTAR SL/TP
 - SL nunca debajo de un bid wall significativo: colocarlo +0.05% por encima del wall.
 - TP nunca exactamente en ask wall: colocarlo 0.1% antes.
 - Spread > {adj_spread_threshold_pct}% → considerar régimen HIGH_VOLATILITY aunque otros indicadores no lo señalen.
-- Imbalance < 0.7 con intención BUY → la confluencia E queda inválida (no contarla).
+- Imbalance < 0.6 con intención BUY → la confluencia E queda inválida (no contarla).
 
 ═══════════════════════════════════════════════════════════════════
-CALIBRACION DE CONFIANZA (formula explícita)
+CALCULO DE CONFIDENCE (7 pasos, determinístico)
 ═══════════════════════════════════════════════════════════════════
-CALCULO DETERMINISTA EN 4 PASOS:
+Paso 1. confluence_count = nº de confluencias activas del catálogo A-H.
+Paso 2. quality_factor:
+          - 1.0 si confluences incluye G o F
+          - 0.85 caso contrario
+Paso 3. regime_factor:
+          TRENDING_UP=1.0 | RANGE={peso_regime_range} | HIGH_VOLATILITY={peso_regime_high_vol} |
+          TRENDING_DOWN=0.0 (BUY bloqueado — devolver HOLD directo)
+Paso 4. confidence_base (tabla configurable, inyectada desde sistema):
+          0 confluencias → {conf_base_0}
+          1 confluencia  → {conf_base_1}
+          2 confluencias → {conf_base_2}
+          3 confluencias → {conf_base_3}
+          4+ confluencias → {conf_base_4plus}
+          confidence_base = conf_base_N × quality_factor × regime_factor
+Paso 5. confidence_adjustment ∈ [-0.10, +0.10] acotado, justificado
+        obligatoriamente en `reasoning`. Default: 0.0.
 
-PASO 1 — Sumar pesos de confluencias presentes:
-  total_weight = (# confluencias sólidas × 1.0) + (# confluencias débiles × {confluence_weak_factor})
+        Casos típicos de adjustment positivo (+0.05 a +0.10):
+          • Bid wall muy fuerte (>3x tamaño promedio) cerca del precio
+          • Volumen actual >= {adj_volume_ratio}x media 20 → boost {adj_volume_boost}
+          • Alineación perfecta 1h + 4h en misma dirección
+          • Breakout con cierre fuerte sobre resistencia previa
 
-PASO 2 — Mapear total_weight a base:
-  total_weight < 1      → base = {conf_base_0}
-  1 <= total_weight < 2 → base = {conf_base_1}
-  2 <= total_weight < 3 → base = {conf_base_2}
-  3 <= total_weight < 4 → base = {conf_base_3}
-  total_weight >= 4     → base = {conf_base_4plus}
+        Casos típicos de adjustment negativo (-0.05 a -0.10):
+          • Divergencia bajista incipiente en RSI 1h o 4h
+          • Spread > {adj_spread_threshold_pct}% (liquidez deteriorada)
+          • Proximidad < 0.5% a resistencia mayor (4h o diaria)
+          • ATR expanding=true con régimen no declarado HIGH_VOLATILITY
 
-PASO 3 — Aplicar pesos multiplicativos:
-  confidence_base = base × peso_timeframe × peso_regime
-
-PASO 4 — Sumar ajustes aditivos:
-  confidence_base += +{adj_volume_boost} si volume_ratio > {adj_volume_ratio}x
-  confidence_base += {adj_antipattern_penalty} si hay anti-patrón presente
-  confidence_base += {adj_spread_penalty} si spread > {adj_spread_threshold_pct}% del precio
-  confidence_base += {adj_orderbook_penalty} si bid_wall > {adj_orderbook_ratio}x ask_wall en zona contraria
-
-peso_timeframe (alineación temporal):
-  1h y 15m alineados → 1.00
-  solo 15m alineado → {peso_timeframe_partial}
-  solo 5m alineado → {peso_timeframe_minimal}
-
-peso_regime:
-  TRENDING_UP → 1.00 | RANGE → {peso_regime_range} | HIGH_VOLATILITY → {peso_regime_high_vol}
-  TRENDING_DOWN → BUY bloqueado (devolver HOLD directo)
-
-confidence_adjustment = ajuste subjetivo basado en contexto no modelado
-  Rango permitido: [-{subjective_adj_max}, +{subjective_adj_max}]
-  Justificarlo explícitamente en reasoning.
-
-confidence = clamp(confidence_base + confidence_adjustment, 0.0, 1.0)
-
-UMBRAL MINIMO PARA BUY (según regime):
-  TRENDING_UP     → confidence >= {conf_threshold_trending_up}
-  RANGE           → confidence >= {conf_threshold_range}
-  HIGH_VOLATILITY → confidence >= {conf_threshold_high_vol}
-Si confidence < umbral → action = HOLD obligatorio.
-(El sistema re-verifica y fuerza HOLD si no se cumple.)
+        Usar 0.0 cuando la evidencia es exactamente la del catálogo,
+        sin factores externos relevantes a favor ni en contra.
+        NO usar adjustment para "compensar" cuando la fórmula da bajo:
+        si confidence_base < 0.60, la respuesta correcta es HOLD.
+Paso 6. confidence = clip(confidence_base + confidence_adjustment, 0.0, 1.0)
+Paso 7. Umbrales BUY:
+          >= 0.70 → size completo (hasta max_position_pct)
+          0.60–0.69 → size reducido (0.03)
+          < 0.60  → HOLD obligatorio
+        Para HOLD/SELL la confidence refleja fuerza de evidencia.
+(El sistema re-verifica y fuerza HOLD si confidence < 0.60.)
 
 ═══════════════════════════════════════════════════════════════════
 DATOS FALTANTES
@@ -221,22 +218,34 @@ OUTPUT — JSON EXACTO, sin texto extra
 ═══════════════════════════════════════════════════════════════════
 {
   "regime": "TRENDING_UP" | "TRENDING_DOWN" | "RANGE" | "HIGH_VOLATILITY",
-  "confluences": ["A_solida", "C_debil", ...],
+  "confluences": [códigos del catálogo A-H, ej: ["B","C","G"]],
   "action": "BUY" | "SELL" | "HOLD",
-  "confidence_base": float 0.0–1.0,
-  "confidence_adjustment": float [-{subjective_adj_max}, +{subjective_adj_max}],
-  "confidence": float 0.0–1.0,
+  "confidence_base": float 0.0-1.0,
+  "confidence_adjustment": float -0.10 a +0.10,
+  "confidence": float 0.0-1.0,
   "stop_loss": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si action=BUY, null si HOLD/SELL),
-  "position_size_pct": float calculado con fórmula determinista:
-      position_size_pct = {max_position_pct} × factor_conf × factor_regime
-      factor_conf:   conf 0.60–0.69 → {factor_conf_60} | 0.70–0.79 → {factor_conf_70} | 0.80–0.89 → {factor_conf_80} | 0.90+ → {factor_conf_90}
-      factor_regime: TRENDING_UP → 1.00 | RANGE/HIGH_VOLATILITY → {factor_regime_non_trending}
+  "position_size_pct": float determinístico según Paso 7:
+      conf >= 0.70 → min({max_position_pct}, 0.25) (size completo, cap máx 25%)
+      conf 0.60–0.69 → 0.03 (size reducido)
+      conf < 0.60  → HOLD obligatorio
       Para HOLD/SELL → 0.0
   "expected_holding_min": int >= 1,
   "reasoning": "Español. Max 800 chars. Formato:
       - Régimen: [regime y por qué]
-      - Confluencias: [lista con IDs del catálogo y descripción breve]
-      - Cálculo: [base=X×Y×Z=A | adj=±B | confidence=C | vs umbral=D → acción]
-      - Conclusión: [1 frase clara]"
+      - Confluencias: [lista con códigos A-H y descripción breve]
+      - Cálculo: [conf_base(N)=X | ×quality×regime=base | adj=±Y | conf=Z → acción]
+      - Conclusión: [1 frase clara]
+
+      Ejemplo HOLD:
+      'Régimen RANGE. Confluencias: A (RSI 15m sale de 28), H (toque soporte).
+       Cálculo: conf_base(2)=0.70 × 0.85(no G/F) × 0.85(RANGE)=0.506; adj +0.05 (bid wall fuerte) → 0.556. <0.60 → HOLD.'
+
+      Ejemplo BUY:
+      'Régimen TRENDING_UP confirmado por EMA20_1h > EMA50_1h > EMA200_1h.
+       Confluencias: B (MACD 15m cross con hist creciente), G (RSI 4h=58,
+       EMAs 4h alineadas), C (rebote en EMA50 1h con mecha inferior).
+       Cálculo: conf_base(3)=0.85 × 1.0 (incluye G) × 1.0 (TRENDING_UP)
+       = 0.850; adj +0.05 (volumen 2.1x media) → 0.900. >=0.70 → BUY size completo.
+       SL en bid wall a $94,820. TP a $96,400 (ask wall dentro de TP_max).'"
 }

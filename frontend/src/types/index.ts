@@ -34,19 +34,8 @@ export interface ConfigEntry {
   key: string; value: string;
   value_type: "int" | "float" | "string" | "bool" | "json";
   description: string | null;
-}
-
-export interface ConfigSuggestion {
-  key: string;
-  current: string | number;
-  suggested: string | number;
-  reason: string;
-}
-
-export interface ConfigSuggestions {
-  generated_at: string;
-  suggestions: ConfigSuggestion[];
-  summary: string;
+  updated_at: string | null;
+  last_changed_by: string | null;
 }
 
 export interface DailyStats {

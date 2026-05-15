@@ -1,9 +1,10 @@
+from datetime import datetime
 from typing import Annotated
 from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import ConfigEntry
+from shared.db.models import ConfigEntry, ConfigHistory
 from shared.config_store import ConfigStore, ConfigKey
 
 router = APIRouter()
@@ -14,6 +15,8 @@ class ConfigEntryOut(BaseModel):
     value: str
     value_type: str
     description: str | None
+    updated_at: datetime | None
+    last_changed_by: str | None
 
 
 class ConfigUpdate(BaseModel):
@@ -31,8 +34,28 @@ _INTERNAL_KEYS = {"supervisor_run_now"}
 @router.get("/config", response_model=list[ConfigEntryOut])
 async def list_config(session: Annotated[AsyncSession, Depends(_session)]):
     rows = (await session.execute(select(ConfigEntry).order_by(ConfigEntry.key))).scalars().all()
-    return [ConfigEntryOut.model_validate(r, from_attributes=True) for r in rows
-            if r.key not in _INTERNAL_KEYS]
+
+    history_rows = (await session.execute(
+        select(ConfigHistory).order_by(ConfigHistory.ts.desc())
+    )).scalars().all()
+    last_changed_by: dict[str, str] = {}
+    for h in history_rows:
+        if h.key not in last_changed_by:
+            last_changed_by[h.key] = h.changed_by
+
+    result = []
+    for r in rows:
+        if r.key in _INTERNAL_KEYS:
+            continue
+        result.append(ConfigEntryOut(
+            key=r.key,
+            value=r.value,
+            value_type=r.value_type,
+            description=r.description,
+            updated_at=r.updated_at,
+            last_changed_by=last_changed_by.get(r.key),
+        ))
+    return result
 
 
 @router.put("/config/{key}")

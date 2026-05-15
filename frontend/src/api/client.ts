@@ -1,4 +1,4 @@
-import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, ConfigSuggestions, Balance } from "../types";
+import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, Balance } from "../types";
 
 const BASE = "/api";
 
@@ -59,5 +59,4 @@ export const api = {
   playbookEditContent: (version: number, content: string) =>
     patch(`/playbook/${version}/content`, { content }),
   dailyStats: () => get<DailyStats>("/stats/daily"),
-  configSuggestions: () => get<ConfigSuggestions | null>("/config/suggestions"),
 };

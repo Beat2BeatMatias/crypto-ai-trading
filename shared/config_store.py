@@ -127,15 +127,23 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.CONF_THRESHOLD_RANGE: _Default("0.70", "float", "Min confidence for BUY — RANGE"),
     ConfigKey.CONF_THRESHOLD_HIGH_VOL: _Default("0.80", "float", "Min confidence for BUY — HIGH_VOLATILITY"),
     ConfigKey.RSI_OVERBOUGHT_1H: _Default("70", "int", "RSI 1h overbought threshold"),
-    ConfigKey.CONF_BASE_0: _Default("0.30", "float", "Base confidence — 0 confluences"),
-    ConfigKey.CONF_BASE_1: _Default("0.50", "float", "Base confidence — 1 confluence"),
-    ConfigKey.CONF_BASE_2: _Default("0.65", "float", "Base confidence — 2 confluences"),
-    ConfigKey.CONF_BASE_3: _Default("0.80", "float", "Base confidence — 3 confluences"),
-    ConfigKey.CONF_BASE_4PLUS: _Default("0.92", "float", "Base confidence — 4+ confluences"),
+    # conf_base_N deriva de 0.40 + 0.15×N (fórmula canónica del decisor).
+    # Para actualizar instalaciones existentes:
+    #   UPDATE config_entry SET value='0.40' WHERE key='conf_base_0';
+    #   UPDATE config_entry SET value='0.55' WHERE key='conf_base_1';
+    #   UPDATE config_entry SET value='0.70' WHERE key='conf_base_2';
+    #   UPDATE config_entry SET value='0.85' WHERE key='conf_base_3';
+    #   UPDATE config_entry SET value='1.00' WHERE key='conf_base_4plus';
+    #   UPDATE config_entry SET value='0.75' WHERE key='peso_regime_high_vol';
+    ConfigKey.CONF_BASE_0: _Default("0.40", "float", "Base confidence — 0 confluences (formula: 0.40+0.15×0)"),
+    ConfigKey.CONF_BASE_1: _Default("0.55", "float", "Base confidence — 1 confluence (formula: 0.40+0.15×1)"),
+    ConfigKey.CONF_BASE_2: _Default("0.70", "float", "Base confidence — 2 confluences (formula: 0.40+0.15×2)"),
+    ConfigKey.CONF_BASE_3: _Default("0.85", "float", "Base confidence — 3 confluences (formula: 0.40+0.15×3)"),
+    ConfigKey.CONF_BASE_4PLUS: _Default("1.00", "float", "Base confidence — 4+ confluences (formula: capped at 1.0)"),
     ConfigKey.PESO_TIMEFRAME_PARTIAL: _Default("0.85", "float", "Timeframe weight — 15m only aligned"),
     ConfigKey.PESO_TIMEFRAME_MINIMAL: _Default("0.70", "float", "Timeframe weight — 5m only aligned"),
     ConfigKey.PESO_REGIME_RANGE: _Default("0.85", "float", "Regime weight — RANGE"),
-    ConfigKey.PESO_REGIME_HIGH_VOL: _Default("0.70", "float", "Regime weight — HIGH_VOLATILITY"),
+    ConfigKey.PESO_REGIME_HIGH_VOL: _Default("0.75", "float", "Regime weight — HIGH_VOLATILITY"),
     ConfigKey.ADJ_VOLUME_BOOST: _Default("0.05", "float", "Confidence boost — volume > ratio×avg"),
     ConfigKey.ADJ_VOLUME_RATIO: _Default("1.5", "float", "Volume ratio to trigger ADJ_VOLUME_BOOST"),
     ConfigKey.ADJ_ANTIPATTERN_PENALTY: _Default("-0.10", "float", "Confidence penalty — anti-pattern present"),

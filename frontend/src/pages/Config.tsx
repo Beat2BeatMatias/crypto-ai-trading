@@ -1,6 +1,24 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { ConfigEntry, ConfigSuggestions } from "../types";
+import type { ConfigEntry } from "../types";
+
+/** Keys that the Supervisor agent can modify automatically via config suggestions. */
+const SUPERVISOR_MANAGED_KEYS = new Set([
+  "atr_timeframe",
+  "sl_atr_multiplier",
+  "sl_atr_max_multiplier",
+  "min_rr_ratio",
+  "decisor_interval_min",
+  "max_position_pct",
+  "conf_threshold_trending_up",
+  "conf_threshold_range",
+  "conf_threshold_high_vol",
+  "min_confluences_buy",
+  "min_fees_to_tp_ratio",
+  "cooldown_after_sell_min",
+  "rsi_overbought_1h",
+  "expected_holding_max_min",
+]);
 
 const ALL_PROVIDERS = [
   "groq-llama-3.3-70b", "groq-compound-beta", "groq-compound-mini",
@@ -61,6 +79,12 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 1.0, max: 4.0, step: 0.1, unit: ":1",
     format: v => v.toFixed(1), parse: parseFloat,
   },
+  default_rr_ratio: {
+    label: "R:R por defecto (Take Profit)",
+    description: "Ratio usado para calcular el nivel de Take Profit cuando el LLM no especifica uno. Ej: 2.0 = TP a 2× el SL.",
+    type: "slider", min: 1.0, max: 5.0, step: 0.1, unit: ":1",
+    format: fmt1, parse: parseFloat,
+  },
   max_position_pct: {
     label: "Tamaño máximo de posición",
     description: "Porcentaje máximo del capital total que puede usarse en una sola entrada.",
@@ -77,6 +101,12 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     label: "Intervalo de decisión",
     description: "Cada cuántos minutos el LLM evalúa si entrar o salir del mercado.",
     type: "slider", min: 5, max: 60, step: 5, unit: "min",
+    format: v => String(v), parse: parseInt,
+  },
+  orderbook_levels: {
+    label: "Niveles del order book",
+    description: "Cantidad de niveles bid/ask incluidos en el contexto enviado al LLM. Más niveles = más contexto, mayor costo de tokens.",
+    type: "slider", min: 5, max: 20, step: 1, unit: "niveles",
     format: v => String(v), parse: parseInt,
   },
   daily_stop_pct: {
@@ -270,6 +300,44 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 2.0, max: 10.0, step: 0.5, unit: "× ask",
     format: fmt1, parse: parseFloat,
   },
+  subjective_adj_max: {
+    label: "Ajuste subjetivo máximo",
+    description: "Límite del ajuste de confianza que el LLM puede aplicar por criterio propio (±). Valor más bajo = mayor control.",
+    type: "slider", min: 0.00, max: 0.20, step: 0.01, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  confluence_weak_factor: {
+    label: "Factor confluencia débil",
+    description: "Multiplicador aplicado a una confluencia débil respecto a una sólida en el cálculo de confianza. 1.0 = igual peso.",
+    type: "slider", min: 0.0, max: 1.0, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+
+  // ── Decisor v2 — controles operacionales ─────────────────────────────────
+  min_fees_to_tp_ratio: {
+    label: "Ratio mínimo TP / fees",
+    description: "El movimiento al TP debe ser al menos este múltiplo del costo de fees ida y vuelta. Filtra trades con TP demasiado pequeño.",
+    type: "slider", min: 1.5, max: 6.0, step: 0.1, unit: "× fees",
+    format: fmt1, parse: parseFloat,
+  },
+  min_confluences_buy: {
+    label: "Confluencias mínimas para BUY",
+    description: "Cantidad mínima de confluencias del playbook requeridas para autorizar una entrada.",
+    type: "slider", min: 1, max: 4, step: 1, unit: "confluencias",
+    format: v => String(v), parse: parseInt,
+  },
+  cooldown_after_sell_min: {
+    label: "Cooldown post-SELL",
+    description: "Minutos de espera obligatoria tras un SELL antes de permitir una nueva entrada BUY.",
+    type: "slider", min: 0, max: 120, step: 5, unit: "min",
+    format: v => String(v), parse: parseInt,
+  },
+  expected_holding_max_min: {
+    label: "Holding máximo esperado",
+    description: "Tiempo máximo en minutos que se espera mantener una posición. Superar este tiempo activa la detección de trade zombie.",
+    type: "slider", min: 30, max: 1440, step: 30, unit: "min",
+    format: v => String(v), parse: parseInt,
+  },
 
   // ── Sizing factors ────────────────────────────────────────────────────────
   factor_conf_60: {
@@ -308,14 +376,14 @@ const GROUPS: { title: string; keys: string[]; color: string }[] = [
   {
     title: "Gestión de riesgo",
     color: "amber",
-    keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "max_position_pct",
-           "max_simultaneous_trades", "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct",
-           "atr_timeframe"],
+    keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
+           "max_position_pct", "max_simultaneous_trades", "daily_stop_pct", "max_drawdown_pct",
+           "max_slippage_pct", "atr_timeframe"],
   },
   {
     title: "Motor de decisiones",
     color: "emerald",
-    keys: ["decisor_interval_min", "kill_switch"],
+    keys: ["decisor_interval_min", "orderbook_levels", "kill_switch"],
   },
   {
     title: "Umbrales de confianza",
@@ -333,7 +401,13 @@ const GROUPS: { title: string; keys: string[]; color: string }[] = [
       "adj_antipattern_penalty",
       "adj_spread_penalty", "adj_spread_threshold_pct",
       "adj_orderbook_penalty", "adj_orderbook_ratio",
+      "subjective_adj_max", "confluence_weak_factor",
     ],
+  },
+  {
+    title: "Decisor v2 — Controles",
+    color: "teal",
+    keys: ["min_fees_to_tp_ratio", "min_confluences_buy", "cooldown_after_sell_min", "expected_holding_max_min"],
   },
   {
     title: "Sizing de posición",
@@ -352,10 +426,40 @@ const GROUPS: { title: string; keys: string[]; color: string }[] = [
   },
 ];
 
-function SliderField({ fieldKey, def, value, onSave }: {
+function SupervisorHint({ entry }: { entry: ConfigEntry | undefined }) {
+  if (!entry) return null;
+  const isManaged = SUPERVISOR_MANAGED_KEYS.has(entry.key);
+  const bySupervisor = entry.last_changed_by === "supervisor";
+  if (!isManaged && !bySupervisor) return null;
+
+  const dateStr = entry.updated_at
+    ? new Date(entry.updated_at).toLocaleString("es-AR", {
+        hour12: false, day: "2-digit", month: "2-digit",
+        year: "numeric", hour: "2-digit", minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <div className="flex items-center gap-2 mt-1.5">
+      {isManaged && (
+        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-950 border border-indigo-800/50 px-1.5 py-0.5 text-[10px] text-indigo-400 font-medium leading-none">
+          ⚡ auto-supervisor
+        </span>
+      )}
+      {bySupervisor && dateStr && (
+        <span className="text-[10px] text-indigo-400/60 leading-none">
+          Modificado por Supervisor · {dateStr}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SliderField({ fieldKey, def, value, entry, onSave }: {
   fieldKey: string;
   def: FieldDef;
   value: string;
+  entry?: ConfigEntry;
   onSave: (key: string, value: string) => void;
 }) {
   const parse = def.parse ?? parseFloat;
@@ -414,14 +518,16 @@ function SliderField({ fieldKey, def, value, onSave }: {
           <span>{fmt(def.max!)}</span>
         </div>
       </div>
+      <SupervisorHint entry={entry} />
     </div>
   );
 }
 
-function ConfigField({ fieldKey, def, value, onSave }: {
+function ConfigField({ fieldKey, def, value, entry, onSave }: {
   fieldKey: string;
   def: FieldDef;
   value: string;
+  entry?: ConfigEntry;
   onSave: (key: string, value: string) => void;
 }) {
   const [local, setLocal] = useState(value);
@@ -430,68 +536,77 @@ function ConfigField({ fieldKey, def, value, onSave }: {
   useEffect(() => { setLocal(value); setDirty(false); }, [value]);
 
   if (def.type === "slider") {
-    return <SliderField fieldKey={fieldKey} def={def} value={value} onSave={onSave} />;
+    return <SliderField fieldKey={fieldKey} def={def} value={value} entry={entry} onSave={onSave} />;
   }
 
   if (def.type === "toggle") {
     const isOn = value === "true";
     return (
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-medium text-sm text-zinc-100">{def.label}</div>
-          <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+      <div>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-medium text-sm text-zinc-100">{def.label}</div>
+            <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+          </div>
+          <button
+            onClick={() => onSave(fieldKey, isOn ? "false" : "true")}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ml-4 shrink-0 ${
+              isOn ? "bg-red-600" : "bg-zinc-700"
+            }`}>
+            <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+              isOn ? "translate-x-6" : "translate-x-1"
+            }`} />
+          </button>
         </div>
-        <button
-          onClick={() => onSave(fieldKey, isOn ? "false" : "true")}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ml-4 shrink-0 ${
-            isOn ? "bg-red-600" : "bg-zinc-700"
-          }`}>
-          <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
-            isOn ? "translate-x-6" : "translate-x-1"
-          }`} />
-        </button>
+        <SupervisorHint entry={entry} />
       </div>
     );
   }
 
   if (def.type === "select") {
     return (
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          <div className="font-medium text-sm text-zinc-100">{def.label}</div>
-          <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+      <div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="font-medium text-sm text-zinc-100">{def.label}</div>
+            <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+          </div>
+          <select
+            className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100 cursor-pointer shrink-0"
+            value={local}
+            onChange={e => { setLocal(e.target.value); onSave(fieldKey, e.target.value); }}>
+            {(SELECT_OPTIONS[fieldKey] ?? []).map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
         </div>
-        <select
-          className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100 cursor-pointer shrink-0"
-          value={local}
-          onChange={e => { setLocal(e.target.value); onSave(fieldKey, e.target.value); }}>
-          {(SELECT_OPTIONS[fieldKey] ?? []).map(opt => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
+        <SupervisorHint entry={entry} />
       </div>
     );
   }
 
   return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex-1">
-        <div className="font-medium text-sm text-zinc-100">{def.label}</div>
-        <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <div className="font-medium text-sm text-zinc-100">{def.label}</div>
+          <div className="text-xs text-zinc-500 mt-0.5">{def.description}</div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <input
+            className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm w-40"
+            value={local}
+            onChange={e => { setLocal(e.target.value); setDirty(e.target.value !== value); }}
+          />
+          {dirty && (
+            <button onClick={() => { onSave(fieldKey, local); setDirty(false); }}
+              className="rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500">
+              Guardar
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <input
-          className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm w-40"
-          value={local}
-          onChange={e => { setLocal(e.target.value); setDirty(e.target.value !== value); }}
-        />
-        {dirty && (
-          <button onClick={() => { onSave(fieldKey, local); setDirty(false); }}
-            className="rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500">
-            Guardar
-          </button>
-        )}
-      </div>
+      <SupervisorHint entry={entry} />
     </div>
   );
 }
@@ -571,6 +686,7 @@ const COLOR_CLASSES: Record<string, { border: string; title: string; dot: string
   emerald: { border: "border-emerald-800/40", title: "text-emerald-300", dot: "bg-emerald-400" },
   sky:     { border: "border-sky-800/40",     title: "text-sky-300",     dot: "bg-sky-400" },
   violet:  { border: "border-violet-800/40",  title: "text-violet-300",  dot: "bg-violet-400" },
+  teal:    { border: "border-teal-800/40",    title: "text-teal-300",    dot: "bg-teal-400" },
   rose:    { border: "border-rose-800/40",    title: "text-rose-300",    dot: "bg-rose-400" },
   indigo:  { border: "border-indigo-800/40",  title: "text-indigo-300",  dot: "bg-indigo-400" },
   zinc:    { border: "border-zinc-700",        title: "text-zinc-300",    dot: "bg-zinc-400" },
@@ -583,16 +699,11 @@ export function Config() {
   const [liveConfirm, setLiveConfirm] = useState("");
   const [msg, setMsg] = useState("");
   const [supRunning, setSupRunning] = useState(false);
-  const [suggestions, setSuggestions] = useState<ConfigSuggestions | null>(null);
-  const [appliedKeys, setAppliedKeys] = useState<Set<string>>(new Set());
 
-  const entryMap = Object.fromEntries(entries.map(e => [e.key, e.value]));
+  const entryMap = Object.fromEntries(entries.map(e => [e.key, e]));
 
   const reload = () => api.config().then(setEntries).catch(() => {});
-  useEffect(() => {
-    reload();
-    api.configSuggestions().then(setSuggestions).catch(() => {});
-  }, []);
+  useEffect(() => { reload(); }, []);
 
   const onSave = async (key: string, valueOverride?: string) => {
     const value = valueOverride ?? edits[key];
@@ -621,14 +732,6 @@ export function Config() {
       setMsg("Supervisor encolado. Se ejecutará en el próximo tick del decisor (máx. 15 min).");
     } catch { setMsg("Error al encolar el supervisor."); }
     setTimeout(() => { setMsg(""); setSupRunning(false); }, 6000);
-  };
-
-  const applySuggestion = async (key: string, value: string | number) => {
-    await api.setConfig(key, String(value));
-    setAppliedKeys(prev => new Set(prev).add(key));
-    reload();
-    setMsg(`Sugerencia aplicada: ${key} = ${value}`);
-    setTimeout(() => setMsg(""), 3000);
   };
 
   const modeEntry = entries.find(e => e.key === "mode");
@@ -664,65 +767,12 @@ export function Config() {
         </button>
       </div>
 
-      {/* Sugerencias del Supervisor */}
-      {suggestions ? (
-        <div className="rounded-xl bg-zinc-900 p-5 border border-indigo-800/40">
-          <div className="flex items-start justify-between mb-3">
-            <div>
-              <h2 className="text-sm font-semibold text-indigo-300 uppercase tracking-wide mb-1">
-                Sugerencias del Supervisor
-              </h2>
-              <p className="text-xs text-zinc-500">
-                Generado {new Date(suggestions.generated_at).toLocaleString("es-AR", { hour12: false })}
-              </p>
-            </div>
-          </div>
-          {suggestions.summary && (
-            <p className="text-sm text-zinc-300 mb-4 leading-relaxed border-l-2 border-indigo-700 pl-3">
-              {suggestions.summary}
-            </p>
-          )}
-          <div className="space-y-2">
-            {suggestions.suggestions.map(s => {
-              const applied = appliedKeys.has(s.key);
-              const unchanged = String(s.current) === String(s.suggested);
-              return (
-                <div key={s.key} className="rounded-lg bg-zinc-800 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-mono text-xs text-zinc-300">{s.key}</span>
-                      <span className="text-zinc-600 text-xs">{String(s.current)}</span>
-                      {!unchanged && (
-                        <><span className="text-zinc-600 text-xs">→</span>
-                        <span className="font-mono text-xs text-indigo-300 font-semibold">{String(s.suggested)}</span></>
-                      )}
-                      {unchanged && <span className="text-xs text-zinc-600 italic">sin cambio</span>}
-                    </div>
-                    <p className="text-xs text-zinc-500">{s.reason}</p>
-                  </div>
-                  {!unchanged && (
-                    <button onClick={() => applySuggestion(s.key, s.suggested)} disabled={applied}
-                      className="shrink-0 rounded px-3 py-1 text-xs font-semibold bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 transition-colors">
-                      {applied ? "✓ Aplicado" : "Aplicar"}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl bg-zinc-900 p-4 border border-zinc-800 text-xs text-zinc-500">
-          Sin sugerencias aún — el Supervisor las genera automáticamente al analizar el histórico de trades (mínimo 5 trades cerrados).
-        </div>
-      )}
-
       {/* Grupos de configuración */}
       {GROUPS.map(group => {
         const c = COLOR_CLASSES[group.color];
         const groupEntries = group.keys
-          .map(k => ({ key: k, value: entryMap[k] }))
-          .filter(e => e.value !== undefined);
+          .map(k => entryMap[k])
+          .filter((e): e is ConfigEntry => e !== undefined);
         if (groupEntries.length === 0) return null;
         return (
           <div key={group.title} className={`rounded-xl bg-zinc-900 p-5 border ${c.border}`}>
@@ -740,6 +790,7 @@ export function Config() {
                       fieldKey={e.key}
                       def={def}
                       value={e.value}
+                      entry={e}
                       onSave={(k, v) => onSave(k, v)}
                     />
                   </div>
@@ -775,8 +826,8 @@ export function Config() {
             <tbody>
               {otherEntries.map(e => (
                 <tr key={e.key} className="border-t border-zinc-800">
-                  <td className="py-2 pr-4 font-mono text-zinc-400 text-xs">{e.key}</td>
-                  <td className="pr-4">
+                  <td className="py-2 pr-4 font-mono text-zinc-400 text-xs align-top pt-3">{e.key}</td>
+                  <td className="pr-4 align-top pt-2">
                     {SELECT_OPTIONS[e.key] ? (
                       <select
                         className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100"
@@ -791,8 +842,9 @@ export function Config() {
                         onChange={ev => setEdits(p => ({ ...p, [e.key]: ev.target.value }))}
                       />
                     )}
+                    <SupervisorHint entry={e} />
                   </td>
-                  <td>
+                  <td className="align-top pt-2">
                     {edits[e.key] !== undefined && edits[e.key] !== e.value && (
                       <button onClick={() => onSave(e.key)}
                         className="rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500">

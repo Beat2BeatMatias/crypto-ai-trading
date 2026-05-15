@@ -22,7 +22,7 @@ class DecisorOutput(BaseModel):
     confluences: list[str] = Field(default_factory=list, max_length=10)
     action: DecisorAction
     confidence_base: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
-    confidence_adjustment: Annotated[float, Field(ge=-0.20, le=0.20)] = 0.0
+    confidence_adjustment: Annotated[float, Field(ge=-0.10, le=0.10)] = 0.0
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
     stop_loss: float | None
     take_profit: float | None

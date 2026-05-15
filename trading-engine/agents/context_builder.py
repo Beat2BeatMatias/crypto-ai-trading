@@ -1,10 +1,10 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import Indicators, Position, Decision
+from shared.db.models import Indicators, Position, Decision, Trade
 from collectors.orderbook_collector import OrderBookSnapshot
 
 
@@ -34,6 +34,14 @@ class ContextBuilder:
         last_decisions = (await self.session.execute(
             select(Decision).where(Decision.agent == "decisor")
             .order_by(desc(Decision.ts)).limit(3)
+        )).scalars().all()
+
+        today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+        trades_today = (await self.session.execute(
+            select(Trade).where(
+                Trade.ts_close >= today_start,
+                Trade.status == "closed",
+            )
         )).scalars().all()
 
         price = self._get(ind, "1h", "last_close") or self._get(ind, "5m", "last_close") or 0.0
@@ -139,9 +147,15 @@ class ContextBuilder:
             "ask_wall_dist": orderbook.ask_wall_distance_pct if orderbook else 0,
             "open_positions_count": len(open_positions),
             "positions_block": self._format_positions(open_positions),
-            "pnl_today_usd": 0.0, "pnl_today_pct": 0.0,
+            "pnl_today_usd": sum(float(t.pnl_usdt or 0) for t in trades_today),
+            "pnl_today_pct": (
+                sum(float(t.pnl_usdt or 0) for t in trades_today)
+                / max(usdt_balance + btc_held * price, 1.0) * 100
+            ),
             "unrealized_pnl_usd": sum(float(p.unrealized_pnl or 0) for p in open_positions),
-            "trades_today_count": 0, "wins_today": 0, "losses_today": 0,
+            "trades_today_count": len(trades_today),
+            "wins_today": sum(1 for t in trades_today if (t.pnl_usdt or 0) > 0),
+            "losses_today": sum(1 for t in trades_today if (t.pnl_usdt or 0) < 0),
             "daily_margin_pct": daily_stop_pct * 100,
             "last_decisions_block": self._format_last_decisions(last_decisions),
             "last_action": last_decisions[0].output.get("action") if last_decisions else "n/a",
@@ -162,6 +176,7 @@ class ContextBuilder:
             "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
             "expected_holding_max_min": cal.get("expected_holding_max_min", 240),
             "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
+            "adj_spread_threshold_pct": cal.get("adj_spread_threshold_pct", 0.05),
         }
         # Merge calibration values so all {variable} references in the prompt resolve correctly.
         if cal:

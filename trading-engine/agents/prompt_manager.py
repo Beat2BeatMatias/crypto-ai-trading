@@ -42,10 +42,63 @@ class PromptManager:
             select(PlaybookVersion).where(PlaybookVersion.active.is_(True))
         )).scalar_one_or_none()
 
+    _REQUIRED_HEADERS = [
+        "## Métricas del período",
+        "## Setups que funcionaron",
+        "## Patrones a evitar",
+        "## Contexto de mercado actual",
+        "## Régimen esperado próximas 24h",
+        "## Reglas específicas",
+        "## Cambios vs playbook anterior",
+        "## Limitaciones del análisis",
+    ]
+    _VALID_REGIMES = {
+        "TRENDING_UP", "TRENDING_DOWN", "RANGE", "HIGH_VOLATILITY", "NEUTRAL",
+    }
+
+    @classmethod
+    def validate_playbook_markdown(cls, content: str) -> list[str]:
+        """Returns a list of validation errors. Empty list means the playbook is valid."""
+        errors: list[str] = []
+        for header in cls._REQUIRED_HEADERS:
+            if header not in content:
+                errors.append(f"Sección faltante: '{header}'")
+
+        # Check Régimen esperado value — toma solo el primer token alfa para tolerar
+        # texto adicional del LLM (ej.: "TRENDING_UP — confirmado por EMA alineadas")
+        regime_header = "## Régimen esperado próximas 24h"
+        if regime_header in content:
+            after = content.split(regime_header, 1)[1].strip()
+            first_line = after.split("\n")[0].strip()
+            # Extraer el primer token alfanumérico (acepta guion bajo) en la línea
+            import re as _re
+            token_match = _re.match(r"([A-Z_]+)", first_line)
+            regime_value = token_match.group(1) if token_match else first_line
+            if regime_value not in cls._VALID_REGIMES:
+                errors.append(
+                    f"Valor inválido en '{regime_header}': '{regime_value}'. "
+                    f"Esperado uno de: {', '.join(sorted(cls._VALID_REGIMES))}"
+                )
+
+        if not content.strip().startswith("# Playbook"):
+            errors.append("El playbook no comienza con '# Playbook'")
+
+        return errors
+
     async def save_playbook(self, *, content: str, model: str, trades_analyzed: int,
                              win_rate: float, pnl_summary: dict[str, Any] | None = None) -> PlaybookVersion:
         if self.session is None:
             raise RuntimeError("session required")
+
+        validation_errors = self.validate_playbook_markdown(content)
+        if validation_errors:
+            import structlog
+            structlog.get_logger().warning(
+                "supervisor.playbook_validation_failed",
+                errors=validation_errors,
+                model=model,
+            )
+
         latest = (await self.session.execute(
             select(PlaybookVersion).order_by(PlaybookVersion.version.desc()).limit(1)
         )).scalar_one_or_none()
@@ -53,9 +106,12 @@ class PromptManager:
         await self.session.execute(
             update(PlaybookVersion).where(PlaybookVersion.active.is_(True)).values(active=False)
         )
+        summary = pnl_summary or {}
+        if validation_errors:
+            summary = {**summary, "validation_errors": validation_errors}
         new = PlaybookVersion(version=next_version, content=content, model=model,
                                trades_analyzed=trades_analyzed, win_rate=Decimal(str(win_rate)),
-                               pnl_summary=pnl_summary or {}, active=True)
+                               pnl_summary=summary, active=True)
         self.session.add(new)
         await self.session.commit()
         await self.session.refresh(new)

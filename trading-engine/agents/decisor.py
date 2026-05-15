@@ -16,6 +16,15 @@ from collectors.orderbook_collector import OrderBookSnapshot
 
 logger = structlog.get_logger()
 
+_VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
+
+
+def _validate_confluence_codes(confluences: list[str]) -> None:
+    invalid = [c for c in confluences if c not in _VALID_CONFLUENCE_CODES]
+    if invalid:
+        logger.warning("decisor.invalid_confluence_codes", invalid=invalid,
+                       valid=sorted(_VALID_CONFLUENCE_CODES))
+
 
 class Decisor:
     def __init__(self, *, session: AsyncSession, llm: LLMClient, symbol: str,
@@ -73,6 +82,7 @@ class Decisor:
                     raw = raw[4:]
             parsed = json.loads(raw.strip())
             validated = DecisorOutput.model_validate(parsed)
+            _validate_confluence_codes(validated.confluences)
             validated = _apply_deterministic_overrides(validated, max_position_pct, calibration)
             output_dict = validated.model_dump()
             rejected_reason = None
@@ -114,56 +124,33 @@ def _hold_decision(reason: str) -> DecisorOutput:
     )
 
 
-def _resolve_threshold(regime: MarketRegime, cal: dict) -> float:
-    if regime == MarketRegime.TRENDING_UP:
-        return cal.get("conf_threshold_trending_up", 0.60)
-    if regime == MarketRegime.RANGE:
-        return cal.get("conf_threshold_range", 0.70)
-    if regime == MarketRegime.HIGH_VOLATILITY:
-        return cal.get("conf_threshold_high_vol", 0.80)
-    return 1.01  # TRENDING_DOWN: never allow BUY
-
-
-def _factor_conf(confidence: float, cal: dict) -> float:
-    if confidence >= 0.90: return cal.get("factor_conf_90", 1.00)
-    if confidence >= 0.80: return cal.get("factor_conf_80", 0.85)
-    if confidence >= 0.70: return cal.get("factor_conf_70", 0.70)
-    if confidence >= 0.60: return cal.get("factor_conf_60", 0.50)
-    return 0.0
-
-
-def _factor_regime(regime: MarketRegime, cal: dict) -> float:
-    return 1.00 if regime == MarketRegime.TRENDING_UP else cal.get("factor_regime_non_trending", 0.50)
-
-
 def _apply_deterministic_overrides(validated: DecisorOutput, max_position_pct: float,
                                    calibration: dict | None = None) -> DecisorOutput:
-    """Enforce regime-specific confidence threshold and deterministic position sizing.
+    """Enforce C3 confidence threshold and step-function position sizing.
 
-    The LLM is instructed in the system prompt to compute these the same way, but we
-    re-apply them here so the runtime behavior cannot diverge from the documented rules.
-    All thresholds and factors come from calibration (config) — no hardcoded values.
+    Threshold: flat 0.60 for all regimes (TRENDING_DOWN always → HOLD).
+    Sizing:    confidence >= 0.70 → min(max_position_pct, 0.25) — cap spec §3
+               confidence 0.60-0.69 → 0.03 (reduced size)
+    The LLM is instructed to apply the same rules; this layer ensures the runtime
+    behavior cannot diverge regardless of LLM output.
     """
     if validated.action != DecisorAction.BUY:
         return validated
 
-    cal = calibration or {}
-    threshold = _resolve_threshold(validated.regime, cal)
-    if validated.confidence < threshold:
+    if validated.regime == MarketRegime.TRENDING_DOWN or validated.confidence < 0.60:
         logger.info("decisor.override_below_threshold",
-                    regime=validated.regime.value, confidence=validated.confidence,
-                    threshold=threshold)
+                    regime=validated.regime.value, confidence=validated.confidence)
         return validated.model_copy(update={
             "action": DecisorAction.HOLD,
             "stop_loss": None,
             "take_profit": None,
             "position_size_pct": 0.0,
-            "reasoning": f"[override] confidence {validated.confidence:.2f} < umbral "
-                         f"{threshold:.2f} en {validated.regime.value} → HOLD forzado.",
+            "reasoning": f"[override] confidence {validated.confidence:.2f} < 0.60 "
+                         f"en {validated.regime.value} → HOLD forzado.",
         })
 
-    new_size = round(max_position_pct * _factor_conf(validated.confidence, cal) *
-                     _factor_regime(validated.regime, cal), 4)
+    full_size = min(max_position_pct, 0.25)
+    new_size = round(full_size if validated.confidence >= 0.70 else 0.03, 4)
     new_size = max(0.01, new_size)
     if abs(new_size - validated.position_size_pct) > 1e-6:
         logger.info("decisor.override_size",

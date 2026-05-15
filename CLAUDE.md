@@ -58,3 +58,22 @@ The engine writes everything (decisions, trades, ohlcv, indicators, positions, p
 - Spanish UI text (es-AR locale).
 - Logging via `structlog`, JSON output.
 - Tests use pytest + pytest-asyncio + freezegun (deterministic time).
+
+## Meli SDD Kit
+
+This project uses **Meli SDD Kit** for spec-driven development.
+
+### Spec Language
+All specifications MUST be written in **Spanish (Español)** (`es`).
+Do not mix languages in specs. Technical terms (API, REST, CRUD, OHLCV, etc.) stay in English.
+
+### Quick Reference
+- Framework expert: `Skill("meli-sdd-kit-expert")`
+- Workflow: `/meli.start` → `/meli.spec` → `/meli.plan` → `/meli.build` → `/meli.finish`
+- Project conventions: `meli/PROJECT.md`
+- Discovered patterns: `meli/PATTERNS.md`
+
+### Rules
+- Never create files under `meli/specs/`, `meli/wip/`, or `meli/features/` manually
+- Always go through the `/meli.start` workflow
+- Respect the phased workflow — don't skip phases

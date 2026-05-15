@@ -61,7 +61,7 @@ _decisions_table = Table(
     Column("rejected_reason", String(200)),
 )
 
-# Trades table stub — Decision has an FK to it but we won't use it in these tests.
+# Trades table stub — mantener en sync con migrations 001 + 002.
 _trades_table = Table(
     "trades", _sqlite_metadata,
     Column("id", String(36), primary_key=True),
@@ -81,6 +81,7 @@ _trades_table = Table(
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
+    Column("close_requested", Boolean, default=False),  # migration 002
 )
 
 

@@ -1,28 +1,49 @@
-{mode_header}=== REVISION DIARIA — {date} UTC ===
+{mode_header}=== REVISIÓN DIARIA — {date} UTC ===
 
-METRICAS (ultimas 24h):
+CABECERA REQUERIDA (copiá esta línea exacta al inicio del playbook):
+# Playbook v{new_version} — {date} UTC
+
+MÍNIMO DE TRADES PARA MODO NORMAL: {min_trades}
+
+PERFIL OPERATIVO: {operative_profile} | Intervalo: {decisor_interval_min_cfg}m | ATR ref: {atr_timeframe_cfg} | Holding máx: {expected_holding_max_min}min
+Fee round-trip: {roundtrip_fee_pct:.4f}% | Kill switch: {kill_switch_status}
+
+MÉTRICAS (últimas 24h):
   Decisiones: {total_decisions} (BUY {buy_count}, SELL {sell_count}, HOLD {hold_count})
-  Rechazadas: {rejected_count}
+  Rechazadas por Risk Gate: {rejected_count}
   Trades cerrados: {closed_trades}
-  Win rate: {win_rate:.1f}%
-  Profit factor: {profit_factor:.2f}
-  Avg win: ${avg_win:+,.2f} ({avg_win_pct:+.3f}%)
-  Avg loss: ${avg_loss:+,.2f} ({avg_loss_pct:+.3f}%)
-  P&L total: ${total_pnl:+,.2f}
+  Win rate: {win_rate:.1f}% | Profit factor: {profit_factor:.2f} | Sharpe período: {sharpe_period:.2f}
+  Avg win: ${avg_win:+,.2f} ({avg_win_pct:+.3f}%) | Avg loss: ${avg_loss:+,.2f} ({avg_loss_pct:+.3f}%)
+  P&L total: ${total_pnl:+,.2f} | Max DD período: ${max_dd_usdt:+,.2f}
   Holding promedio: {avg_holding_min} min
+
+DISTRIBUCIÓN POR RÉGIMEN:
+{regime_distribution_block}
+
+HISTOGRAMA DE CONFIANZA:
+  Alta (≥0.70): {conf_high} | Media (0.60-0.69): {conf_mid} | Baja (<0.60): {conf_low}
 
 CIERRE DE TRADES:
   SL tocado: {sl_hits} | TP alcanzado: {tp_hits} | Cierre manual: {manual_closes}
+
+RECHAZOS DEL RISK GATE (por regla):
+{rejection_breakdown_block}
 
 MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%)
   Rango 24h: ${low_24h:,.0f} - ${high_24h:,.0f}
   ATR(1h) avg: ${atr_avg:,.0f} ({atr_pct:.2f}%) | Volatilidad: {vol_label}
 
-DECISIONES Y OUTCOMES (ultimas {decisions_sample_count} de {total_decisions}):
+CAMBIOS DE CONFIGURACIÓN (últimas 24h):
+{config_changes_block}
+
+ESTADO VS GATE LIVE (últimos 7 días):
+{weekly_gate_block}
+
+DECISIONES Y OUTCOMES (últimas {decisions_sample_count} de {total_decisions}):
 {decisions_dump}
 
 PLAYBOOK ANTERIOR (v{previous_version}):
 {previous_playbook}
 
-=== Genera el nuevo playbook v{new_version}. ===
+=== Generá el nuevo playbook v{new_version} comenzando con la CABECERA REQUERIDA. ===

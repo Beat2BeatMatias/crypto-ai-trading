@@ -24,6 +24,48 @@ from scheduler import EngineScheduler
 logger = structlog.get_logger()
 
 
+async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, float]:
+    """Calcula daily_pnl y total_drawdown reales para las reglas R9 y drawdown del Risk Gate.
+
+    Returns:
+        daily_pnl_frac: P&L de trades cerrados hoy como fracción (ej. -0.03 = -3%).
+        total_drawdown_frac: drawdown desde el pico histórico de balance (negativo o cero).
+    """
+    from datetime import date, datetime, timezone
+    from sqlalchemy import select
+    from shared.db.models import Trade as _Trade, BalanceSnapshot as _BalSnap
+
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    trades_today = (await session.execute(
+        select(_Trade).where(
+            _Trade.ts_close >= today_start,
+            _Trade.status == "closed",
+        )
+    )).scalars().all()
+
+    daily_pnl_usdt = sum(float(t.pnl_usdt or 0) for t in trades_today)
+
+    # Capital de referencia: último snapshot antes de medianoche UTC; si no existe, capital actual.
+    start_snap = (await session.execute(
+        select(_BalSnap)
+        .where(_BalSnap.ts < today_start)
+        .order_by(_BalSnap.ts.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    ref_capital = float(start_snap.usdt) if start_snap else max(usdt_balance, 1.0)
+    daily_pnl_frac = daily_pnl_usdt / ref_capital if ref_capital > 0 else 0.0
+
+    # Drawdown total: balance actual vs pico histórico en balance_snapshots.
+    peak_row = (await session.execute(
+        select(_BalSnap.usdt).order_by(_BalSnap.usdt.desc()).limit(1)
+    )).scalar_one_or_none()
+    peak = float(peak_row) if peak_row else usdt_balance
+    total_drawdown_frac = (usdt_balance - peak) / peak if peak > 0 else 0.0
+
+    return daily_pnl_frac, total_drawdown_frac
+
+
 def _parse_providers(csv: str) -> list[LLMProvider]:
     """Parsea CSV de provider IDs, ignorando valores inválidos."""
     result = []
@@ -164,6 +206,8 @@ async def run() -> None:
                 )).scalars().all()
                 btc = sum(float(p.quantity_btc) for p in _open)
 
+            daily_pnl_frac, total_drawdown_frac = await _compute_risk_metrics(s, usdt)
+
             decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
                               provider=decisor_provider, fallbacks=fallbacks)
             ob_snap = orderbook.snapshot(levels=10)
@@ -175,6 +219,7 @@ async def run() -> None:
                     mode=mode, taker_fee=fees.taker, maker_fee=fees.maker,
                     atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
                     sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
+                    current_drawdown_pct=total_drawdown_frac * 100,
                 )
                 cb.record_llm_success()
             except Exception as e:
@@ -212,8 +257,8 @@ async def run() -> None:
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_ref=atr,
-                open_positions_count=open_count, daily_pnl_pct=0.0,
-                total_drawdown_pct=0.0, kill_switch=kill,
+                open_positions_count=open_count, daily_pnl_pct=daily_pnl_frac,
+                total_drawdown_pct=total_drawdown_frac, kill_switch=kill,
                 usdt_balance=usdt, btc_held=btc,
                 roundtrip_fee_pct=fees.taker * 2 * 100,
                 min_fees_to_tp_ratio=float(calibration.get("min_fees_to_tp_ratio", 3.0)),
@@ -268,6 +313,7 @@ async def run() -> None:
                 "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
                 "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
                 "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
+                "expected_holding_max_min": await store.get_typed(ConfigKey.EXPECTED_HOLDING_MAX_MIN),
             }
             sup = Supervisor(session=s, llm=llm, symbol=settings.symbol,
                              provider=sup_provider, fallbacks=sup_fallbacks)
