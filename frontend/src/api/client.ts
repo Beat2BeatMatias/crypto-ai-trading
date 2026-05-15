@@ -51,6 +51,7 @@ export const api = {
   setConfig: (key: string, value: string) => put(`/config/${key}`, { value }),
   killSwitch: (enabled: boolean) => post("/kill-switch", { enabled }),
   runSupervisor: () => post("/supervisor/run", {}),
+  resetDrawdown: () => post<{ ok: boolean; reset_at: string }>("/drawdown/reset", {}),
   setMode: (mode: "PAPER_TRADING" | "LIVE", confirmation: string) =>
     post("/mode", { mode, confirmation }),
   playbookActive: () => get<Playbook | null>("/playbook/active"),

@@ -697,6 +697,8 @@ export function Config() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [liveModal, setLiveModal] = useState(false);
   const [liveConfirm, setLiveConfirm] = useState("");
+  const [drawdownResetModal, setDrawdownResetModal] = useState(false);
+  const [drawdownResetting, setDrawdownResetting] = useState(false);
   const [msg, setMsg] = useState("");
   const [supRunning, setSupRunning] = useState(false);
 
@@ -734,6 +736,16 @@ export function Config() {
     setTimeout(() => { setMsg(""); setSupRunning(false); }, 6000);
   };
 
+  const onResetDrawdown = async () => {
+    setDrawdownResetting(true);
+    try {
+      const res = await api.resetDrawdown();
+      setDrawdownResetModal(false);
+      setMsg(`Pico de drawdown reseteado. El engine medirá desde ${new Date(res.reset_at).toLocaleString("es-AR", { hour12: false })}.`);
+    } catch { setMsg("Error al resetear el drawdown."); }
+    setTimeout(() => { setMsg(""); setDrawdownResetting(false); }, 6000);
+  };
+
   const modeEntry = entries.find(e => e.key === "mode");
   const fallbackDecissor = entries.find(e => e.key === "fallback_providers");
   const fallbackSupervisor = entries.find(e => e.key === "supervisor_fallback_providers");
@@ -742,6 +754,11 @@ export function Config() {
     ...GROUPS.flatMap(g => g.keys),
     ...Array.from(FALLBACK_KEYS),
     "mode",
+    // keys internas / legacy — no se exponen en el UI
+    "drawdown_reset_ts",
+    "supervisor_run_now",
+    "pending_execute",
+    "fallback_provider",
   ]);
   const otherEntries = entries.filter(e => !knownKeys.has(e.key));
 
@@ -764,6 +781,10 @@ export function Config() {
         <button onClick={onRunSupervisor} disabled={supRunning}
           className="rounded bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">
           {supRunning ? "Encolando..." : "Ejecutar Supervisor ahora"}
+        </button>
+        <button onClick={() => setDrawdownResetModal(true)}
+          className="rounded bg-amber-700 px-4 py-2 text-sm font-semibold hover:bg-amber-600">
+          Resetear pico de drawdown
         </button>
       </div>
 
@@ -856,6 +877,35 @@ export function Config() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal Reset Drawdown */}
+      {drawdownResetModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="rounded-xl bg-zinc-900 border border-amber-700/50 p-6 max-w-sm w-full">
+            <h3 className="text-lg font-semibold mb-2 text-amber-300">⚠️ Resetear pico de drawdown</h3>
+            <p className="text-sm text-zinc-300 mb-4">
+              El engine dejará de considerar el historial anterior como referencia del pico máximo.
+              A partir del próximo tick, el drawdown se medirá desde el balance actual.
+            </p>
+            <p className="text-xs text-zinc-500 mb-4">
+              No se eliminan datos. El historial queda intacto y el reset puede rehacerse en cualquier momento.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setDrawdownResetModal(false)}
+                className="rounded bg-zinc-700 px-4 py-2 text-sm hover:bg-zinc-600">
+                Cancelar
+              </button>
+              <button
+                onClick={onResetDrawdown}
+                disabled={drawdownResetting}
+                className="rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500 disabled:opacity-50">
+                {drawdownResetting ? "Reseteando..." : "Confirmar reset"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

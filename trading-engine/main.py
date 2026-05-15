@@ -29,11 +29,14 @@ async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, fl
 
     Returns:
         daily_pnl_frac: P&L de trades cerrados hoy como fracción (ej. -0.03 = -3%).
-        total_drawdown_frac: drawdown desde el pico histórico de balance (negativo o cero).
+        total_drawdown_frac: drawdown desde el pico de balance (negativo o cero).
+                             Si drawdown_reset_ts está configurado, el pico se calcula
+                             solo desde esa fecha en adelante.
     """
     from datetime import date, datetime, timezone
     from sqlalchemy import select
     from shared.db.models import Trade as _Trade, BalanceSnapshot as _BalSnap
+    from shared.config_store import ConfigStore, ConfigKey
 
     today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
 
@@ -56,9 +59,19 @@ async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, fl
     ref_capital = float(start_snap.usdt) if start_snap else max(usdt_balance, 1.0)
     daily_pnl_frac = daily_pnl_usdt / ref_capital if ref_capital > 0 else 0.0
 
-    # Drawdown total: balance actual vs pico histórico en balance_snapshots.
+    # Drawdown total: balance actual vs pico de balance_snapshots.
+    # Si drawdown_reset_ts está configurado, solo se considera historia posterior a esa fecha.
+    peak_query = select(_BalSnap.usdt)
+    try:
+        store = ConfigStore(session)
+        reset_ts_str = await store.get(ConfigKey.DRAWDOWN_RESET_TS)
+        if reset_ts_str:
+            reset_ts = datetime.fromisoformat(reset_ts_str)
+            peak_query = peak_query.where(_BalSnap.ts >= reset_ts)
+    except (KeyError, ValueError):
+        pass
     peak_row = (await session.execute(
-        select(_BalSnap.usdt).order_by(_BalSnap.usdt.desc()).limit(1)
+        peak_query.order_by(_BalSnap.usdt.desc()).limit(1)
     )).scalar_one_or_none()
     peak = float(peak_row) if peak_row else usdt_balance
     total_drawdown_frac = (usdt_balance - peak) / peak if peak > 0 else 0.0

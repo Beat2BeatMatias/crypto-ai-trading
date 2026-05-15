@@ -77,6 +77,7 @@ class ConfigKey(str, Enum):
     SUBJECTIVE_ADJ_MAX = "subjective_adj_max"
     EXPECTED_HOLDING_MAX_MIN = "expected_holding_max_min"
     CONFLUENCE_WEAK_FACTOR = "confluence_weak_factor"
+    DRAWDOWN_RESET_TS = "drawdown_reset_ts"
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,10 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.CONFLUENCE_WEAK_FACTOR: _Default(
         "0.5", "float",
         "Multiplier applied to a weak confluence vs a solid one in confidence calc. Range 0.0–1.0.",
+    ),
+    ConfigKey.DRAWDOWN_RESET_TS: _Default(
+        "", "string",
+        "ISO UTC timestamp of last drawdown peak reset. Empty = use full history.",
     ),
 }
 
