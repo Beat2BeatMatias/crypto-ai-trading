@@ -10,21 +10,25 @@ INDICADORES TECNICOS
   1h:  RSI {rsi_1h:.0f} | MACD {macd_1h:+.1f}/{sig_1h:+.1f}
        EMA20 {ema20_1h:,.0f} EMA50 {ema50_1h:,.0f} EMA200 {ema200_1h:,.0f}
   4h:  RSI {rsi_4h:.0f} | EMA20 {ema20_4h:,.0f} EMA50 {ema50_4h:,.0f}
-  ATR(1h): ${atr_1h:.0f} ({atr_pct_1h:.2f}%)
+  ATR({atr_timeframe}) [referencia SL/TP]: ${atr_ref:.0f} ({atr_ref_pct:.2f}%) | avg 7d: ${atr_avg_7d:.0f} | expanding={atr_expanding}
+
+VOLUMEN ({atr_timeframe})
+  Vela actual: {volume_current:.3f} BTC | Promedio 20 velas: {volume_avg20:.3f} BTC | Ratio: {volume_ratio:.2f}x
 
 ORDER BOOK
   Spread: ${spread:.2f} ({spread_pct:.4f}%)
   Imbalance: {imbalance:.2f} ({imbalance_label})
-  Bid wall: ${bid_wall_price:,.0f} ({bid_wall_size:.1f} BTC)
-  Ask wall: ${ask_wall_price:,.0f} ({ask_wall_size:.1f} BTC)
+  Bid wall: ${bid_wall_price:,.0f} ({bid_wall_size:.1f} BTC) | Distancia: {bid_wall_dist_pct:+.2f}%
+  Ask wall: ${ask_wall_price:,.0f} ({ask_wall_size:.1f} BTC) | Distancia: {ask_wall_dist_pct:+.2f}%
 
-POSICIONES ({open_positions_count}/{max_simultaneous_trades})
+POSICIONES ABIERTAS: {open_positions_count} | LIMITE DEL SISTEMA: {max_simultaneous_trades}
 {positions_block}
 
 BALANCE
   USDT: ${usdt_available:,.2f} | BTC: {btc_held:.6f}
 
 P&L HOY: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%) | Stop en: {daily_stop_pct}%
+Drawdown actual: {current_drawdown_pct:+.2f}%
 
 ULTIMAS DECISIONES
 {last_decisions_block}

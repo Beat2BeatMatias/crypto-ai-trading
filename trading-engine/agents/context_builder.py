@@ -14,11 +14,14 @@ class ContextBuilder:
         self.symbol = symbol
 
     async def build(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
-                    btc_held: float, playbook_content: str, max_simultaneous_trades: int,
-                    daily_stop_pct: float, decisor_interval_min: int, mode: str,
+                    btc_held: float, playbook_content: str, max_position_pct: float = 0.10,
+                    max_simultaneous_trades: int, daily_stop_pct: float,
+                    decisor_interval_min: int, mode: str,
                     taker_fee_pct: float, maker_fee_pct: float,
                     atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
-                    sl_atr_multiplier: float = 0.3) -> dict[str, Any]:
+                    sl_atr_multiplier: float = 0.3,
+                    calibration: dict | None = None,
+                    current_drawdown_pct: float = 0.0) -> dict[str, Any]:
         ind_row = (await self.session.execute(
             select(Indicators).order_by(desc(Indicators.time)).limit(1)
         )).scalar_one_or_none()
@@ -35,14 +38,43 @@ class ContextBuilder:
 
         price = self._get(ind, "1h", "last_close") or self._get(ind, "5m", "last_close") or 0.0
         roundtrip_fee_pct = taker_fee_pct * 2
+        cal = calibration or {}
+        sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
 
-        return {
+        # ATR 7-day average: query historical rows for the configured timeframe.
+        _tf_rows_per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}
+        hist_limit = _tf_rows_per_day.get(atr_timeframe, 96) * 7
+        hist_rows = (await self.session.execute(
+            select(Indicators).order_by(desc(Indicators.time)).limit(hist_limit)
+        )).scalars().all()
+        atr_hist_values = [
+            float((row.data.get(atr_timeframe, {}) or {}).get("atr") or 0)
+            for row in hist_rows
+            if (row.data.get(atr_timeframe, {}) or {}).get("atr")
+        ]
+        atr_ref_val = float(self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0)
+        atr_avg_7d_val = sum(atr_hist_values) / len(atr_hist_values) if atr_hist_values else atr_ref_val
+        atr_expanding = atr_ref_val > atr_avg_7d_val * 1.1 if atr_avg_7d_val > 0 else False
+
+        vol_tf = self._get(ind, atr_timeframe, "volume_current")
+        vol_avg = self._get(ind, atr_timeframe, "volume_avg_20")
+        volume_ratio = (vol_tf / vol_avg) if (vol_tf and vol_avg and vol_avg > 0) else 0.0
+        bid_wall_dist_pct = (
+            (orderbook.bid_wall_price - price) / price * 100
+            if orderbook and price > 0 else 0.0
+        )
+        ask_wall_dist_pct = (
+            (orderbook.ask_wall_price - price) / price * 100
+            if orderbook and price > 0 else 0.0
+        )
+
+        ctx = {
             "timestamp_utc": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "mode": mode,
             "decisor_interval_min": decisor_interval_min,
             "max_simultaneous_trades": max_simultaneous_trades,
             "daily_stop_pct": daily_stop_pct * 100,
-            "max_position_pct": 0.10,
+            "max_position_pct": max_position_pct,
             "playbook": playbook_content,
             "taker_fee_pct": taker_fee_pct * 100,
             "maker_fee_pct": maker_fee_pct * 100,
@@ -76,11 +108,13 @@ class ContextBuilder:
             "ema200_4h": self._get(ind, "4h", "ema200") or 0,
             "atr_1h": self._get(ind, "1h", "atr") or 0,
             "atr_pct_1h": ((self._get(ind, "1h", "atr") or 0) / price * 100) if price else 0,
-            "atr_avg_7d": self._get(ind, "1h", "atr") or 0,
+            "atr_avg_7d": atr_avg_7d_val,
+            "atr_expanding": atr_expanding,
             "atr_ref": self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0,
             "atr_ref_tf": atr_timeframe,
             "atr_ref_pct": ((self._get(ind, atr_timeframe, "atr") or 0) / price * 100) if price else 0,
-            "atr_ref_min": (self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_multiplier,
+            "atr_ref_min": round((self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_multiplier),
+            "atr_ref_max": round((self._get(ind, atr_timeframe, "atr") or self._get(ind, "15m", "atr") or 0) * sl_atr_max),
             "sl_atr_multiplier": sl_atr_multiplier,
             "min_rr_ratio": min_rr_ratio,
             "volatility_label": "normal",
@@ -114,7 +148,25 @@ class ContextBuilder:
             "last_confidence": last_decisions[0].output.get("confidence", 0) if last_decisions else 0,
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
             "last_decision_ago": "n/a",
+            "atr_timeframe": atr_timeframe,
+            "sl_atr_max_multiplier": sl_atr_max,
+            "volume_current": vol_tf or 0.0,
+            "volume_avg20": vol_avg or 0.0,
+            "volume_ratio": volume_ratio,
+            "bid_wall_dist_pct": bid_wall_dist_pct,
+            "ask_wall_dist_pct": ask_wall_dist_pct,
+            "current_drawdown_pct": current_drawdown_pct,
+            "min_fees_to_tp_ratio": cal.get("min_fees_to_tp_ratio", 3.0),
+            "min_confluences_buy": cal.get("min_confluences_buy", 2),
+            "cooldown_after_sell_min": cal.get("cooldown_after_sell_min", 15),
+            "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
+            "expected_holding_max_min": cal.get("expected_holding_max_min", 240),
+            "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
         }
+        # Merge calibration values so all {variable} references in the prompt resolve correctly.
+        if cal:
+            ctx.update(cal)
+        return ctx
 
     @staticmethod
     def _get(ind: dict[str, Any], tf: str, key: str) -> Any:
@@ -133,9 +185,14 @@ class ContextBuilder:
     def _format_last_decisions(decisions: list) -> str:
         if not decisions:
             return "  Sin decisiones previas."
-        return "\n".join(
-            f"  [{d.ts.strftime('%H:%M')} UTC] {d.output.get('action','?')} "
-            f"(conf {float(d.output.get('confidence',0)):.2f}): "
-            f"\"{d.output.get('reasoning','')[:100]}\""
-            for d in decisions
-        )
+        lines = []
+        for d in decisions:
+            outcome = (d.outcome or {}).get("close_reason", "")
+            outcome_str = f" [outcome={outcome}]" if outcome else ""
+            lines.append(
+                f"  [{d.ts.strftime('%Y-%m-%dT%H:%M:%SZ')}] "
+                f"action={d.output.get('action','?')} "
+                f"confidence={float(d.output.get('confidence', 0)):.2f}"
+                f"{outcome_str}"
+            )
+        return "\n".join(lines)
