@@ -56,6 +56,7 @@ export const api = {
     playbookHistory: () => get("/playbook/history"),
     playbookActivate: (version) => post(`/playbook/${version}/activate`, {}),
     playbookEditContent: (version, content) => patch(`/playbook/${version}/content`, { content }),
+    supervisorRuns: (limit = 30) => get(`/supervisor/runs?limit=${limit}`),
     dailyStats: () => get("/stats/daily"),
     ohlcv: (timeframe, limit = 300) => get(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
 };

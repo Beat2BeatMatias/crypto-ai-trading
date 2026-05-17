@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { api } from "../api/client";
-import type { Playbook } from "../types";
+import { useWebSocket } from "../hooks/useWebSocket";
+import type { Playbook, SupervisorRun } from "../types";
 
 // ── Diff engine (LCS line-based) ──────────────────────────────────────────────
 
@@ -129,11 +130,122 @@ const mdComponents = {
   hr: () => <hr className="border-zinc-700 my-3" />,
 };
 
+// ── Supervisor Status Bar ─────────────────────────────────────────────────────
+
+function playbookAgeLabel(tsGenerated: string): string {
+  const now = Date.now();
+  const then = new Date(tsGenerated).getTime();
+  const diffDays = Math.floor((now - then) / 86_400_000);
+  if (diffDays === 0) return "hoy";
+  if (diffDays === 1) return "1 día";
+  return `${diffDays} días`;
+}
+
+function SupervisorStatusBar({ active, lastRun }: { active: Playbook | null; lastRun: SupervisorRun | null }) {
+  if (!active) return null;
+  const age = playbookAgeLabel(active.ts_generated);
+  const ratified = lastRun?.ratified ?? null;
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+      <span className="text-zinc-400">
+        <span className="text-zinc-500">Playbook activo: </span>
+        <span className="font-semibold text-zinc-200">v{active.version}</span>
+        <span className="ml-1.5 text-zinc-500">· {age}</span>
+      </span>
+
+      {active.win_rate != null && (
+        <span className="text-zinc-400">
+          <span className="text-zinc-500">WR baseline: </span>
+          <span className={`font-semibold ${active.win_rate >= 50 ? "text-emerald-400" : "text-red-400"}`}>
+            {active.win_rate.toFixed(1)}%
+          </span>
+        </span>
+      )}
+
+      {lastRun && (
+        <span className="flex items-center gap-1.5 ml-auto">
+          <span className="text-zinc-500">Último ciclo supervisor:</span>
+          {ratified ? (
+            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 bg-emerald-900/40 border border-emerald-800/40 text-emerald-400 font-medium">
+              ✓ Ratificado
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 bg-blue-900/40 border border-blue-800/40 text-blue-300 font-medium">
+              ↻ Regenerado
+            </span>
+          )}
+          <span className="text-zinc-600">
+            {new Date(lastRun.ts).toLocaleString("es-AR", { hour12: false, hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Supervisor Timeline ────────────────────────────────────────────────────────
+
+function SupervisorTimeline({ runs }: { runs: SupervisorRun[] }) {
+  if (runs.length === 0) {
+    return <p className="text-xs text-zinc-500 py-2">Sin ejecuciones registradas.</p>;
+  }
+
+  return (
+    <ul className="space-y-1.5 max-h-[320px] overflow-y-auto pr-0.5">
+      {runs.map((r, i) => {
+        const isRatified = r.ratified;
+        const hasForce = !!r.force_regen_reason;
+        const ts = new Date(r.ts).toLocaleString("es-AR", { hour12: false, dateStyle: "short", timeStyle: "short" });
+
+        return (
+          <li key={i} className={`rounded-md border px-2.5 py-2 flex flex-col gap-0.5 text-xs transition-colors ${
+            isRatified
+              ? "border-zinc-700/60 bg-zinc-800/40"
+              : "border-blue-800/40 bg-blue-950/20"
+          }`}>
+            <div className="flex items-center gap-1.5">
+              {isRatified ? (
+                <span className="text-emerald-400 font-medium shrink-0">✓</span>
+              ) : (
+                <span className="text-blue-400 font-medium shrink-0">↻</span>
+              )}
+              <span className="font-medium text-zinc-300">
+                {isRatified ? "Ratificado" : `Regenerado${r.new_version ? ` → v${r.new_version}` : ""}`}
+              </span>
+              {hasForce && (
+                <span className="ml-auto rounded-full px-1.5 py-0.5 bg-amber-900/30 border border-amber-800/30 text-amber-400 text-[10px]">
+                  forzado
+                </span>
+              )}
+              <span className="ml-auto text-zinc-600 tabular-nums shrink-0">{ts}</span>
+            </div>
+
+            {(r.ratify_reason || r.force_regen_reason) && (
+              <p className="text-zinc-500 leading-snug line-clamp-2 mt-0.5 pl-4">
+                {r.force_regen_reason ?? r.ratify_reason}
+              </p>
+            )}
+
+            {r.playbook_age_days != null && (
+              <span className="text-zinc-600 pl-4">
+                edad {r.playbook_age_days}d
+                {r.playbook_win_rate_baseline != null && ` · WR base ${r.playbook_win_rate_baseline.toFixed(1)}%`}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export function PlaybookPage() {
   const [active, setActive] = useState<Playbook | null>(null);
   const [history, setHistory] = useState<Playbook[]>([]);
+  const [supervisorRuns, setSupervisorRuns] = useState<SupervisorRun[]>([]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -141,12 +253,32 @@ export function PlaybookPage() {
   const [diffVersion, setDiffVersion] = useState<Playbook | null>(null);
   const [resetting, setResetting] = useState(false);
 
+  const lastRun = supervisorRuns[0] ?? null;
+
+  const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const { last } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
+
+  useEffect(() => {
+    if (!last) return;
+    if (last.event === "supervisor_ran") {
+      api.supervisorRuns(30).then(setSupervisorRuns).catch(() => {});
+    }
+    if (last.event === "playbook_updated") {
+      api.playbookActive().then((v: Playbook | null) => {
+        setActive(v);
+        if (!editing) setDraft(v?.content ?? "");
+      }).catch(() => {});
+      api.playbookHistory().then(setHistory).catch(() => {});
+    }
+  }, [last]);
+
   const reload = () => {
-    api.playbookActive().then(v => {
+    api.playbookActive().then((v: Playbook | null) => {
       setActive(v);
       if (!editing) setDraft(v?.content ?? "");
     }).catch(() => {});
     api.playbookHistory().then(setHistory).catch(() => {});
+    api.supervisorRuns(30).then(setSupervisorRuns).catch(() => {});
   };
   useEffect(reload, []);
 
@@ -220,6 +352,11 @@ export function PlaybookPage() {
   const showDiff = diffVersion !== null && active !== null;
 
   return (
+    <div className="flex flex-col gap-4">
+
+      {/* ── Barra de estado del supervisor ── */}
+      <SupervisorStatusBar active={active} lastRun={lastRun} />
+
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
       {/* ── Panel principal ── */}
@@ -326,72 +463,84 @@ export function PlaybookPage() {
         )}
       </div>
 
-      {/* ── Historial ── */}
-      <div className="rounded-xl bg-zinc-900 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold">Historial de versiones</h3>
-          {v0 && active && v0.version !== active.version && (
-            <button
-              onClick={onResetToV0}
-              disabled={resetting}
-              title={`Restaurar al playbook original v${v0.version}`}
-              className="text-xs px-2 py-1 rounded bg-amber-900/30 border border-amber-800/40 text-amber-400 hover:bg-amber-900/50 disabled:opacity-40 transition-colors"
-            >
-              {resetting ? "..." : `↺ v${v0.version}`}
-            </button>
-          )}
-        </div>
+      {/* ── Sidebar derecha ── */}
+      <div className="flex flex-col gap-4">
 
-        <ul className="space-y-2">
-          {history.map(v => (
-            <li key={v.id} className={`rounded p-2 border transition-colors ${
-              diffVersion?.id === v.id
-                ? "border-blue-700 bg-blue-900/20"
-                : "border-transparent bg-zinc-800"
-            }`}>
-              <div className="flex items-center justify-between gap-1">
-                <div className="min-w-0">
-                  <div className="text-sm flex items-center gap-1.5">
-                    v{v.version}
-                    {v.active && <span className="text-emerald-400 text-xs">(activa)</span>}
-                    {v.version === v0?.version && !v.active && (
-                      <span className="text-amber-600 text-xs">(original)</span>
+        {/* Historial de versiones */}
+        <div className="rounded-xl bg-zinc-900 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-sm">Historial de versiones</h3>
+            {v0 && active && v0.version !== active.version && (
+              <button
+                onClick={onResetToV0}
+                disabled={resetting}
+                title={`Restaurar al playbook original v${v0.version}`}
+                className="text-xs px-2 py-1 rounded bg-amber-900/30 border border-amber-800/40 text-amber-400 hover:bg-amber-900/50 disabled:opacity-40 transition-colors"
+              >
+                {resetting ? "..." : `↺ v${v0.version}`}
+              </button>
+            )}
+          </div>
+
+          <ul className="space-y-2">
+            {history.map(v => (
+              <li key={v.id} className={`rounded p-2 border transition-colors ${
+                diffVersion?.id === v.id
+                  ? "border-blue-700 bg-blue-900/20"
+                  : "border-transparent bg-zinc-800"
+              }`}>
+                <div className="flex items-center justify-between gap-1">
+                  <div className="min-w-0">
+                    <div className="text-sm flex items-center gap-1.5">
+                      v{v.version}
+                      {v.active && <span className="text-emerald-400 text-xs">(activa)</span>}
+                      {v.version === v0?.version && !v.active && (
+                        <span className="text-amber-600 text-xs">(original)</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-zinc-500 truncate">
+                      {new Date(v.ts_generated).toLocaleString("es-AR", { hour12: false })}
+                      {v.win_rate != null && ` · WR ${v.win_rate.toFixed(1)}%`}
+                      {v.trades_analyzed != null && ` · ${v.trades_analyzed} trades`}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-1 shrink-0">
+                    {active && !v.active && (
+                      <button
+                        onClick={() => toggleDiff(v)}
+                        title="Ver diferencias con la versión activa"
+                        className={`text-xs rounded px-1.5 py-1 transition-colors ${
+                          diffVersion?.id === v.id
+                            ? "bg-blue-800 text-blue-200"
+                            : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"
+                        }`}
+                      >
+                        diff
+                      </button>
+                    )}
+                    {!v.active && (
+                      <button onClick={() => onActivate(v.version)}
+                        className="text-xs rounded bg-zinc-700 px-2 py-1 hover:bg-zinc-600 text-zinc-300">
+                        Activar
+                      </button>
                     )}
                   </div>
-                  <div className="text-xs text-zinc-500 truncate">
-                    {new Date(v.ts_generated).toLocaleString("es-AR", { hour12: false })}
-                    {v.win_rate != null && ` · WR ${v.win_rate.toFixed(1)}%`}
-                    {v.trades_analyzed != null && ` · ${v.trades_analyzed} trades`}
-                  </div>
                 </div>
+              </li>
+            ))}
+            {history.length === 0 && <li className="text-zinc-500 text-sm">Sin versiones aún.</li>}
+          </ul>
+        </div>
 
-                <div className="flex gap-1 shrink-0">
-                  {active && !v.active && (
-                    <button
-                      onClick={() => toggleDiff(v)}
-                      title="Ver diferencias con la versión activa"
-                      className={`text-xs rounded px-1.5 py-1 transition-colors ${
-                        diffVersion?.id === v.id
-                          ? "bg-blue-800 text-blue-200"
-                          : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"
-                      }`}
-                    >
-                      diff
-                    </button>
-                  )}
-                  {!v.active && (
-                    <button onClick={() => onActivate(v.version)}
-                      className="text-xs rounded bg-zinc-700 px-2 py-1 hover:bg-zinc-600 text-zinc-300">
-                      Activar
-                    </button>
-                  )}
-                </div>
-              </div>
-            </li>
-          ))}
-          {history.length === 0 && <li className="text-zinc-500 text-sm">Sin versiones aún.</li>}
-        </ul>
+        {/* Timeline del Supervisor */}
+        <div className="rounded-xl bg-zinc-900 p-5">
+          <h3 className="font-semibold text-sm mb-3">Ciclos del Supervisor</h3>
+          <SupervisorTimeline runs={supervisorRuns} />
+        </div>
+
       </div>
+    </div>
     </div>
   );
 }

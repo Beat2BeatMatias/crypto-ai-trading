@@ -63,6 +63,24 @@ export interface Playbook {
   trades_analyzed: number | null; win_rate: number | null; active: boolean;
 }
 
+/** Ejecución del Supervisor persistida en `decisions` (agent="supervisor"). */
+export interface SupervisorRun {
+  ts: string;
+  ratified: boolean;
+  ratify_reason: string | null;
+  force_regen_reason: string | null;
+  mode: "normal" | "diagnostic" | string;
+  new_version: number | null;
+  playbook_age_days: number | null;
+  playbook_win_rate_baseline: number | null;
+}
+
+/** Payload del evento WebSocket `supervisor_ran`. */
+export interface SupervisorRanEvent {
+  event: "supervisor_ran";
+  data: SupervisorRun;
+}
+
 export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h";
 
 export interface Candle {
