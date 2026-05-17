@@ -130,6 +130,15 @@ export function Trades() {
                 "bg-zinc-800 text-zinc-600"
               }`}>{t.status.toUpperCase()}</span>
 
+              <button
+                type="button"
+                title={`ID: ${t.id}\nClick para copiar`}
+                onClick={() => navigator.clipboard.writeText(t.id)}
+                className="font-mono text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer select-none"
+              >
+                #{t.id.slice(0, 8)}
+              </button>
+
               <span className="text-xs text-zinc-500">
                 {new Date(t.ts_open).toLocaleString("es-AR", { hour12: false })}
               </span>

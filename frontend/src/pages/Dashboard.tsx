@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { PriceChart } from "../components/chart/PriceChart";
 import type { Position, Decision, DailyStats, Balance } from "../types";
 
 interface EngineHealth {
@@ -128,6 +129,8 @@ export function Dashboard() {
           🚨 {killSwitchOn ? "Kill Switch ACTIVO" : "Activar Kill Switch"}
         </button>
       </div>
+
+      <PriceChart />
 
       <div className="grid gap-4 lg:grid-cols-4">
         <Card title="Balance Binance">

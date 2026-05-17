@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.0 — 2026-05-14.
+> Versión: 1.2 — 2026-05-17.
+>
+> Cambios v1.2: se agregó §2.6.bis (Modelo de autonomía y capas de defensa) y §2.7 (Aprendizaje del Supervisor: detalles técnicos). Sin cambios en contratos de API ni en modelo de datos.
 
 ---
 
@@ -176,6 +178,157 @@ Retries normales: `max_retries=3` con backoff `0.5 * 2^attempt`.
 | `fetch_ohlcv` falla | log warning, continúa con datos cacheados. |
 | `fetch_trading_fees` falla | usa último `FeeSnapshot` de BD o (0.001, 0.001). |
 | Orden buy con `filled=0` o `avg_price=0` | `RuntimeError`, `cb.record_exchange_failure()`. |
+
+### 2.6 Formato de `DecisorOutput.reasoning`
+
+El campo `reasoning` (max 1000 chars, truncado silenciosamente a 997 + `"..."`) usa un formato estructurado de **5 secciones etiquetadas** en español, diseñado para ser legible tanto por el operador sin experiencia técnica como por el desarrollador que revisa trazabilidad.
+
+**Estructura:**
+
+```
+[DECISIÓN]: <acción en lenguaje simple + 1 frase explicativa del por qué>
+
+[MERCADO]: <régimen en palabras llanas + qué lo caracteriza en el ciclo actual>
+
+[SEÑALES]: <confluencias en lenguaje humano con código de catálogo entre paréntesis.
+           Incluye [DRIFT CONFIG] o [DATOS_INSUFICIENTES] si aplican>
+
+[CONFIANZA]: <porcentaje + resumen de cómo se calculó en términos simples>
+
+[NIVELES]: <solo si action=BUY — SL y TP explicados con su significado funcional + R:R>
+```
+
+**Ejemplo HOLD:**
+```
+[DECISIÓN]: Esperar (HOLD) — no hay señales suficientes para abrir una posición con seguridad.
+[MERCADO]: Lateral (RANGE) — precio oscila entre $93.800 y $95.200 sin dirección clara.
+[SEÑALES]: 2 detectadas: (A) RSI 15m salió de sobreventa (28→34); (H) precio tocó soporte del rango.
+[CONFIANZA]: 56% — 2 señales de calidad media en mercado lateral; insuficiente (mínimo 60%). Bot espera.
+```
+
+**Ejemplo BUY:**
+```
+[DECISIÓN]: Comprar (BUY) — tendencia alcista confirmada con 3 señales alineadas en múltiples marcos.
+[MERCADO]: Tendencia alcista (TRENDING_UP) — precio sobre EMA20/50/200 en 1h, RSI 4h=58 sin sobrecompra.
+[SEÑALES]: 3 confirmadas: (B) MACD cruzó arriba en 15m con momentum creciente; (C) rebote en EMA50 1h; (G) 1h y 4h alineados.
+[CONFIANZA]: 90% — 3 señales de alta calidad (incluye G) + boost por volumen 2.1x la media. Tamaño: completo.
+[NIVELES]: SL $94.820 (límite de pérdida — si baja aquí el bot vende automáticamente). TP $96.400 (meta de ganancia). R:R 2.1:1.
+```
+
+**Decisiones de diseño:**
+- Los términos técnicos (TRENDING_UP, RSI, ATR, etc.) se explican inline entre paréntesis.
+- Los códigos de confluencia A–H se preservan para trazabilidad técnica y coinciden con los marcadores del chart.
+- La sección `[NIVELES]` se omite en HOLD/SELL para evitar ruido visual.
+- El límite de 1000 chars es suficiente para todos los casos documentados; el truncado es silencioso.
+
+### 2.6.bis Modelo de autonomía y capas de defensa
+
+Esta sección complementa lo expuesto en `01-functional-spec.md §F2.bis` con la vista técnica: dónde vive cada capa, qué función la implementa, y cuál es la salida observable.
+
+#### 2.6.bis.1 Cinco capas en línea
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Capa 1: LLM Decisor                                        │
+│   • prompts/decisor_system.txt + prompts/decisor_user.txt  │
+│   • Catálogo cerrado A–H, jerarquía R1–R10 → sistema       │
+│     → playbook → confluencias                              │
+│   • Output: JSON estricto                                  │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼ json.loads + DecisorOutput.model_validate
+┌────────────────────────────────────────────────────────────┐
+│ Capa 2: Pydantic (validación estructural)                  │
+│   • Enums (regime, action), bounds (confidence_adjustment) │
+│   • Falla → _hold_decision("parse_error")                  │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼
+┌────────────────────────────────────────────────────────────┐
+│ Capa 3: Override determinístico                            │
+│   • decisor.py:_apply_deterministic_overrides              │
+│   • TRENDING_DOWN ∨ confidence < 0.60 → HOLD               │
+│   • Sizing escalonado por confidence                       │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼  persist Decision (executed=false)
+┌────────────────────────────────────────────────────────────┐
+│ Capa 4: Risk Gate                                          │
+│   • risk/risk_gate.py:RiskGate.validate                    │
+│   • R1–R10 + drawdown total + kill_switch                  │
+│   • Falla → UPDATE Decision.rejected_reason → return       │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼
+┌────────────────────────────────────────────────────────────┐
+│ Capa 5: Circuit Breaker (proceso/engine)                   │
+│   • risk/circuit_breaker.py                                │
+│   • 5 fallas LLM consecutivas o exchange → engine_paused   │
+│   • daily_stop_pct / max_drawdown_pct → pausa              │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼
+┌────────────────────────────────────────────────────────────┐
+│ Capa 6: Operador (humano)                                  │
+│   • Kill switch, rollback de playbook, cambio de modo      │
+└────────────────────────────────────────────────────────────┘
+```
+
+> Las capas 1–5 son automáticas y siempre activas; la capa 6 es discrecional. El operador puede saltearlas todas con un `POST /api/kill-switch` (que en realidad agrega una restricción extra a la capa 4, no la elude).
+
+#### 2.6.bis.2 Mapa código ↔ capa de defensa
+
+| Capa | Archivo / función | Tipo de control | Salida observable |
+|------|-------------------|-----------------|-------------------|
+| 1 | `agents/prompts/decisor_system.txt` | Prompt engineering (instrucciones, jerarquía R1–R10, fórmula confidence). | Determina sesgo y formato del JSON; no es enforcement. |
+| 1 | `agents/decisor.py:_validate_confluence_codes` | Logging de códigos inválidos en `confluences`. | Warning `decisor.invalid_confluence_codes`. |
+| 2 | `shared/schemas.py:DecisorOutput` (Pydantic) | Validación estructural (tipos, enums, bounds de `confidence_adjustment`). | Excepción → `_hold_decision("parse_error")`. |
+| 3 | `agents/decisor.py:_apply_deterministic_overrides` | Reescritura de `action`, `position_size_pct`, `stop_loss`, `take_profit`. | Log `decisor.override_below_threshold` o `decisor.override_size`. |
+| 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange. | `Decision.rejected_reason` populado, `executed=false`. |
+| 5 | `risk/circuit_breaker.py:CircuitBreaker` | Pausa global del engine. | Config key `engine_paused=true` + `engine_pause_reason`. |
+| 6 | `web/api/control.py` (kill switch, mode change) | Intervención humana. | `config_history` con `changed_by="user"`. |
+
+#### 2.6.bis.3 Garantías invariantes (testeables)
+
+El conjunto de capas garantiza, para toda decisión persistida en `decisions`:
+
+1. **Sin BUY en TRENDING_DOWN ejecutado**: `output.action == "BUY"` ∧ `output.regime == "TRENDING_DOWN"` ⇒ `executed == false`.
+2. **Sin BUY con confidence < 0.60 ejecutado**: la combinación queda como HOLD tras override (`output.action == "HOLD"`).
+3. **Sin BUY ejecutado con kill switch activo**: `kill_switch=true` ∧ `action=="BUY"` ⇒ `rejected_reason like 'kill_switch%'`.
+4. **Sin BUY ejecutado violando R1**: para toda decisión BUY ejecutada, `output.position_size_pct <= max_position_pct` al momento de la ejecución.
+5. **Sin BUY ejecutado violando R4**: SL distance ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`.
+
+> Estas invariantes son el contrato técnico de la autonomía del Decisor y deben cubrirse con tests en `trading-engine/tests/test_decisor.py` y `test_circuit_breaker.py`.
+
+### 2.7 Aprendizaje del Supervisor: detalles técnicos
+
+Complementa `01-functional-spec.md §F5.bis`. Acá se describe el contrato técnico del lazo de aprendizaje.
+
+#### 2.7.1 Inputs del Supervisor
+
+| Origen | Dato | Uso |
+|--------|------|-----|
+| `trades` (status=closed, últimas 24 h) | WR, PF, avg_win, avg_loss, avg_holding_min, sl_hits, tp_hits, max_dd, Sharpe del período. | Métricas del prompt. |
+| `decisions` (agent=decisor, últimas 24 h, últimas 40 dump) | Distribución BUY/SELL/HOLD por régimen, histograma de confidence, rejection breakdown. | Análisis A2 (régimen + rechazos). |
+| `playbook_versions` (last active) | Contenido previo trimmed a 1000 chars (§M3 token budget). | Continuidad evolutiva. |
+| `config_history` (últimas 24 h) | Cambios de configuración, kill switch. | Contexto operacional A3. |
+| `fee_snapshots` (último) | `roundtrip_fee_pct` actual. | R10 informativo. |
+| `balance_snapshots` (primero de la ventana) | Capital inicial para max_dd_pct. | Gate semanal A1. |
+
+#### 2.7.2 Outputs
+
+| Tabla | Registro | Frecuencia |
+|-------|----------|-----------|
+| `playbook_versions` | Nueva versión `active=true`, anteriores `active=false`. | 1×/día. |
+| `config` + `config_history` | 1 fila por cada suggestion aplicada, `changed_by="supervisor"`. | 0–14 cambios/día. |
+| `decisions` | `agent="supervisor"`, `output={playbook, mode, config_suggestions, config_applied, config_rejected}`. | 1×/día. |
+
+#### 2.7.3 Guardrails algorítmicos (resumen)
+
+- **`_SAFE_BOUNDS`** (14 claves) — rango admitido para auto-apply.
+- **`_INVARIANTS`** — 4 relaciones cross-parámetro chequeadas incrementalmente:
+  - `sl_atr_multiplier <= sl_atr_max_multiplier`
+  - `min_rr_ratio <= default_rr_ratio`
+  - `conf_threshold_trending_up <= conf_threshold_range <= conf_threshold_high_vol`
+- **Exclusiones absolutas del auto-apply**: `daily_stop_pct`, `max_drawdown_pct`.
+- **`_VALID_ATR_TIMEFRAMES`**: `{"5m", "15m", "1h"}` para `atr_timeframe`.
+
+> Detalle de bounds en `05-risk-and-safety.md §7`.
 
 ---
 
@@ -423,7 +576,42 @@ docker-compose logs -f trading-engine
 
 ---
 
-## 10. Roadmap técnico (extracto)
+## 10. Code Ownership Map
+
+Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0.5–0.79 = supporting, 0.2–0.49 = compartido / shared).
+
+| Componente | Rol | Primary (0.8–1.0) | Supporting (0.5–0.79) | Shared (0.2–0.49) |
+|------------|-----|--------------------|------------------------|-------------------|
+| Engine entrypoint | Bootstrap | `trading-engine/main.py` | `trading-engine/config.py`, `trading-engine/exchange.py`, `trading-engine/scheduler.py` | `shared/db/base.py` |
+| Decisor | Agent | `trading-engine/agents/decisor.py`, `trading-engine/agents/prompts/decisor_system.txt`, `trading-engine/agents/prompts/decisor_user.txt` | `agents/context_builder.py`, `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/schemas.py`, `shared/db/models.py` |
+| Supervisor | Agent | `trading-engine/agents/supervisor.py`, `agents/prompts/supervisor_system.txt`, `agents/prompts/supervisor_user.txt`, `agents/prompts/playbook_v0.md` | `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/config_store.py`, `shared/db/models.py` |
+| Risk Gate | Risk | `trading-engine/risk/risk_gate.py` | — | `shared/schemas.py` |
+| Circuit Breaker | Risk | `trading-engine/risk/circuit_breaker.py` | — | (integración pendiente en `main.py`) |
+| PriceCollector | Data | `collectors/price_collector.py`, `collectors/indicators.py` | — | `shared/db/models.py` |
+| OrderBookCollector | Data | `collectors/orderbook_collector.py` | — | — |
+| FeeManager | Execution | `execution/fee_manager.py` | — | `shared/db/models.py` |
+| Executor | Execution | `execution/executor.py` | — | `shared/db/models.py` |
+| PositionManager | Execution | `execution/position_manager.py` | — | `shared/db/models.py` |
+| OrderTracker | Execution | `execution/order_tracker.py` | `execution/executor.py` | `shared/db/models.py` |
+| Scheduler | Infra | `trading-engine/scheduler.py` | — | — |
+| Web bootstrap | API | `web/main.py` | — | `shared/db/base.py`, `web/ws/feeds.py` |
+| Web API routers | API | `web/api/*.py` (uno por dominio) | — | `shared/db/models.py`, `shared/config_store.py` |
+| WebSocket feeds | API | `web/ws/feeds.py`, `web/ws/manager.py` | — | `shared/db/models.py` |
+| Frontend pages | UI | `frontend/src/pages/*.tsx` | `frontend/src/api/client.ts`, `frontend/src/hooks/useWebSocket.ts` | `frontend/src/types/index.ts` |
+| Schemas compartidos | Shared | `shared/schemas.py` | — | (usado por engine + web + tests) |
+| Config store | Shared | `shared/config_store.py` | — | (usado por engine + web) |
+| DB layer | Shared | `shared/db/base.py`, `shared/db/models.py` | — | — |
+| Migraciones | Infra | `trading-engine/alembic/versions/*.py`, `trading-engine/alembic/env.py` | — | `shared/db/models.py` |
+| Backtester | Standalone | `backtesting/runner.py` | `backtesting/tests/test_runner.py` | — |
+
+Convenciones del mapa:
+- Un archivo con score 1.0 implica que el componente es la única razón de existir del archivo.
+- Archivos con score < 0.5 son utilidades transversales (modelos, schemas, sesiones DB).
+- Los prompts `.txt` del Decisor y Supervisor son parte intrínseca de su lógica y se versionan con su agente.
+
+---
+
+## 11. Roadmap técnico (extracto)
 
 - [ ] Tests de integración end-to-end con un fake exchange determinístico.
 - [ ] Persistir `daily_pnl_pct` y `total_drawdown_pct` para que el Risk Gate los reciba con datos reales (actualmente se pasan 0.0 desde `main.py`).

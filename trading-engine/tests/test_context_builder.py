@@ -61,7 +61,7 @@ _decisions_table = Table(
     Column("rejected_reason", String(200)),
 )
 
-# Trades table stub — mantener en sync con migrations 001 + 002.
+# Trades table stub — mantener en sync con migrations 001-007.
 _trades_table = Table(
     "trades", _sqlite_metadata,
     Column("id", String(36), primary_key=True),
@@ -80,6 +80,8 @@ _trades_table = Table(
     Column("close_reason", String(20)),
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
+    Column("order_id_sl", String(50)),   # migration 007
+    Column("order_id_tp", String(50)),   # migration 007
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),  # migration 002
 )

@@ -84,6 +84,8 @@ _trades_table = Table(
     Column("close_reason", String(20)),
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
+    Column("order_id_sl", String(50)),   # migration 007
+    Column("order_id_tp", String(50)),   # migration 007
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),  # migration 002
 )

@@ -106,16 +106,15 @@ def test_buy_without_take_profit_raises():
     assert "take_profit is required when action=BUY" in str(exc_info.value)
 
 
-def test_reasoning_above_800_chars_truncated():
-    # GIVEN a payload with reasoning exceeding 800 characters
-    # (max_length=800 was raised in feat/705f649; the _truncate_reasoning validator
-    # silently truncates instead of raising, so we verify the truncation behaviour)
+def test_reasoning_above_1000_chars_truncated():
+    # GIVEN a payload with reasoning exceeding 1000 characters
+    # the _truncate_reasoning validator silently truncates instead of raising
     payload = _valid_buy_payload()
-    payload["reasoning"] = "x" * 900
+    payload["reasoning"] = "x" * 1100
 
     # WHEN parsed
     output = DecisorOutput(**payload)
 
-    # THEN reasoning is truncated to 800 chars (797 + "...")
-    assert len(output.reasoning) == 800
+    # THEN reasoning is truncated to 1000 chars (997 + "...")
+    assert len(output.reasoning) == 1000
     assert output.reasoning.endswith("...")

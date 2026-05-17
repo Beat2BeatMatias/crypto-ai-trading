@@ -11,6 +11,11 @@ from shared.schemas import DecisorOutput
 
 logger = structlog.get_logger()
 
+# Binance Spot: STOP_LOSS_LIMIT requiere un precio límite ligeramente por debajo
+# del stop price para garantizar el fill ante pequeños gaps de precio.
+_SL_LIMIT_SLIPPAGE = 0.9985  # 0.15% por debajo del stop price
+
+
 class Executor:
     def __init__(self, exchange: Any, session: AsyncSession, *, symbol: str):
         self.exchange = exchange
@@ -28,16 +33,9 @@ class Executor:
         fee = float((order.get("fee") or {}).get("cost") or 0.0)
         if avg_price == 0 or filled_qty == 0:
             raise RuntimeError(f"Buy order zero fill: {order}")
-        if decision.stop_loss is not None:
-            await self.exchange.create_order(
-                self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
-                price=decision.stop_loss * 0.999,
-                params={"stopPrice": decision.stop_loss},
-            )
-        if decision.take_profit is not None:
-            await self.exchange.create_order(
-                self.symbol, "LIMIT", "sell", filled_qty, price=decision.take_profit,
-            )
+
+        # Persistir Trade y Position ANTES de intentar colocar los brackets.
+        # Esto garantiza que el BUY quede registrado en BD aunque los brackets fallen.
         trade = Trade(
             decision_id=decision_id, ts_open=datetime.now(tz=timezone.utc),
             side="BUY", quantity_btc=Decimal(str(filled_qty)),
@@ -58,8 +56,51 @@ class Executor:
             d.executed = True
             d.trade_id = trade.id
         await self.session.commit()
+
+        # Colocar brackets SL/TP (best-effort): si fallan, el trade ya está en BD.
+        # Binance Spot usa STOP_LOSS_LIMIT (no STOP_MARKET, que es solo para Futures).
+        sl_order_id: str | None = None
+        tp_order_id: str | None = None
+
+        if decision.stop_loss is not None:
+            try:
+                sl_limit_price = round(decision.stop_loss * _SL_LIMIT_SLIPPAGE, 2)
+                sl_order = await self.exchange.create_order(
+                    self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
+                    price=sl_limit_price,
+                    params={"stopPrice": decision.stop_loss, "timeInForce": "GTC"},
+                )
+                sl_order_id = str(sl_order.get("id")) if sl_order.get("id") else None
+                logger.info("executor.sl_bracket_placed",
+                            order_id=sl_order_id, stop_price=decision.stop_loss,
+                            limit_price=sl_limit_price)
+            except Exception as e:
+                logger.warning("executor.sl_bracket_failed",
+                               error=str(e), trade_id=str(trade.id))
+
+        if decision.take_profit is not None:
+            try:
+                tp_order = await self.exchange.create_order(
+                    self.symbol, "LIMIT", "sell", filled_qty, price=decision.take_profit,
+                    params={"timeInForce": "GTC"},
+                )
+                tp_order_id = str(tp_order.get("id")) if tp_order.get("id") else None
+                logger.info("executor.tp_bracket_placed",
+                            order_id=tp_order_id, price=decision.take_profit)
+            except Exception as e:
+                logger.warning("executor.tp_bracket_failed",
+                               error=str(e), trade_id=str(trade.id))
+
+        # Actualizar trade con los IDs de las órdenes bracket obtenidas
+        if sl_order_id is not None or tp_order_id is not None:
+            await self.session.refresh(trade)
+            trade.order_id_sl = sl_order_id
+            trade.order_id_tp = tp_order_id
+            await self.session.commit()
+
         await self.session.refresh(trade)
-        logger.info("executor.buy_executed", trade_id=str(trade.id), price=avg_price)
+        logger.info("executor.buy_executed", trade_id=str(trade.id), price=avg_price,
+                    sl_placed=(sl_order_id is not None), tp_placed=(tp_order_id is not None))
         return trade
 
     async def execute_sell(self, *, trade_id: uuid.UUID, decision_id: uuid.UUID | None,

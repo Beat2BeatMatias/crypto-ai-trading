@@ -1,0 +1,61 @@
+const BASE = "/api";
+async function get(path) {
+    const r = await fetch(`${BASE}${path}`);
+    if (!r.ok)
+        throw new Error(`${r.status} ${path}`);
+    return r.json();
+}
+async function put(path, body) {
+    const r = await fetch(`${BASE}${path}`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+    });
+    if (!r.ok)
+        throw new Error(`${r.status} ${path}`);
+    return r.json();
+}
+async function post(path, body) {
+    const r = await fetch(`${BASE}${path}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+    });
+    if (!r.ok)
+        throw new Error(`${r.status} ${path}`);
+    return r.json();
+}
+async function patch(path, body) {
+    const r = await fetch(`${BASE}${path}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+    });
+    if (!r.ok)
+        throw new Error(`${r.status} ${path}`);
+    return r.json();
+}
+export const api = {
+    trades: (status) => get(`/trades${status ? `?status=${status}` : ""}`),
+    closeTrade: (id) => post(`/trades/${id}/close`, {}),
+    decisions: (p) => {
+        const q = new URLSearchParams();
+        if (p?.agent)
+            q.set("agent", p.agent);
+        if (p?.executed !== undefined)
+            q.set("executed", String(p.executed));
+        const qs = q.toString();
+        return get(`/decisions${qs ? `?${qs}` : ""}`);
+    },
+    positions: () => get("/positions"),
+    balance: () => get("/balance"),
+    config: () => get("/config"),
+    setConfig: (key, value) => put(`/config/${key}`, { value }),
+    killSwitch: (enabled) => post("/kill-switch", { enabled }),
+    runSupervisor: () => post("/supervisor/run", {}),
+    resetDrawdown: () => post("/drawdown/reset", {}),
+    setMode: (mode, confirmation) => post("/mode", { mode, confirmation }),
+    playbookActive: () => get("/playbook/active"),
+    playbookHistory: () => get("/playbook/history"),
+    playbookActivate: (version) => post(`/playbook/${version}/activate`, {}),
+    playbookEditContent: (version, content) => patch(`/playbook/${version}/content`, { content }),
+    dailyStats: () => get("/stats/daily"),
+    ohlcv: (timeframe, limit = 300) => get(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
+};

@@ -60,3 +60,14 @@ export interface Playbook {
   content: string; model: string | null;
   trades_analyzed: number | null; win_rate: number | null; active: boolean;
 }
+
+export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h";
+
+export interface Candle {
+  time: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+}

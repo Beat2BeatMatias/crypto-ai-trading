@@ -1,7 +1,9 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.0 — 2026-05-14.
+> Versión: 1.1 — 2026-05-17.
+>
+> Cambios v1.1: se agregó §1.bis (Autonomía del LLM: garantías del modelo de defensa) con referencias cruzadas a `01-functional-spec.md §F2.bis` y `02-technical-spec.md §2.6.bis`. Se ampliaron en §12 dos riesgos conocidos (override con umbral plano vs. `conf_threshold_*`, y validación de confluencias inválidas como warning solamente).
 
 Este documento centraliza las reglas absolutas, controles deterministas, circuit breakers y gates de pasaje entre paper trading y LIVE. Su único propósito es asegurar que **ninguna decisión de un LLM pueda exceder los límites de riesgo configurados**.
 
@@ -46,6 +48,52 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
 │  - Cambio manual de modo (frase literal)                │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 1.bis Autonomía del LLM: garantías del modelo de defensa
+
+Esta sección formaliza qué garantías de seguridad ofrece el modelo de defensa frente a la autonomía del Decisor. La perspectiva funcional está en `01-functional-spec.md §F2.bis`; la técnica en `02-technical-spec.md §2.6.bis`.
+
+### 1.bis.1 Principio rector
+
+> **El LLM Decisor propone una decisión estructurada; el sistema valida, reescribe si es necesario y ejecuta sólo si pasa el Risk Gate.** Ninguna salida del LLM puede provocar una acción que viole R1–R10 ni los guardrails del Supervisor (`_SAFE_BOUNDS`).
+
+### 1.bis.2 Garantías invariantes (contrato de Risk)
+
+Para cualquier ciclo del Decisor, el sistema garantiza que toda decisión con `executed=true` cumple simultáneamente:
+
+| ID | Garantía | Capa que la enforce |
+|----|----------|---------------------|
+| GA-1 | `output.action != "BUY"` ó `output.regime != "TRENDING_DOWN"`. | Capa 3 (override) — fuerza HOLD. |
+| GA-2 | `output.action != "BUY"` ó `output.confidence >= 0.60`. | Capa 3 (override) — fuerza HOLD. |
+| GA-3 | `output.action != "BUY"` ó `output.position_size_pct <= max_position_pct + 1e-9`. | Capa 3 (cap) + Capa 4 R1. |
+| GA-4 | `output.action != "BUY"` ó SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`. | Capa 4 R4. |
+| GA-5 | `output.action != "BUY"` ó R:R ≥ `min_rr_ratio`. | Capa 4 R5. |
+| GA-6 | `output.action != "SELL"` ó hay posición LONG abierta. | Capa 4 R6. |
+| GA-7 | `output.action != "BUY"` con `kill_switch=true`. | Capa 4 (kill switch check). |
+| GA-8 | Si `daily_pnl_pct <= daily_stop_pct` → cero BUYs ejecutados ese día. | Capa 4 R9 (**pendiente de instrumentar con datos reales** — ver §12). |
+
+### 1.bis.3 Lo que el LLM no puede sobrescribir
+
+| Parámetro | Quien lo controla | Mecanismo de protección |
+|-----------|-------------------|------------------------|
+| `daily_stop_pct` | Operador / config manual | Excluido de `_SAFE_BOUNDS`. El Supervisor solo puede **sugerirlo** en el reporte. |
+| `max_drawdown_pct` | Operador / config manual | Excluido de `_SAFE_BOUNDS`. |
+| `position_size_pct` (ejecutado) | Sistema | Override determinístico reescribe el output del LLM. |
+| Bracket SL/TP (post-orden) | Sistema (Binance) | Una vez emitido, el bracket se ejecuta server-side; el LLM no puede modificarlo en ciclos siguientes. |
+| Catálogo de confluencias A–H | Sistema (prompt + Supervisor system prompt) | El playbook no puede introducir códigos nuevos; el Supervisor tiene regla explícita. |
+
+### 1.bis.4 Trazabilidad de la autonomía
+
+Toda decisión queda en `decisions` con:
+
+- `agent="decisor"`, `model`, `tokens_in/out`, `latency_ms`.
+- `input`: snapshot completo del contexto inyectado al LLM (incluye playbook activo y últimas 3 decisiones).
+- `output`: JSON resultante (post-override).
+- `executed` + `rejected_reason` (si correspondiese).
+
+Cualquier divergencia entre lo que el LLM emitió y lo que el sistema ejecutó queda reflejada en los logs `decisor.override_below_threshold` y `decisor.override_size`. El operador puede auditar la frecuencia con la que el LLM intenta superar los umbrales revisando `decisions.output.reasoning` y los warnings del engine.
 
 ---
 
@@ -232,7 +280,9 @@ Para auditoría externa basta con un dump de estas tablas más `balance_snapshot
 
 | Tema | Estado | Acción sugerida |
 |------|--------|-----------------|
-| `daily_pnl_pct` y `total_drawdown_pct` pasados como 0.0 al Risk Gate | Pendiente | Calcular en cada tick desde `trades`/`daily_stats` y pasarlos al gate para activar R9 y la regla de drawdown total con datos reales. |
+| `daily_pnl_pct` y `total_drawdown_pct` pasados como 0.0 al Risk Gate | Pendiente | Calcular en cada tick desde `trades`/`daily_stats` y pasarlos al gate para activar R9 y la regla de drawdown total con datos reales. **Impacto**: la garantía GA-8 de §1.bis no está operativa con datos reales hasta cerrar este gap. |
+| Override con umbral plano `0.60` vs. `conf_threshold_trending_up/range/high_vol` (0.60 / 0.70 / 0.80) | Pendiente | Unificar la lógica: o el override usa los thresholds por régimen, o se documenta explícitamente que el override es un piso adicional al gate por régimen. Hoy hay ambigüedad entre `01-functional-spec.md §6.3` y `decisor.py:_apply_deterministic_overrides`. |
+| Confluencias inválidas (fuera del catálogo A–H) solo loguean warning | Pendiente | Evaluar si una decisión BUY con confluencias inválidas debe (a) descartarlas y recontar, (b) reducir `confidence` automáticamente, o (c) forzar HOLD. Hoy el LLM podría llegar al umbral mínimo de 2 confluencias con códigos inventados. |
 | Web API sin autenticación | Pendiente | Para producción remota, agregar auth (token / OIDC) y/o restringir el dashboard a red privada (VPN/SSH tunnel). |
 | Engine sin reset automático de pausa | Pendiente | Considerar reset programado tras un cooldown (p.ej. 10 min sin nuevas fallas). |
 | Sin notificaciones (telegram/email) | Pendiente | Hooks para eventos críticos: kill switch, daily stop, supervisor rollback, drawdown alto. |

@@ -58,7 +58,10 @@ Table(
     Column("close_reason", String(20)),
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
+    Column("order_id_sl", String(50)),
+    Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
+    Column("close_requested", Boolean, default=False),
 )
 
 Table(
@@ -172,6 +175,9 @@ async def test_execute_buy_creates_trade_and_position(session):
     assert trades[0].order_id_open == "ORD-BUY-1"
     assert trades[0].status == "open"
     assert float(trades[0].entry_price) == pytest.approx(67000.0)
+    # AND los IDs de las órdenes bracket quedan persistidos
+    assert trades[0].order_id_sl == "ORD-BUY-1-sl"
+    assert trades[0].order_id_tp == "ORD-BUY-1-sl"
 
     # AND a Position row was created
     positions = (await session.execute(sa_select(Position))).scalars().all()
@@ -194,6 +200,56 @@ async def test_execute_buy_marks_decision_executed(session):
     d = await session.get(Decision, decision_id)
     assert d is not None
     assert d.executed is True
+
+
+async def test_execute_buy_trade_saved_even_if_sl_bracket_fails(session):
+    # GIVEN un exchange donde la orden market BUY funciona pero el bracket SL falla
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-BUY-NOSL", avg_price=67000.0, filled=0.001, fee=0.07)
+    exchange.create_order = AsyncMock(side_effect=Exception("STOP_LOSS_LIMIT not supported"))
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy (bracket fallará)
+    trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
+                                        usdt_balance=10000.0)
+
+    # THEN el Trade queda guardado en BD con executed=True
+    trades = (await session.execute(sa_select(Trade))).scalars().all()
+    assert len(trades) == 1
+    assert trades[0].status == "open"
+    assert float(trades[0].entry_price) == pytest.approx(67000.0)
+    assert trades[0].order_id_sl is None
+    assert trades[0].order_id_tp is None
+
+    # AND la Decision queda marcada como executed
+    d = await session.get(Decision, decision_id)
+    assert d is not None
+    assert d.executed is True
+
+
+async def test_execute_buy_uses_stop_loss_limit_order_type(session):
+    # GIVEN un exchange que captura el tipo de orden usado para el SL
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-BUY-SL", avg_price=67000.0, filled=0.001, fee=0.07)
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy
+    await executor.execute_buy(decision=_make_buy_decision(stop_loss=66400.0),
+                                decision_id=decision_id, usdt_balance=10000.0)
+
+    # THEN el bracket SL se coloca con tipo STOP_LOSS_LIMIT (no STOP_MARKET)
+    calls = exchange.create_order.call_args_list
+    sl_call = calls[0]
+    assert sl_call.args[1] == "STOP_LOSS_LIMIT", (
+        f"Se esperaba STOP_LOSS_LIMIT pero se usó: {sl_call.args[1]}"
+    )
+    # AND el price límite es ligeramente menor al stop price (0.15% de slippage)
+    sl_limit_price = sl_call.args[4] if len(sl_call.args) > 4 else sl_call.kwargs.get("price")
+    assert sl_limit_price is not None
+    assert sl_limit_price < 66400.0
+    assert sl_limit_price == pytest.approx(66400.0 * 0.9985, rel=1e-3)
 
 
 async def test_execute_sell_closes_trade_and_computes_pnl(session):

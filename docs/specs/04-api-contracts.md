@@ -455,6 +455,46 @@ Fuente: Binance REST `/api/v3/ticker/price` (testnet o mainnet según `BINANCE_T
 
 ---
 
+### 2.10 OHLCV (gráfico de precios)
+
+#### `GET /api/ohlcv?timeframe=&limit=`
+
+Devuelve velas OHLCV de la tabla `ohlcv` en **orden cronológico ascendente** (la más antigua primero).
+
+Parámetros query:
+
+| Param | Tipo | Default | Restricciones |
+|-------|------|---------|---------------|
+| `timeframe` | `"1m" \| "5m" \| "15m" \| "1h" \| "4h"` | `"5m"` | Obligatorio que sea uno de los 5 valores. Otro valor → 422. |
+| `limit` | `int` | `300` | `1 ≤ limit ≤ 1000`. Fuera de rango → 422. Devuelve las últimas `limit` velas (orden DESC en BD, luego reversed antes de responder). |
+
+200 OK: `CandleOut[]`
+
+```jsonc
+[
+  {
+    "time": "2026-05-14T12:00:00Z",   // ISO 8601 UTC
+    "open":   95200.00,
+    "high":   95450.00,
+    "low":    95100.00,
+    "close":  95380.00,
+    "volume": 1.23456789
+  }
+]
+```
+
+- El array puede estar vacío (`[]`) si no hay velas para ese timeframe en la BD.
+- Campos `open/high/low/close/volume` pueden ser `null` si la vela fue persistida con datos parciales (raro; el engine siempre los completa).
+- La fuente de los datos es la tabla `ohlcv` escrita por el `PriceCollector` del engine, no Binance directamente. Esto garantiza coherencia con los indicadores que usa el Decisor.
+
+Errores:
+
+| HTTP | Cuándo |
+|------|--------|
+| 422  | `timeframe` no es uno de los 5 valores permitidos o `limit` fuera de rango. |
+
+---
+
 ## 4. Códigos de error globales
 
 | HTTP | Cuándo | Notas |

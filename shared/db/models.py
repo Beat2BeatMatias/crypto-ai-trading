@@ -100,6 +100,8 @@ class Trade(Base):
     close_reason: Mapped[str | None] = mapped_column(String(20))
     order_id_open: Mapped[str | None] = mapped_column(String(50))
     order_id_close: Mapped[str | None] = mapped_column(String(50))
+    order_id_sl: Mapped[str | None] = mapped_column(String(50))
+    order_id_tp: Mapped[str | None] = mapped_column(String(50))
     fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     close_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 

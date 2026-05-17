@@ -24,18 +24,23 @@ from scheduler import EngineScheduler
 logger = structlog.get_logger()
 
 
-async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, float]:
+async def _compute_risk_metrics(
+    session, usdt_balance: float, btc_balance: float = 0.0
+) -> tuple[float, float]:
     """Calcula daily_pnl y total_drawdown reales para las reglas R9 y drawdown del Risk Gate.
+
+    El drawdown se calcula sobre el valor total del portafolio (USDT + BTC × precio actual)
+    para evitar falsos positivos cuando capital está desplegado en posiciones BTC abiertas.
 
     Returns:
         daily_pnl_frac: P&L de trades cerrados hoy como fracción (ej. -0.03 = -3%).
-        total_drawdown_frac: drawdown desde el pico de balance (negativo o cero).
+        total_drawdown_frac: drawdown desde el pico de portfolio (negativo o cero).
                              Si drawdown_reset_ts está configurado, el pico se calcula
                              solo desde esa fecha en adelante.
     """
     from datetime import date, datetime, timezone
     from sqlalchemy import select
-    from shared.db.models import Trade as _Trade, BalanceSnapshot as _BalSnap
+    from shared.db.models import Trade as _Trade, BalanceSnapshot as _BalSnap, Ohlcv as _Ohlcv
     from shared.config_store import ConfigStore, ConfigKey
 
     today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -59,9 +64,20 @@ async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, fl
     ref_capital = float(start_snap.usdt) if start_snap else max(usdt_balance, 1.0)
     daily_pnl_frac = daily_pnl_usdt / ref_capital if ref_capital > 0 else 0.0
 
-    # Drawdown total: balance actual vs pico de balance_snapshots.
+    # Precio actual BTC para valorar el portafolio total.
+    price_row = (await session.execute(
+        select(_Ohlcv).where(_Ohlcv.timeframe == "1m")
+        .order_by(_Ohlcv.time.desc()).limit(1)
+    )).scalar_one_or_none()
+    current_btc_price = float(price_row.close) if price_row else 0.0
+
+    # Valor total del portafolio actual: USDT libre + BTC libre × precio.
+    current_portfolio = usdt_balance + btc_balance * current_btc_price
+
+    # Drawdown total: portfolio actual vs pico histórico de portfolio.
+    # Se aproxima el valor histórico de cada snapshot como usdt + btc × precio_actual.
     # Si drawdown_reset_ts está configurado, solo se considera historia posterior a esa fecha.
-    peak_query = select(_BalSnap.usdt)
+    peak_query = select(_BalSnap.usdt, _BalSnap.btc)
     try:
         store = ConfigStore(session)
         reset_ts_str = await store.get(ConfigKey.DRAWDOWN_RESET_TS)
@@ -70,13 +86,35 @@ async def _compute_risk_metrics(session, usdt_balance: float) -> tuple[float, fl
             peak_query = peak_query.where(_BalSnap.ts >= reset_ts)
     except (KeyError, ValueError):
         pass
+
     peak_row = (await session.execute(
-        peak_query.order_by(_BalSnap.usdt.desc()).limit(1)
-    )).scalar_one_or_none()
-    peak = float(peak_row) if peak_row else usdt_balance
-    total_drawdown_frac = (usdt_balance - peak) / peak if peak > 0 else 0.0
+        peak_query.order_by(
+            (_BalSnap.usdt + _BalSnap.btc * current_btc_price).desc()
+        ).limit(1)
+    )).first()
+
+    if peak_row is not None:
+        peak_portfolio = float(peak_row.usdt) + float(peak_row.btc) * current_btc_price
+    else:
+        peak_portfolio = max(current_portfolio, 1.0)
+
+    total_drawdown_frac = (
+        (current_portfolio - peak_portfolio) / peak_portfolio
+        if peak_portfolio > 0 else 0.0
+    )
 
     return daily_pnl_frac, total_drawdown_frac
+
+
+async def _persist_circuit_breaker_pause(session_factory, reason: str) -> None:
+    """Escribe el estado de pausa del circuit breaker en la BD para que el web lo lea."""
+    try:
+        async with session_factory() as s:
+            store = ConfigStore(s)
+            await store.set(ConfigKey.ENGINE_PAUSED, "true", changed_by="circuit_breaker")
+            await store.set(ConfigKey.ENGINE_PAUSE_REASON, reason, changed_by="circuit_breaker")
+    except Exception as e:
+        logger.error("circuit_breaker.persist_pause_failed", error=str(e))
 
 
 def _parse_providers(csv: str) -> list[LLMProvider]:
@@ -127,8 +165,16 @@ async def run() -> None:
         await PromptManager(s).seed_playbook_v0()
         fee_mgr = FeeManager(exchange, s, symbol=settings.symbol)
         await fee_mgr.refresh()
+        # Limpiar estado de pausa al arrancar (puede quedar de una sesión anterior)
+        await store.set(ConfigKey.ENGINE_PAUSED, "false", changed_by="system")
+        await store.set(ConfigKey.ENGINE_PAUSE_REASON, "", changed_by="system")
 
     orderbook = OrderBookCollector(symbol=settings.symbol, exchange=exchange)
+    try:
+        await orderbook.start()
+        logger.info("orderbook.ws_started", symbol=settings.symbol)
+    except Exception as e:
+        logger.warning("orderbook.ws_start_failed_continuing_without_live_book", error=str(e))
     cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)  # defaults; updated each tick from config
     sched = EngineScheduler()
 
@@ -187,6 +233,7 @@ async def run() -> None:
                 "factor_conf_80": await store.get_typed(ConfigKey.FACTOR_CONF_80),
                 "factor_conf_90": await store.get_typed(ConfigKey.FACTOR_CONF_90),
                 "factor_regime_non_trending": await store.get_typed(ConfigKey.FACTOR_REGIME_NON_TRENDING),
+                "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
             }
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
@@ -200,6 +247,7 @@ async def run() -> None:
             fees = FeeManager(exchange, s, symbol=settings.symbol)
             await fees.get_or_refresh()
 
+            balance_fetch_ok = True
             try:
                 balance = await exchange.fetch_balance()
                 usdt = float(balance.get("free", {}).get("USDT", 0.0))
@@ -210,6 +258,7 @@ async def run() -> None:
                 await s.commit()
             except Exception as e:
                 logger.warning("engine.balance_unavailable_using_db_fallback", error=str(e))
+                balance_fetch_ok = False
                 # Exchange down: no USDT (prevents new BUYs), BTC from open positions in DB
                 usdt = 0.0
                 from sqlalchemy import select as _sel
@@ -219,7 +268,26 @@ async def run() -> None:
                 )).scalars().all()
                 btc = sum(float(p.quantity_btc) for p in _open)
 
-            daily_pnl_frac, total_drawdown_frac = await _compute_risk_metrics(s, usdt)
+            # Solo evaluar drawdown cuando el balance fue obtenido correctamente.
+            # Si el exchange está caído y usdt=0, compararlo contra el pico histórico
+            # generaría un drawdown artificial del 100% que pausaría el engine por error.
+            if balance_fetch_ok:
+                daily_pnl_frac, total_drawdown_frac = await _compute_risk_metrics(
+                    s, usdt, btc_balance=btc
+                )
+                cb.evaluate(daily_pnl_pct=daily_pnl_frac, total_drawdown_pct=total_drawdown_frac)
+                if cb.engine_paused:
+                    reason = (
+                        f"max_drawdown breached: {total_drawdown_frac:.2%}"
+                        if total_drawdown_frac <= cb.max_drawdown_pct
+                        else f"daily_stop breached: {daily_pnl_frac:.2%}"
+                    )
+                    logger.error("engine.paused_by_circuit_breaker",
+                                 daily_pnl=daily_pnl_frac, drawdown=total_drawdown_frac)
+                    await _persist_circuit_breaker_pause(session_factory, reason)
+                    return
+            else:
+                daily_pnl_frac, total_drawdown_frac = 0.0, 0.0
 
             decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
                               provider=decisor_provider, fallbacks=fallbacks)
@@ -238,6 +306,10 @@ async def run() -> None:
             except Exception as e:
                 logger.error("engine.decisor_error", error=str(e))
                 cb.record_llm_failure()
+                if cb.engine_paused:
+                    await _persist_circuit_breaker_pause(
+                        session_factory, f"llm_failures: {cb._llm_consecutive_failures} consecutivas"
+                    )
                 return
 
             pm = PositionManager(s)
@@ -311,6 +383,10 @@ async def run() -> None:
             except Exception as e:
                 logger.error("execution.error", error=str(e))
                 cb.record_exchange_failure()
+                if cb.engine_paused:
+                    await _persist_circuit_breaker_pause(
+                        session_factory, f"exchange_failures: {cb._exchange_consecutive_failures} consecutivas"
+                    )
 
     async def supervisor_tick() -> None:
         async with session_factory() as s:

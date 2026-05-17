@@ -214,6 +214,30 @@ viene null o ausente:
   → reasoning debe incluir el tag "[DATOS_INSUFICIENTES]" + indicar qué falta
 
 ═══════════════════════════════════════════════════════════════════
+FORMATO DEL CAMPO "reasoning"
+═══════════════════════════════════════════════════════════════════
+El campo reasoning debe ser un string en español de máximo 1000 chars.
+Usa 5 secciones con etiquetas entre corchetes, en una sola línea continua
+(sin saltos de línea dentro del valor JSON). Separa secciones con un espacio.
+
+Secciones siempre presentes: [DECISION] [MERCADO] [SENALES] [CONFIANZA]
+Sección solo si action=BUY:  [NIVELES]
+
+[DECISION]: accion en 1 frase simple. Ej: "Esperar (HOLD) — no hay senales suficientes."
+[MERCADO]:  regimen en lenguaje llano. Ej: "Lateral (RANGE) — precio sin direccion clara."
+[SENALES]:  confluencias con codigo. Ej: "(A) RSI 15m sale de sobreventa; (H) soporte tocado."
+            Si hay drift de config: agregar "[DRIFT CONFIG] Playbook dice X, sistema usa Y."
+            Si hay datos insuficientes: agregar "[DATOS_INSUFICIENTES] falta RSI 1h."
+[CONFIANZA]: porcentaje y calculo simple. Ej: "56% — 2 senales en RANGE; bajo minimo 60%."
+[NIVELES]:  solo BUY. Ej: "SL $94820 (limite perdida). TP $96400 (meta ganancia). R:R 2.1:1."
+
+Ejemplo HOLD completo (una sola linea en el JSON):
+"[DECISION]: Esperar (HOLD) — no hay senales suficientes para entrada segura. [MERCADO]: Lateral (RANGE) — precio oscila sin direccion entre $93800 y $95200. [SENALES]: 2 detectadas: (A) RSI 15m sale de sobreventa; (H) toque de soporte. [CONFIANZA]: 56% — 2 senales en mercado lateral; insuficiente (minimo 60%)."
+
+Ejemplo BUY completo (una sola linea en el JSON):
+"[DECISION]: Comprar (BUY) — tendencia alcista con 3 senales alineadas. [MERCADO]: Tendencia alcista (TRENDING_UP) — precio sobre EMA20/50/200 en 1h, RSI 4h=58. [SENALES]: (B) MACD cross arriba 15m; (C) rebote EMA50 1h; (G) 1h y 4h alineados. [CONFIANZA]: 90% — 3 senales de calidad + vol 2.1x; tamano completo. [NIVELES]: SL $94820 (limite perdida). TP $96400 (meta ganancia). R:R 2.1:1."
+
+═══════════════════════════════════════════════════════════════════
 OUTPUT — JSON EXACTO, sin texto extra
 ═══════════════════════════════════════════════════════════════════
 {
@@ -231,21 +255,5 @@ OUTPUT — JSON EXACTO, sin texto extra
       conf < 0.60  → HOLD obligatorio
       Para HOLD/SELL → 0.0
   "expected_holding_min": int >= 1,
-  "reasoning": "Español. Max 800 chars. Formato:
-      - Régimen: [regime y por qué]
-      - Confluencias: [lista con códigos A-H y descripción breve]
-      - Cálculo: [conf_base(N)=X | ×quality×regime=base | adj=±Y | conf=Z → acción]
-      - Conclusión: [1 frase clara]
-
-      Ejemplo HOLD:
-      'Régimen RANGE. Confluencias: A (RSI 15m sale de 28), H (toque soporte).
-       Cálculo: conf_base(2)=0.70 × 0.85(no G/F) × 0.85(RANGE)=0.506; adj +0.05 (bid wall fuerte) → 0.556. <0.60 → HOLD.'
-
-      Ejemplo BUY:
-      'Régimen TRENDING_UP confirmado por EMA20_1h > EMA50_1h > EMA200_1h.
-       Confluencias: B (MACD 15m cross con hist creciente), G (RSI 4h=58,
-       EMAs 4h alineadas), C (rebote en EMA50 1h con mecha inferior).
-       Cálculo: conf_base(3)=0.85 × 1.0 (incluye G) × 1.0 (TRENDING_UP)
-       = 0.850; adj +0.05 (volumen 2.1x media) → 0.900. >=0.70 → BUY size completo.
-       SL en bid wall a $94,820. TP a $96,400 (ask wall dentro de TP_max).'"
+  "reasoning": "string segun FORMATO DEL CAMPO reasoning — 5 secciones, una sola linea, max 1000 chars"
 }

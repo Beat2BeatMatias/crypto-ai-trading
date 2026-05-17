@@ -78,6 +78,8 @@ class ConfigKey(str, Enum):
     EXPECTED_HOLDING_MAX_MIN = "expected_holding_max_min"
     CONFLUENCE_WEAK_FACTOR = "confluence_weak_factor"
     DRAWDOWN_RESET_TS = "drawdown_reset_ts"
+    ENGINE_PAUSED = "engine_paused"
+    ENGINE_PAUSE_REASON = "engine_pause_reason"
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,14 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.DRAWDOWN_RESET_TS: _Default(
         "", "string",
         "ISO UTC timestamp of last drawdown peak reset. Empty = use full history.",
+    ),
+    ConfigKey.ENGINE_PAUSED: _Default(
+        "false", "bool",
+        "internal: motor pausado por circuit breaker. Se resetea al iniciar el engine.",
+    ),
+    ConfigKey.ENGINE_PAUSE_REASON: _Default(
+        "", "string",
+        "internal: razón de la última pausa del circuit breaker.",
     ),
 }
 

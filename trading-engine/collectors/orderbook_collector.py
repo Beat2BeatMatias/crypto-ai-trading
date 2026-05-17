@@ -54,15 +54,26 @@ class OrderBookCollector:
                 pass
 
     async def _watch_loop(self) -> None:
+        consecutive_errors = 0
         while True:
             try:
                 book = await self.exchange.watch_order_book(self.symbol, limit=20)
                 self._book = book
+                consecutive_errors = 0
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error("orderbook.watch.error", error=str(e))
-                await asyncio.sleep(2)
+                consecutive_errors += 1
+                # Primer error: warning. Errores persistentes: debug para evitar spam.
+                if consecutive_errors == 1:
+                    logger.warning("orderbook.watch.error", error=str(e))
+                else:
+                    logger.debug("orderbook.watch.error", error=str(e),
+                                 consecutive=consecutive_errors)
+                # Backoff exponencial con techo de 60 s (errores permanentes como
+                # "not supported" no necesitan reintentos agresivos)
+                backoff = min(2 * (2 ** min(consecutive_errors - 1, 4)), 60)
+                await asyncio.sleep(backoff)
 
     def snapshot(self, levels: int = 10) -> OrderBookSnapshot | None:
         """Return derived metrics from the latest book, or None if no book yet."""

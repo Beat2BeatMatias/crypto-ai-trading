@@ -1,4 +1,4 @@
-import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, Balance } from "../types";
+import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, Balance, Candle, Timeframe } from "../types";
 
 const BASE = "/api";
 
@@ -60,4 +60,6 @@ export const api = {
   playbookEditContent: (version: number, content: string) =>
     patch(`/playbook/${version}/content`, { content }),
   dailyStats: () => get<DailyStats>("/stats/daily"),
+  ohlcv: (timeframe: Timeframe, limit = 300) =>
+    get<Candle[]>(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
 };
