@@ -1,4 +1,6 @@
-from risk.circuit_breaker import CircuitBreaker
+import time
+from unittest.mock import patch
+from risk.circuit_breaker import CircuitBreaker, PauseReason
 
 
 def test_no_breach_returns_ok():
@@ -82,3 +84,74 @@ def test_drawdown_pauses_on_second_consecutive_tick_extreme():
     cb.evaluate(daily_pnl_pct=0.0, total_drawdown_pct=-1.0)
     cb.evaluate(daily_pnl_pct=0.0, total_drawdown_pct=-1.0)
     assert cb.engine_paused is True
+
+
+def test_pause_reason_llm_failures():
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10, llm_failure_threshold=3)
+    for _ in range(3):
+        cb.record_llm_failure()
+    assert cb.engine_paused is True
+    assert cb._pause_reason == PauseReason.LLM_FAILURES
+
+
+def test_pause_reason_exchange_failures():
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10, exchange_failure_threshold=3)
+    for _ in range(3):
+        cb.record_exchange_failure()
+    assert cb.engine_paused is True
+    assert cb._pause_reason == PauseReason.EXCHANGE_FAILURES
+
+
+def test_auto_reset_after_cooldown_for_llm_failures():
+    # GIVEN: engine pausado por fallas LLM
+    cb = CircuitBreaker(
+        daily_stop_pct=-0.03, max_drawdown_pct=-0.10,
+        llm_failure_threshold=3, operational_cooldown_sec=600,
+    )
+    for _ in range(3):
+        cb.record_llm_failure()
+    assert cb.engine_paused is True
+
+    # WHEN: cooldown no expiró → maybe_auto_reset devuelve False
+    assert cb.maybe_auto_reset() is False
+    assert cb.engine_paused is True
+
+    # WHEN: simulamos que el cooldown expiró
+    cb._pause_ts = time.monotonic() - 601
+    assert cb.maybe_auto_reset() is True
+    assert cb.engine_paused is False
+    assert cb._pause_reason is None
+
+
+def test_auto_reset_not_allowed_for_financial_breach():
+    # GIVEN: engine pausado por daily_stop (breach financiero)
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10, operational_cooldown_sec=1)
+    cb.evaluate(daily_pnl_pct=-0.05, total_drawdown_pct=0.0)
+    assert cb.engine_paused is True
+    assert cb._pause_reason == PauseReason.DAILY_STOP
+
+    # WHEN: cooldown "expirado" → aún así NO se auto-resetea (requiere intervención humana)
+    cb._pause_ts = time.monotonic() - 10
+    assert cb.maybe_auto_reset() is False
+    assert cb.engine_paused is True
+
+
+def test_auto_reset_not_triggered_when_not_paused():
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)
+    assert cb.engine_paused is False
+    assert cb.maybe_auto_reset() is False
+
+
+def test_financial_pause_not_overridden_by_operational():
+    # Si ya está pausado por drawdown (financiero), una racha LLM no cambia el motivo
+    cb = CircuitBreaker(
+        daily_stop_pct=-0.03, max_drawdown_pct=-0.10,
+        drawdown_consecutive_threshold=1, llm_failure_threshold=3,
+    )
+    cb.evaluate(daily_pnl_pct=0.0, total_drawdown_pct=-0.11)
+    assert cb._pause_reason == PauseReason.DRAWDOWN
+
+    for _ in range(3):
+        cb.record_llm_failure()
+    # El motivo de pausa no se reemplaza por LLM_FAILURES
+    assert cb._pause_reason == PauseReason.DRAWDOWN

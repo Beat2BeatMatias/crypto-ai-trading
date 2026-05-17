@@ -26,6 +26,8 @@ class TradeOut(BaseModel):
     close_reason: str | None
     fees_usdt: float | None
     close_requested: bool
+    order_id_open: str | None
+    order_id_close: str | None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
@@ -42,6 +44,8 @@ def _to_out(r: Trade) -> TradeOut:
         take_profit=float(r.take_profit) if r.take_profit else None,
         close_reason=r.close_reason, fees_usdt=float(r.fees_usdt) if r.fees_usdt else None,
         close_requested=bool(r.close_requested),
+        order_id_open=r.order_id_open,
+        order_id_close=r.order_id_close,
     )
 
 @router.get("/trades", response_model=list[TradeOut])

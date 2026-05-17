@@ -1,9 +1,10 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.1 — 2026-05-17.
+> Versión: 1.2 — 2026-05-17.
 >
 > Cambios v1.1: se agregó §1.bis (Autonomía del LLM: garantías del modelo de defensa) con referencias cruzadas a `01-functional-spec.md §F2.bis` y `02-technical-spec.md §2.6.bis`. Se ampliaron en §12 dos riesgos conocidos (override con umbral plano vs. `conf_threshold_*`, y validación de confluencias inválidas como warning solamente).
+> Cambios v1.2: R4 y R5 actualizados con thresholds reales operativos (SL 0.3–1.5×ATR, R:R 1.3). §12 ítem `daily_pnl_pct/total_drawdown_pct` marcado como ✅ RESUELTO. Nota al pie de §2 actualizada.
 
 Este documento centraliza las reglas absolutas, controles deterministas, circuit breakers y gates de pasaje entre paper trading y LIVE. Su único propósito es asegurar que **ninguna decisión de un LLM pueda exceder los límites de riesgo configurados**.
 
@@ -106,8 +107,8 @@ Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siem
 | **R1** | `position_size_pct ≤ max_position_pct + 1e-9` | Reject `position_size_pct X > max Y`. |
 | **R2** | `action=BUY` requiere `stop_loss` no nulo y `stop_loss < current_price` | Reject `BUY requires stop_loss` / `stop_loss must be < current_price`. |
 | **R3** | `action=BUY` requiere `take_profit` no nulo y `take_profit > current_price` | Reject `BUY requires take_profit` / `take_profit must be > current_price`. |
-| **R4** | Distancia SL entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR` (timeframe `atr_timeframe`) | Reject `SL distance X < ...` o `SL distance X > ...`. |
-| **R5** | `R:R = (take_profit - current_price) / (current_price - stop_loss) > min_rr_ratio` | Reject `R:R ratio X ≤ min`. |
+| **R4** | Distancia SL entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR` (timeframe `atr_timeframe`). Defaults operativos: **0.3×ATR (mín)** y **1.5×ATR (máx)**; ambos configurables vía `ConfigKey`. | Reject `SL distance X < ...` o `SL distance X > ...`. |
+| **R5** | `R:R = (take_profit - current_price) / (current_price - stop_loss) > min_rr_ratio`. Default operativo: **1.3** (configurable vía `ConfigKey.MIN_RR_RATIO`). El design doc original indicaba 1.5; el valor actual de 1.3 reduce rechazos excesivos en mercados con spreads amplios. | Reject `R:R ratio X ≤ min`. |
 | **R6** | `action=SELL` requiere `btc_held > 0` y al menos 1 posición abierta | Reject `SELL requested but no open position to close`. |
 | **R7** | Nunca shortear: la única semántica de SELL es cerrar una posición LONG previamente abierta | Asegurado estructuralmente: `execute_buy` es la única ruta de apertura. |
 | **R8** | `open_positions < max_simultaneous_trades` | Reject `max_simultaneous_trades reached: N`. |
@@ -119,7 +120,7 @@ Además del bloque R1–R10, el Risk Gate valida:
 - **Drawdown total**: si `total_drawdown_pct ≤ max_drawdown_pct` ⇒ Reject `max_drawdown breached`.
 - **Kill switch**: si `kill_switch=true` y la decisión no es SELL para cerrar ⇒ Reject `kill_switch active — only SELL-to-close allowed`.
 
-> Actualmente `main.py` pasa `daily_pnl_pct=0.0` y `total_drawdown_pct=0.0` al Risk Gate; estas referencias deben calcularse a partir de `daily_stats` para activar R9 y la regla de drawdown total con datos reales (ítem en el roadmap técnico).
+> ✅ `main.py` calcula `daily_pnl_pct` y `total_drawdown_pct` reales en cada tick mediante `_compute_risk_metrics()` y los pasa al Risk Gate y al `CircuitBreaker.evaluate()` (resuelto en 2026-05-17).
 
 ---
 
@@ -221,6 +222,16 @@ Si `closed_trades < min_trades` (default 5), el Supervisor entra en modo `diagno
 
 Cualquier versión histórica puede activarse desde la UI o `POST /api/playbook/{version}/activate`. El índice único parcial sobre `(active) WHERE active=true` garantiza una sola activa a la vez.
 
+### 7.5 Auto-rollback automático (fuera de scope v1)
+
+El design doc original describía un auto-rollback automático: "si 7 días post-update muestran >2× drawdown vs. prior 7 días, revertir a versión previa + alert". Esta funcionalidad **no está implementada en v1** por las siguientes razones:
+
+- Requiere una ventana mínima de 7 días de datos para ser estadísticamente significativa.
+- El cálculo de "2× drawdown vs. período previo" es sensible a outliers cuando los volúmenes de trades son bajos (< 10 trades por semana en la fase inicial de paper trading).
+- El rollback automático puede interactuar negativamente con optimizaciones manuales del operador.
+
+**Para v1**, el operador realiza el rollback manualmente desde `/playbook` cuando detecta degradación en las métricas semanales (ver checklist §13). El auto-rollback se evaluará para v2 cuando haya suficiente histórico (≥ 4 semanas de paper trading con ≥ 5 trades/semana).
+
 ---
 
 ## 8. Cascade de LLM providers
@@ -280,12 +291,12 @@ Para auditoría externa basta con un dump de estas tablas más `balance_snapshot
 
 | Tema | Estado | Acción sugerida |
 |------|--------|-----------------|
-| `daily_pnl_pct` y `total_drawdown_pct` pasados como 0.0 al Risk Gate | Pendiente | Calcular en cada tick desde `trades`/`daily_stats` y pasarlos al gate para activar R9 y la regla de drawdown total con datos reales. **Impacto**: la garantía GA-8 de §1.bis no está operativa con datos reales hasta cerrar este gap. |
-| Override con umbral plano `0.60` vs. `conf_threshold_trending_up/range/high_vol` (0.60 / 0.70 / 0.80) | Pendiente | Unificar la lógica: o el override usa los thresholds por régimen, o se documenta explícitamente que el override es un piso adicional al gate por régimen. Hoy hay ambigüedad entre `01-functional-spec.md §6.3` y `decisor.py:_apply_deterministic_overrides`. |
-| Confluencias inválidas (fuera del catálogo A–H) solo loguean warning | Pendiente | Evaluar si una decisión BUY con confluencias inválidas debe (a) descartarlas y recontar, (b) reducir `confidence` automáticamente, o (c) forzar HOLD. Hoy el LLM podría llegar al umbral mínimo de 2 confluencias con códigos inventados. |
+| `daily_pnl_pct` y `total_drawdown_pct` pasados como 0.0 al Risk Gate | ✅ RESUELTO | `_compute_risk_metrics()` calcula valores reales en cada tick desde `trades` (PnL diario desde 00:00 UTC) y `balance_snapshots` (high-water mark para drawdown). El CB y el Risk Gate reciben datos válidos desde 2026-05-17. |
+| Override con umbral plano `0.60` vs. `conf_threshold_trending_up/range/high_vol` (0.60 / 0.70 / 0.80) | ✅ RESUELTO | `_apply_deterministic_overrides` ahora usa el umbral por régimen del `calibration` dict (TRENDING_UP: 0.60, RANGE: 0.70, HIGH_VOL: 0.80, ajustables por Supervisor). Piso absoluto de seguridad: 0.40. TRENDING_DOWN siempre bloqueado. |
+| Confluencias inválidas (fuera del catálogo A–H) solo loguean warning | ✅ RESUELTO | `_filter_confluence_codes()` en `decisor.py` filtra y descarta códigos inválidos antes de los overrides. El audit log solo persiste códigos válidos; si el LLM infló con códigos inventados, quedan solo los legítimos. |
 | Web API sin autenticación | Pendiente | Para producción remota, agregar auth (token / OIDC) y/o restringir el dashboard a red privada (VPN/SSH tunnel). |
-| Engine sin reset automático de pausa | Pendiente | Considerar reset programado tras un cooldown (p.ej. 10 min sin nuevas fallas). |
-| Sin notificaciones (telegram/email) | Pendiente | Hooks para eventos críticos: kill switch, daily stop, supervisor rollback, drawdown alto. |
+| Engine sin reset automático de pausa | ✅ RESUELTO | `CircuitBreaker.maybe_auto_reset()`: pausa operativa (LLM/exchange) se auto-resetea tras `operational_cooldown_sec` (default 10 min) sin nuevas fallas. Pausa financiera (daily_stop/drawdown) requiere intervención humana explícita. |
+| Sin notificaciones (telegram/email) | ✅ RESUELTO | `notifications/telegram.py`: notifica via Telegram Bot API en kill switch, daily stop, drawdown, engine paused/resumed, racha LLM/exchange. Configurable con `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Sin configurar → no-op silencioso. |
 | Reintento de órdenes parcialmente filleadas | Pendiente | Hoy `RuntimeError` si `filled=0` o `avg_price=0`; conviene política explícita. |
 | Almacenamiento de API keys | En `.env` local | Para producción, mover a un secret manager (Vault / AWS Secrets Manager / SOPS). |
 | Backups de Postgres | Manual (`pg_dump`) | Job programado + retención + restauración probada periódicamente. |

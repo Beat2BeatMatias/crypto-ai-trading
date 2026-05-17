@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import os
 from fastapi import APIRouter, Request
 from sqlalchemy import text
 
@@ -82,6 +83,45 @@ async def health(request: Request) -> dict:
                   AND agent = 'decisor'
             """))).first()
 
+            # LLM latency percentiles (last 24h, decisor only)
+            latency_row = (await s.execute(text("""
+                SELECT
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY latency_ms) AS p50,
+                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95,
+                    PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms) AS p99
+                FROM decisions
+                WHERE ts >= NOW() - INTERVAL '24 hours'
+                  AND agent = 'decisor'
+                  AND latency_ms IS NOT NULL
+            """))).first()
+
+            # Postgres: row counts and DB size
+            table_counts_rows = (await s.execute(text("""
+                SELECT
+                    (SELECT COUNT(*) FROM decisions)        AS decisions,
+                    (SELECT COUNT(*) FROM trades)           AS trades,
+                    (SELECT COUNT(*) FROM ohlcv)            AS ohlcv,
+                    (SELECT COUNT(*) FROM indicators)       AS indicators,
+                    (SELECT COUNT(*) FROM balance_snapshots) AS balance_snapshots
+            """))).first()
+
+            db_size_row = (await s.execute(text("""
+                SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size,
+                       pg_database_size(current_database()) AS db_bytes
+            """))).first()
+
+            # Binance WS: age of last OHLCV 1m (proxy for WS liveness)
+            ws_row = (await s.execute(text(
+                "SELECT time FROM ohlcv WHERE timeframe = '1m' ORDER BY time DESC LIMIT 1"
+            ))).first()
+            if ws_row:
+                ws_age_sec = (datetime.now(timezone.utc) - ws_row.time).total_seconds()
+                binance_ws_ok = ws_age_sec < 120
+                binance_ws_detail = f"último 1m hace {int(ws_age_sec)}s"
+            else:
+                binance_ws_ok = False
+                binance_ws_detail = "sin datos 1m"
+
         parse_errors = int(llm_stats.parse_errors) if llm_stats else 0
         llm_errors = int(llm_stats.llm_errors) if llm_stats else 0
         decisor_total = int(llm_stats.decisor_total) if llm_stats else 0
@@ -106,6 +146,10 @@ async def health(request: Request) -> dict:
             "binance": {
                 "ok": binance_ok,
                 "detail": binance_detail,
+                "ws": {
+                    "ok": binance_ws_ok,
+                    "detail": binance_ws_detail,
+                },
             },
             "llm": {
                 "ok": llm_ok,
@@ -114,6 +158,11 @@ async def health(request: Request) -> dict:
                 "parse_errors_24h": parse_errors,
                 "llm_errors_24h": llm_errors,
                 "supervisor_runs_24h": int(llm_stats.supervisor_total) if llm_stats else 0,
+                "latency_ms": {
+                    "p50": int(latency_row.p50) if latency_row and latency_row.p50 else None,
+                    "p95": int(latency_row.p95) if latency_row and latency_row.p95 else None,
+                    "p99": int(latency_row.p99) if latency_row and latency_row.p99 else None,
+                },
             },
             "playbook": {
                 "version": pb_row.version if pb_row else None,
@@ -122,6 +171,17 @@ async def health(request: Request) -> dict:
                 "win_rate": float(pb_row.win_rate) if pb_row and pb_row.win_rate else None,
             },
             "recent_rejections_1h": int(rejected_row.cnt) if rejected_row else 0,
+            "postgres": {
+                "table_counts": {
+                    "decisions": int(table_counts_rows.decisions) if table_counts_rows else None,
+                    "trades": int(table_counts_rows.trades) if table_counts_rows else None,
+                    "ohlcv": int(table_counts_rows.ohlcv) if table_counts_rows else None,
+                    "indicators": int(table_counts_rows.indicators) if table_counts_rows else None,
+                    "balance_snapshots": int(table_counts_rows.balance_snapshots) if table_counts_rows else None,
+                },
+                "db_size": db_size_row.db_size if db_size_row else None,
+                "db_bytes": int(db_size_row.db_bytes) if db_size_row else None,
+            },
         }
     except Exception as e:
         return {
@@ -129,10 +189,11 @@ async def health(request: Request) -> dict:
             "kill_switch": None,
             "circuit_breaker": {"triggered": None, "reason": None},
             "engine": {"ok": False, "detail": "error de DB", "last_decision_age_min": None},
-            "binance": {"ok": False, "detail": "error de DB"},
+            "binance": {"ok": False, "detail": "error de DB", "ws": {"ok": False, "detail": "error de DB"}},
             "llm": None,
             "playbook": None,
             "recent_rejections_1h": None,
+            "postgres": {"table_counts": None, "db_size": None, "db_bytes": None},
         }
 
 

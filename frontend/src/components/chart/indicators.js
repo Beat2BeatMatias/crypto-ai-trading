@@ -36,7 +36,7 @@ export function bollingerBands(candles, period = 20, stdDev = 2) {
             const diff = candles[j].close - mean;
             varSum += diff * diff;
         }
-        const sd = Math.sqrt(varSum / (period - 1));
+        const sd = Math.sqrt(varSum / period);
         const t = candles[i].time;
         upper.push({ time: t, value: mean + stdDev * sd });
         middle.push({ time: t, value: mean });

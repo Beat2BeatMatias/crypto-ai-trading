@@ -54,11 +54,15 @@ def test_zero_trades_on_flat_market():
 
 
 def test_signal_buy_requires_min_confluences():
-    """signal_buy should return False when fewer than 3 confluences are met."""
+    """signal_buy debe retornar False cuando menos de 3 confluencias blandas se cumplen."""
+    # GIVEN: filtros duros OK, pero solo 1 de 4 confluencias blandas cumplida (RSI)
     row = pd.Series({
-        "ema20": 66000.0, "ema50": 65000.0, "ema200": 60000.0,  # bullish alignment ✓
-        "rsi": 50.0,  # NOT oversold ✗
-        "macd_hist": -0.5,  # bearish ✗
-        "volume": 100.0, "volume_avg": 100.0,  # equal, no excess ✗
+        "ema20": 66000.0, "ema50": 65000.0, "ema200": 60000.0,  # EMAs apiladas ✓
+        "open": 65900.0, "close": 65500.0,   # vela bajista, dentro del pullback zone ✓
+        "ema200_slope_pct": 0.5,             # slope EMA200 positivo ✓
+        "rsi": 50.0,                         # ✓ en rango 38-68 (1 confluencia)
+        "macd_hist": -0.5,                   # ✗ histograma negativo
+        "volume": 100.0, "volume_avg": 200.0,  # ✗ sin exceso de volumen
     })
+    # WHEN / THEN: solo 1 de 4 confluencias → False
     assert signal_buy(row) is False

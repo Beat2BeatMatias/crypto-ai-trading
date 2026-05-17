@@ -20,6 +20,7 @@ from agents.supervisor import Supervisor
 from risk.risk_gate import RiskGate
 from risk.circuit_breaker import CircuitBreaker
 from scheduler import EngineScheduler
+from notifications import notify, TelegramEvent
 
 logger = structlog.get_logger()
 
@@ -180,8 +181,18 @@ async def run() -> None:
 
     async def decisor_tick() -> None:
         if cb.engine_paused:
-            logger.warning("engine.paused")
-            return
+            if cb.maybe_auto_reset():
+                logger.warning("engine.auto_reset_after_cooldown")
+                async with session_factory() as s:
+                    store = ConfigStore(s)
+                    await store.set(ConfigKey.ENGINE_PAUSED, "false", changed_by="circuit_breaker")
+                    await store.set(ConfigKey.ENGINE_PAUSE_REASON, "", changed_by="circuit_breaker")
+                await notify(TelegramEvent.ENGINE_RESUMED, {
+                    "cooldown_sec": cb.operational_cooldown_sec,
+                })
+            else:
+                logger.warning("engine.paused")
+                return
 
         async with session_factory() as s:
             store = ConfigStore(s)
@@ -275,8 +286,19 @@ async def run() -> None:
                 daily_pnl_frac, total_drawdown_frac = await _compute_risk_metrics(
                     s, usdt, btc_balance=btc
                 )
-                cb.evaluate(daily_pnl_pct=daily_pnl_frac, total_drawdown_pct=total_drawdown_frac)
-                if cb.engine_paused:
+                prev_paused = cb.engine_paused
+                state = cb.evaluate(daily_pnl_pct=daily_pnl_frac, total_drawdown_pct=total_drawdown_frac)
+                if state.daily_stop_triggered and not prev_paused:
+                    await notify(TelegramEvent.DAILY_STOP, {
+                        "daily_pnl": f"{daily_pnl_frac:.2%}",
+                        "límite": f"{cb.daily_stop_pct:.2%}",
+                    })
+                if state.kill_switch_triggered and not prev_paused:
+                    await notify(TelegramEvent.DRAWDOWN_HIGH, {
+                        "drawdown": f"{total_drawdown_frac:.2%}",
+                        "límite": f"{cb.max_drawdown_pct:.2%}",
+                    })
+                if cb.engine_paused and not prev_paused:
                     reason = (
                         f"max_drawdown breached: {total_drawdown_frac:.2%}"
                         if total_drawdown_frac <= cb.max_drawdown_pct
@@ -284,7 +306,10 @@ async def run() -> None:
                     )
                     logger.error("engine.paused_by_circuit_breaker",
                                  daily_pnl=daily_pnl_frac, drawdown=total_drawdown_frac)
+                    await notify(TelegramEvent.KILL_SWITCH, {"motivo": reason})
                     await _persist_circuit_breaker_pause(session_factory, reason)
+                    return
+                elif cb.engine_paused:
                     return
             else:
                 daily_pnl_frac, total_drawdown_frac = 0.0, 0.0
@@ -307,6 +332,11 @@ async def run() -> None:
                 logger.error("engine.decisor_error", error=str(e))
                 cb.record_llm_failure()
                 if cb.engine_paused:
+                    await notify(TelegramEvent.LLM_FAILURE_STREAK, {
+                        "fallas_consecutivas": cb._llm_consecutive_failures,
+                        "error": str(e)[:200],
+                    })
+                    await notify(TelegramEvent.ENGINE_PAUSED, {"motivo": "llm_failures"})
                     await _persist_circuit_breaker_pause(
                         session_factory, f"llm_failures: {cb._llm_consecutive_failures} consecutivas"
                     )
@@ -384,6 +414,11 @@ async def run() -> None:
                 logger.error("execution.error", error=str(e))
                 cb.record_exchange_failure()
                 if cb.engine_paused:
+                    await notify(TelegramEvent.EXCHANGE_FAILURE_STREAK, {
+                        "fallas_consecutivas": cb._exchange_consecutive_failures,
+                        "error": str(e)[:200],
+                    })
+                    await notify(TelegramEvent.ENGINE_PAUSED, {"motivo": "exchange_failures"})
                     await _persist_circuit_breaker_pause(
                         session_factory, f"exchange_failures: {cb._exchange_consecutive_failures} consecutivas"
                     )

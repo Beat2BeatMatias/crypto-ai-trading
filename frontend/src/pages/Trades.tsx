@@ -1,33 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { api } from "../api/client";
 import type { Trade } from "../types";
 
+// ── Formatters ────────────────────────────────────────────────────────────────
+
 function fmt(n: number | null | undefined, decimals = 2, prefix = "$"): string {
   if (n == null) return "—";
-  return `${prefix}${n.toFixed(decimals)}`;
-}
-
-function useCloseTrade(setTrades: React.Dispatch<React.SetStateAction<Trade[]>>) {
-  const [closing, setClosing] = useState<string | null>(null);
-
-  async function requestClose(trade: Trade) {
-    if (!window.confirm(
-      `¿Cerrar manualmente este trade?\n\nEntrada: $${trade.entry_price.toFixed(2)}\nCantidad: ${trade.quantity_btc.toFixed(6)} BTC\n\nEl engine ejecutará la orden de venta al precio de mercado en el próximo ciclo (~30s).`
-    )) return;
-
-    setClosing(trade.id);
-    try {
-      const updated = await api.closeTrade(trade.id);
-      setTrades(prev => prev.map(t => t.id === updated.id ? updated : t));
-    } catch {
-      alert("Error al solicitar el cierre del trade.");
-    } finally {
-      setClosing(null);
-    }
-  }
-
-  return { closing, requestClose };
+  return `${prefix}${n.toLocaleString("es-AR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
 }
 
 function pct(n: number | null | undefined): string {
@@ -53,62 +33,249 @@ function rrRatio(entry: number, sl: number | null, tp: number | null): string {
   return `${(reward / risk).toFixed(2)}:1`;
 }
 
+// ── CSV Export ────────────────────────────────────────────────────────────────
+
+function exportCSV(trades: Trade[]) {
+  const cols = [
+    "id", "ts_open", "ts_close", "side", "status",
+    "quantity_btc", "entry_price", "exit_price",
+    "stop_loss", "take_profit",
+    "pnl_usdt", "pnl_pct", "fees_usdt", "close_reason",
+    "order_id_open", "order_id_close",
+  ] as const;
+
+  const header = cols.join(",");
+  const rows = trades.map(t =>
+    cols.map(c => {
+      const v = t[c];
+      if (v == null) return "";
+      if (typeof v === "string" && v.includes(",")) return `"${v}"`;
+      return String(v);
+    }).join(",")
+  );
+
+  const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `trades_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Close hook ────────────────────────────────────────────────────────────────
+
+function useCloseTrade(setTrades: React.Dispatch<React.SetStateAction<Trade[]>>) {
+  const [closing, setClosing] = useState<string | null>(null);
+
+  async function requestClose(trade: Trade) {
+    if (!window.confirm(
+      `¿Cerrar manualmente este trade?\n\nEntrada: $${trade.entry_price.toFixed(2)}\nCantidad: ${trade.quantity_btc.toFixed(6)} BTC\n\nEl engine ejecutará la orden de venta al precio de mercado en el próximo ciclo (~30s).`
+    )) return;
+
+    setClosing(trade.id);
+    try {
+      const updated = await api.closeTrade(trade.id);
+      setTrades(prev => prev.map(t => t.id === updated.id ? updated : t));
+    } catch {
+      alert("Error al solicitar el cierre del trade.");
+    } finally {
+      setClosing(null);
+    }
+  }
+
+  return { closing, requestClose };
+}
+
+// ── Sort types ────────────────────────────────────────────────────────────────
+
+type SortKey = "ts_open" | "pnl_usdt" | "entry_price" | "quantity_btc";
+type SortDir = "asc" | "desc";
+
+// ── Summary Footer ────────────────────────────────────────────────────────────
+
+function SummaryFooter({ trades }: { trades: Trade[] }) {
+  const closed = trades.filter(t => t.status === "closed");
+  if (closed.length === 0) return null;
+
+  const totalPnl = closed.reduce((s, t) => s + (t.pnl_usdt ?? 0), 0);
+  const totalFees = trades.reduce((s, t) => s + (t.fees_usdt ?? 0), 0);
+  const wins = closed.filter(t => (t.pnl_usdt ?? 0) > 0).length;
+  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+  const pnlColor = totalPnl >= 0 ? "text-emerald-400" : "text-red-400";
+
+  return (
+    <div className="rounded-xl bg-zinc-900 border border-zinc-700 p-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div>
+        <div className="text-xs text-zinc-500 mb-1">P&L realizado total</div>
+        <div className={`font-mono font-semibold text-sm ${pnlColor}`}>
+          {totalPnl >= 0 ? "+" : ""}{fmt(totalPnl)}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs text-zinc-500 mb-1">Win rate</div>
+        <div className="font-mono text-sm text-zinc-300">
+          {winRate.toFixed(1)}% <span className="text-zinc-500">({wins}/{closed.length})</span>
+        </div>
+      </div>
+      <div>
+        <div className="text-xs text-zinc-500 mb-1">Fees totales</div>
+        <div className="font-mono text-sm text-zinc-400">{fmt(totalFees)}</div>
+      </div>
+      <div>
+        <div className="text-xs text-zinc-500 mb-1">Trades mostrados</div>
+        <div className="font-mono text-sm text-zinc-300">
+          {trades.length} <span className="text-zinc-500">({closed.length} cerrados)</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+
 export function Trades() {
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [filter, setFilter] = useState<"all" | "open" | "closed">("all");
-  const { closing, requestClose } = useCloseTrade(setTrades);
+  const [allTrades, setAllTrades] = useState<Trade[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
+  const [resultFilter, setResultFilter] = useState<"all" | "win" | "loss">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("ts_open");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const { closing, requestClose } = useCloseTrade(setAllTrades);
 
   useEffect(() => {
-    const status = filter === "all" ? undefined : filter;
-    api.trades(status).then(setTrades).catch(() => {});
-  }, [filter]);
+    const status = statusFilter === "all" ? undefined : statusFilter;
+    api.trades(status).then(setAllTrades).catch(() => {});
+  }, [statusFilter]);
+
+  const trades = useMemo(() => {
+    let list = [...allTrades];
+
+    if (resultFilter === "win")
+      list = list.filter(t => (t.pnl_usdt ?? 0) > 0);
+    else if (resultFilter === "loss")
+      list = list.filter(t => (t.pnl_usdt ?? 0) < 0);
+
+    if (dateFrom)
+      list = list.filter(t => new Date(t.ts_open) >= new Date(dateFrom));
+    if (dateTo)
+      list = list.filter(t => new Date(t.ts_open) <= new Date(dateTo + "T23:59:59Z"));
+
+    list.sort((a, b) => {
+      let av: number, bv: number;
+      if (sortKey === "ts_open") {
+        av = new Date(a.ts_open).getTime();
+        bv = new Date(b.ts_open).getTime();
+      } else {
+        av = (a[sortKey] as number | null) ?? -Infinity;
+        bv = (b[sortKey] as number | null) ?? -Infinity;
+      }
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+
+    return list;
+  }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("desc"); }
+  }
+
+  const sortIcon = (key: SortKey) =>
+    sortKey !== key ? <span className="text-zinc-700">⇅</span>
+    : sortDir === "desc" ? <span className="text-blue-400">↓</span>
+    : <span className="text-blue-400">↑</span>;
+
+  const btnCls = (active: boolean) =>
+    `text-xs px-3 py-1.5 rounded transition-colors ${
+      active
+        ? "bg-blue-900 text-blue-200 font-semibold"
+        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+    }`;
 
   return (
     <div className="space-y-3">
+
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Historial de trades</h2>
-        <span className="text-xs text-zinc-500">{trades.length} trade{trades.length !== 1 ? "s" : ""}</span>
-      </div>
-
-      <div className="flex gap-2">
         <button
-          onClick={() => setFilter("all")}
-          className={`text-xs px-3 py-1.5 rounded transition-colors ${
-            filter === "all"
-              ? "bg-blue-900 text-blue-200 font-semibold"
-              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-          }`}
+          onClick={() => exportCSV(trades)}
+          disabled={trades.length === 0}
+          className="text-xs px-3 py-1.5 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          Todos
-        </button>
-        <button
-          onClick={() => setFilter("open")}
-          className={`text-xs px-3 py-1.5 rounded transition-colors ${
-            filter === "open"
-              ? "bg-blue-900/70 text-blue-200 font-semibold"
-              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-          }`}
-        >
-          Abiertos
-        </button>
-        <button
-          onClick={() => setFilter("closed")}
-          className={`text-xs px-3 py-1.5 rounded transition-colors ${
-            filter === "closed"
-              ? "bg-blue-900/70 text-blue-200 font-semibold"
-              : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-          }`}
-        >
-          Cerrados
+          ↓ CSV
         </button>
       </div>
 
+      {/* ── Filtros ── */}
+      <div className="flex flex-wrap gap-3 items-end">
+        {/* Status */}
+        <div className="flex gap-1">
+          {(["all", "open", "closed"] as const).map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)} className={btnCls(statusFilter === s)}>
+              {s === "all" ? "Todos" : s === "open" ? "Abiertos" : "Cerrados"}
+            </button>
+          ))}
+        </div>
+
+        {/* Resultado */}
+        <div className="flex gap-1">
+          <button onClick={() => setResultFilter("all")} className={btnCls(resultFilter === "all")}>Win+Loss</button>
+          <button onClick={() => setResultFilter("win")} className={btnCls(resultFilter === "win")}>
+            <span className="text-emerald-400">▲</span> Win
+          </button>
+          <button onClick={() => setResultFilter("loss")} className={btnCls(resultFilter === "loss")}>
+            <span className="text-red-400">▼</span> Loss
+          </button>
+        </div>
+
+        {/* Date range */}
+        <div className="flex gap-2 items-center ml-auto">
+          <input
+            type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500"
+          />
+          <span className="text-zinc-600 text-xs">—</span>
+          <input
+            type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500"
+          />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+              className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Sort bar ── */}
+      <div className="flex gap-3 text-xs text-zinc-500">
+        <span>Ordenar:</span>
+        {([
+          ["ts_open", "Fecha"],
+          ["pnl_usdt", "P&L"],
+          ["entry_price", "Precio entrada"],
+          ["quantity_btc", "Cantidad BTC"],
+        ] as [SortKey, string][]).map(([k, label]) => (
+          <button key={k} onClick={() => toggleSort(k)}
+            className={`flex items-center gap-1 hover:text-zinc-300 transition-colors ${sortKey === k ? "text-blue-300" : ""}`}>
+            {label} {sortIcon(k)}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Resumen ── */}
+      <SummaryFooter trades={trades} />
+
+      {/* ── Vacío ── */}
       {trades.length === 0 && (
         <div className="rounded-xl bg-zinc-900 p-8 text-center text-zinc-500 text-sm">
-          Sin trades aún.
+          Sin trades que coincidan con los filtros.
         </div>
       )}
 
+      {/* ── Listado ── */}
       {trades.map(t => {
         const valueUsdt = t.quantity_btc * t.entry_price;
         const pnlPositive = (t.pnl_usdt ?? 0) >= 0;
@@ -126,9 +293,12 @@ export function Trades() {
 
               <span className={`text-xs px-2 py-0.5 rounded ${
                 isOpen ? "bg-blue-900/50 text-blue-300" :
-                t.status === "closed" ? "bg-zinc-800 text-zinc-400" :
-                "bg-zinc-800 text-zinc-600"
-              }`}>{t.status.toUpperCase()}</span>
+                t.pnl_usdt != null && t.pnl_usdt > 0 ? "bg-emerald-900/40 text-emerald-400" :
+                t.pnl_usdt != null && t.pnl_usdt < 0 ? "bg-red-900/40 text-red-400" :
+                "bg-zinc-800 text-zinc-400"
+              }`}>
+                {isOpen ? "ABIERTO" : t.pnl_usdt != null && t.pnl_usdt > 0 ? "WIN" : t.pnl_usdt != null && t.pnl_usdt < 0 ? "LOSS" : t.status.toUpperCase()}
+              </span>
 
               <button
                 type="button"
@@ -200,7 +370,7 @@ export function Trades() {
               </div>
             </div>
 
-            {/* ── P&L (solo si hay resultado) ── */}
+            {/* ── P&L ── */}
             {(t.pnl_usdt != null || isOpen) && (
               <div className="mt-3 pt-3 border-t border-zinc-800 flex items-center justify-between">
                 <span className="text-xs text-zinc-500">
@@ -214,7 +384,19 @@ export function Trades() {
               </div>
             )}
 
-            {/* ── Cierre manual (solo trades abiertos) ── */}
+            {/* ── Order IDs ── */}
+            {(t.order_id_open || t.order_id_close) && (
+              <div className="mt-2 flex gap-4 text-xs text-zinc-600">
+                {t.order_id_open && (
+                  <span>Order apertura: <span className="font-mono">{t.order_id_open}</span></span>
+                )}
+                {t.order_id_close && (
+                  <span>Order cierre: <span className="font-mono">{t.order_id_close}</span></span>
+                )}
+              </div>
+            )}
+
+            {/* ── Cierre manual ── */}
             {isOpen && (
               <div className="mt-3 pt-3 border-t border-zinc-800 flex items-center justify-between">
                 <span className="text-xs text-zinc-500">

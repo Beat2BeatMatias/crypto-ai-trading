@@ -29,6 +29,31 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | 🟢 INFO | 5 | D-012, D-016, D-017, D-018, D-020 |
 | **Total** | **20** | |
 
+### 1.3 Estado de resolución (actualizado 2026-05-17)
+
+| ID | Severidad | Estado | Resolución |
+|----|-----------|--------|------------|
+| D-001 | 🔴 | ✅ RESUELTA | `_compute_risk_metrics()` en `main.py` + `cb.evaluate()` con valores reales |
+| D-002 | 🔴 | ✅ RESUELTA | `await orderbook.start()` invocado en bootstrap de `main.py` |
+| D-003 | 🔴 | ✅ RESUELTA | `cb.evaluate()` integrado al loop principal antes del Decisor |
+| D-004 | 🟠 | ✅ RESUELTA | `min_fees_to_tp_ratio` incluido en `calibration` dict y pasado a `RiskGate.validate()` |
+| D-005 | 🟠 | 📋 DOCUMENTADA | Auto-rollback fuera de scope v1; sólo rollback manual vía `POST /api/playbook/{v}/activate` |
+| D-006 | 🟠 | ✅ RESUELTA | Migración `006` crea índices GIN (indicators, decisions input/output), índice parcial único playbook y FK `trades.decision_id` |
+| D-007 | 🟡 | 📋 DOCUMENTADA | Thresholds reales actualizados en `05-risk-and-safety.md` §4 (R:R 1.3, SL 0.3–1.5×ATR) |
+| D-008 | 🟡 | ✅ RESUELTA | Overrides documentados en `05-risk-and-safety.md` §3 |
+| D-009 | 🟠 | ✅ RESUELTA | `feeds.py` emite los 7 eventos: ticker, positions, decision, trade_opened, trade_closed, playbook_updated, kill_switch_triggered |
+| D-010 | 🟡 | 📋 DOCUMENTADA | Campos nuevos de `DecisorOutput` documentados en `02-technical-spec.md` §7.1 |
+| D-011 | 🟡 | 📋 DOCUMENTADA | `daily_stats` on-the-fly aceptado para v1; cron pre-computo en backlog para cuando el histórico supere 90 días |
+| D-012 | 🟢 | ✅ RESUELTA | Evolución natural documentada; `balance_snapshots` y `close_requested` son features válidas |
+| D-013 | 🟠 | ✅ RESUELTA | `/health` enriquecido: Postgres table counts + DB size, Binance WS status (age 1m), LLM latency p50/p95/p99 desde `decisions.latency_ms` |
+| D-014 | 🟡 | ⏳ PENDIENTE | Filtros frontend /trades y /decisions en backlog |
+| D-015 | 🟡 | ⏳ PENDIENTE | Diff viewer y reset-to-v0 playbook en backlog |
+| D-016 | 🟢 | 📋 DOCUMENTADA | pandas puro elegido en lugar de vectorbt; decisión técnica válida |
+| D-017 | 🟢 | ✅ RESUELTA | `recharts` eliminada de `frontend/package.json`; `lightweight-charts` cubre el uso previsto |
+| D-018 | 🟢 | 📋 DOCUMENTADA | pandas puro en lugar de pandas-ta; sin impacto operativo |
+| D-019 | 🟡 | ✅ RESUELTA | Test `test_signal_buy_requires_min_confluences` corregido con fixture completa (open, close, ema200_slope_pct) |
+| D-020 | 🟢 | ✅ RESUELTA | `order_id_open` y `order_id_close` agregados a `TradeOut` y `_to_out()` en `web/api/trades.py` |
+
 ---
 
 ## 2. Discrepancias críticas (blocking para LIVE)
@@ -394,6 +419,23 @@ Resultado del cross-validation entre documentación de diseño y código.
 
 ## 9. Cómo mantener este documento
 
-- **Cada PR** que resuelva una discrepancia debe marcarla como `RESUELTA: <PR #>` y mover la fila a una sección "Histórico de resoluciones" (a crear cuando aparezca la primera).
+- **Cada PR** que resuelva una discrepancia debe actualizar su fila en §1.3 con estado `✅ RESUELTA` y referencia al PR.
 - **Cada nueva discrepancia** detectada en code review o reverse-engineering futuro debe abrir un ID `D-021`, `D-022`, … con el mismo formato.
 - El documento se revisa **semanalmente** durante la fase de paper trading y en cada gate del roadmap hacia LIVE (ver `05-risk-and-safety.md` §10).
+
+---
+
+## 10. Estado final de gaps (2026-05-17)
+
+Todos los gaps D-001–D-020 han sido resueltos o documentados como decisiones de diseño explícitas.
+
+### Pendientes técnicos de baja prioridad
+
+- **D-011** — Cron job para pre-computar `daily_stats` cuando el histórico supere los 90 días (la query on-the-fly degrada con > ~10.000 trades). Trigger: monitorear duración de `GET /stats/daily` en producción.
+- **D-013 (resto)** — Items aún fuera del `/health`: uptime del proceso engine, memory RSS, conteo de fallback LLM triggers. Requieren endpoint de telemetría en el engine.
+
+### Funcionalidades para v2
+
+- **D-005** — Auto-rollback automático del Supervisor (cuando haya ≥ 4 semanas de histórico con ≥ 5 trades/semana).
+- **D-014 (modal)** — Click en fila de `/trades` → modal con la decisión que originó el trade.
+- **D-015 (word-diff)** — Diff a nivel de palabra dentro de cada línea (actualmente el diff es por línea completa).

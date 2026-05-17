@@ -19,11 +19,22 @@ logger = structlog.get_logger()
 _VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
 
 
-def _validate_confluence_codes(confluences: list[str]) -> None:
+def _filter_confluence_codes(confluences: list[str]) -> list[str]:
+    """Elimina códigos fuera del catálogo A–H y loguea lo que se descarta.
+
+    Garantía: el output siempre contiene solo códigos del catálogo aprobado.
+    Si el LLM infló el conteo con códigos inventados, solo quedan los legítimos.
+    """
+    valid = [c for c in confluences if c in _VALID_CONFLUENCE_CODES]
     invalid = [c for c in confluences if c not in _VALID_CONFLUENCE_CODES]
     if invalid:
-        logger.warning("decisor.invalid_confluence_codes", invalid=invalid,
-                       valid=sorted(_VALID_CONFLUENCE_CODES))
+        logger.warning(
+            "decisor.invalid_confluence_codes_filtered",
+            invalid=invalid,
+            remaining_valid=valid,
+            valid_catalog=sorted(_VALID_CONFLUENCE_CODES),
+        )
+    return valid
 
 
 class Decisor:
@@ -82,7 +93,9 @@ class Decisor:
                     raw = raw[4:]
             parsed = json.loads(raw.strip())
             validated = DecisorOutput.model_validate(parsed)
-            _validate_confluence_codes(validated.confluences)
+            clean_confluences = _filter_confluence_codes(validated.confluences)
+            if len(clean_confluences) != len(validated.confluences):
+                validated = validated.model_copy(update={"confluences": clean_confluences})
             validated = _apply_deterministic_overrides(validated, max_position_pct, calibration)
             output_dict = validated.model_dump()
             rejected_reason = None
@@ -124,31 +137,69 @@ def _hold_decision(reason: str) -> DecisorOutput:
     )
 
 
+_REGIME_THRESHOLD_KEY = {
+    MarketRegime.TRENDING_UP: "conf_threshold_trending_up",
+    MarketRegime.RANGE: "conf_threshold_range",
+    MarketRegime.HIGH_VOLATILITY: "conf_threshold_high_vol",
+}
+
+_REGIME_THRESHOLD_DEFAULT = {
+    MarketRegime.TRENDING_UP: 0.60,
+    MarketRegime.RANGE: 0.70,
+    MarketRegime.HIGH_VOLATILITY: 0.80,
+}
+
+# Piso absoluto de seguridad: ninguna configuración del Supervisor puede bajar
+# el umbral de override por debajo de este valor.
+_CONFIDENCE_FLOOR = 0.40
+
+
 def _apply_deterministic_overrides(validated: DecisorOutput, max_position_pct: float,
                                    calibration: dict | None = None) -> DecisorOutput:
-    """Enforce C3 confidence threshold and step-function position sizing.
+    """Enforce per-regime confidence threshold and step-function position sizing.
 
-    Threshold: flat 0.60 for all regimes (TRENDING_DOWN always → HOLD).
-    Sizing:    confidence >= 0.70 → min(max_position_pct, 0.25) — cap spec §3
-               confidence 0.60-0.69 → 0.03 (reduced size)
-    The LLM is instructed to apply the same rules; this layer ensures the runtime
-    behavior cannot diverge regardless of LLM output.
+    Gate:   TRENDING_DOWN → HOLD siempre.
+            Otros regímenes → usa conf_threshold_<regime> del calibration dict
+            (ajustable por el Supervisor), con piso absoluto de _CONFIDENCE_FLOOR.
+    Sizing: confidence >= 0.70 → min(max_position_pct, 0.25)
+            confidence < 0.70  → 0.03 (tamaño reducido)
+
+    El LLM recibe los mismos umbrales en el prompt; este layer garantiza que
+    el runtime no pueda divergir aunque el LLM ignore las instrucciones.
     """
     if validated.action != DecisorAction.BUY:
         return validated
 
-    if validated.regime == MarketRegime.TRENDING_DOWN or validated.confidence < 0.60:
-        logger.info("decisor.override_below_threshold",
-                    regime=validated.regime.value, confidence=validated.confidence)
+    # TRENDING_DOWN siempre bloqueado
+    if validated.regime == MarketRegime.TRENDING_DOWN:
+        logger.info("decisor.override_trending_down", confidence=validated.confidence)
         return validated.model_copy(update={
             "action": DecisorAction.HOLD,
-            "stop_loss": None,
-            "take_profit": None,
-            "position_size_pct": 0.0,
-            "reasoning": f"[override] confidence {validated.confidence:.2f} < 0.60 "
-                         f"en {validated.regime.value} → HOLD forzado.",
+            "stop_loss": None, "take_profit": None, "position_size_pct": 0.0,
+            "reasoning": "[override] TRENDING_DOWN → BUY bloqueado.",
         })
 
+    # Umbral por régimen desde calibration (con fallback al default y piso de seguridad)
+    cal = calibration or {}
+    key = _REGIME_THRESHOLD_KEY.get(validated.regime)
+    default = _REGIME_THRESHOLD_DEFAULT.get(validated.regime, 0.60)
+    threshold = max(_CONFIDENCE_FLOOR, float(cal.get(key, default)) if key else default)
+
+    if validated.confidence < threshold:
+        logger.info("decisor.override_below_threshold",
+                    regime=validated.regime.value,
+                    confidence=validated.confidence,
+                    threshold=threshold)
+        return validated.model_copy(update={
+            "action": DecisorAction.HOLD,
+            "stop_loss": None, "take_profit": None, "position_size_pct": 0.0,
+            "reasoning": (
+                f"[override] confidence {validated.confidence:.2f} < umbral "
+                f"{threshold:.2f} para {validated.regime.value} → HOLD forzado."
+            ),
+        })
+
+    # Sizing step-function (independiente del umbral de régimen)
     full_size = min(max_position_pct, 0.25)
     new_size = round(full_size if validated.confidence >= 0.70 else 0.03, 4)
     new_size = max(0.01, new_size)

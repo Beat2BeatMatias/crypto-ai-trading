@@ -12,6 +12,8 @@ export interface Trade {
   stop_loss: number | null; take_profit: number | null;
   close_reason: string | null; fees_usdt: number | null;
   close_requested: boolean;
+  order_id_open: string | null;
+  order_id_close: string | null;
 }
 
 export interface Position {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Decision } from "../types";
 
@@ -25,13 +25,38 @@ function explainRejection(reason: string): string {
 }
 
 export function Decisions() {
-  const [items, setItems] = useState<Decision[]>([]);
+  const [allItems, setAllItems] = useState<Decision[]>([]);
   const [agent, setAgent] = useState("");
+  const [actionFilter, setActionFilter] = useState<"" | "BUY" | "SELL" | "HOLD">("");
+  const [confMin, setConfMin] = useState(0);
+  const [confMax, setConfMax] = useState(100);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selected, setSelected] = useState<Decision | null>(null);
 
   useEffect(() => {
-    api.decisions(agent ? { agent } : undefined).then(setItems).catch(() => {});
+    api.decisions(agent ? { agent } : undefined).then(setAllItems).catch(() => {});
   }, [agent]);
+
+  const items = useMemo(() => {
+    let list = [...allItems];
+    if (actionFilter) {
+      list = list.filter(d => {
+        const o = d.output as { action?: string };
+        return o.action === actionFilter;
+      });
+    }
+    list = list.filter(d => {
+      const o = d.output as { confidence?: number };
+      const conf = (o.confidence ?? 0) * 100;
+      return conf >= confMin && conf <= confMax;
+    });
+    if (dateFrom)
+      list = list.filter(d => new Date(d.ts) >= new Date(dateFrom));
+    if (dateTo)
+      list = list.filter(d => new Date(d.ts) <= new Date(dateTo + "T23:59:59Z"));
+    return list;
+  }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo]);
 
   const out = (d: Decision) => d.output as {
     action?: string; confidence?: number; reasoning?: string;
@@ -59,14 +84,67 @@ export function Decisions() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div className="lg:col-span-2 rounded-xl bg-zinc-900 p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">Decisiones (audit log)</h2>
-          <select value={agent} onChange={e => setAgent(e.target.value)}
-            className="rounded bg-zinc-800 px-2 py-1 text-sm border border-zinc-700">
-            <option value="">Todos</option>
-            <option value="decisor">Decisor</option>
-            <option value="supervisor">Supervisor</option>
-          </select>
+          <span className="text-xs text-zinc-500">{items.length} resultado{items.length !== 1 ? "s" : ""}</span>
+        </div>
+
+        {/* ── Filtros ── */}
+        <div className="space-y-2 mb-4">
+          <div className="flex flex-wrap gap-2 items-center">
+            {/* Agente */}
+            <select value={agent} onChange={e => setAgent(e.target.value)}
+              className="rounded bg-zinc-800 px-2 py-1 text-xs border border-zinc-700 text-zinc-300">
+              <option value="">Todos los agentes</option>
+              <option value="decisor">Decisor</option>
+              <option value="supervisor">Supervisor</option>
+            </select>
+
+            {/* Acción */}
+            {(["", "BUY", "SELL", "HOLD"] as const).map(a => (
+              <button key={a} onClick={() => setActionFilter(a)}
+                className={`text-xs px-2.5 py-1 rounded transition-colors ${
+                  actionFilter === a
+                    ? a === "BUY" ? "bg-emerald-900/70 text-emerald-300 font-semibold"
+                    : a === "SELL" ? "bg-red-900/70 text-red-300 font-semibold"
+                    : a === "HOLD" ? "bg-zinc-700 text-zinc-300 font-semibold"
+                    : "bg-blue-900 text-blue-200 font-semibold"
+                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                }`}
+              >
+                {a === "" ? "Todas las acciones" : a}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Confidence range */}
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <span>Conf:</span>
+              <input type="range" min={0} max={100} step={5} value={confMin}
+                onChange={e => setConfMin(Number(e.target.value))}
+                className="w-20 accent-blue-500" />
+              <span className="text-zinc-300 w-8">{confMin}%</span>
+              <span>–</span>
+              <input type="range" min={0} max={100} step={5} value={confMax}
+                onChange={e => setConfMax(Number(e.target.value))}
+                className="w-20 accent-blue-500" />
+              <span className="text-zinc-300 w-8">{confMax}%</span>
+            </div>
+
+            {/* Date range */}
+            <div className="flex gap-2 items-center ml-auto">
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" />
+              <span className="text-zinc-600 text-xs">—</span>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" />
+              {(dateFrom || dateTo) && (
+                <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+                  className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
+              )}
+            </div>
+          </div>
         </div>
         <table className="w-full text-sm">
           <thead>

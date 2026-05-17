@@ -40,3 +40,32 @@ async def test_health_db_up_when_db_reachable(client):
     body = r.json()
     assert isinstance(body.get("db"), str)
     assert len(body["db"]) > 0
+
+
+async def test_health_binance_section_has_ws(client):
+    """La sección binance incluye el sub-objeto ws con ok y detail."""
+    r = await client.get("/api/health")
+    binance = r.json().get("binance", {})
+    assert "ws" in binance, "binance.ws ausente en /api/health"
+    ws = binance["ws"]
+    assert "ok" in ws
+    assert "detail" in ws
+
+
+async def test_health_postgres_section_present(client):
+    """La sección postgres está presente en la respuesta (aunque sea null en SQLite)."""
+    r = await client.get("/api/health")
+    body = r.json()
+    assert "postgres" in body, "postgres ausente en /api/health"
+
+
+async def test_health_llm_latency_present(client):
+    """La sección llm incluye latency_ms o es null (SQLite no soporta PERCENTILE_CONT)."""
+    r = await client.get("/api/health")
+    body = r.json()
+    llm = body.get("llm")
+    # En SQLite el handler de error devuelve llm=None; en Postgres devuelve el objeto completo.
+    if llm is not None:
+        assert "latency_ms" in llm, "llm.latency_ms ausente"
+        lat = llm["latency_ms"]
+        assert "p50" in lat and "p95" in lat and "p99" in lat
