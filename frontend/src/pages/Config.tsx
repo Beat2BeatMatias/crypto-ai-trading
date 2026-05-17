@@ -10,6 +10,7 @@ const SUPERVISOR_MANAGED_KEYS = new Set([
   "min_rr_ratio",
   "decisor_interval_min",
   "max_position_pct",
+  "min_position_size",
   "conf_threshold_trending_up",
   "conf_threshold_range",
   "conf_threshold_high_vol",
@@ -165,155 +166,137 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "text",
   },
 
-  // ── Umbrales de decisión ──────────────────────────────────────────────────
+  // ── LLM-Centric (v1.3) ───────────────────────────────────────────────────
+  min_position_size: {
+    label: "Tamaño mínimo de posición",
+    description: "Piso de sizing en fracción del capital. El LLM no puede proponer menos. También es el mínimo para que el Risk Gate ejecute un BUY.",
+    type: "slider", min: 0.001, max: 0.05, step: 0.001, unit: "%",
+    format: v => `${(v * 100).toFixed(1)}%`, parse: parseFloat,
+  },
+  coherence_strict_mode: {
+    label: "Modo estricto del CoherenceChecker",
+    description: "Cuando está activo, inconsistencias críticas del LLM (C1/C2/C3) bloquean la ejecución forzando HOLD. Por defecto son solo advertencias informativas.",
+    type: "toggle",
+  },
+  two_pass_enabled: {
+    label: "Two-pass habilitado",
+    description: "Permite que el LLM se auto-corrija: si detecta inconsistencias factuales (C1/C2/C3), hace una segunda llamada al LLM en el mismo ciclo para revisar su decisión.",
+    type: "toggle",
+  },
+
+  // ── Guías para el LLM (no enforcement, solo referencia en el prompt) ──────
   sl_atr_max_multiplier: {
     label: "Multiplicador SL máximo (ATR)",
-    description: "Distancia máxima del Stop Loss en múltiplos del ATR. SL más amplio que este es rechazado.",
+    description: "Distancia máxima del Stop Loss en múltiplos del ATR. SL más amplio que este es rechazado por el Risk Gate (R4).",
     type: "slider", min: 0.5, max: 3.0, step: 0.1, unit: "× ATR",
     format: fmt1, parse: parseFloat,
   },
   rsi_overbought_1h: {
-    label: "RSI sobrecompra — 1h",
-    description: "Si RSI 1h supera este umbral, se cancelan señales alcistas de timeframes menores.",
+    label: "RSI sobrecompra — 1h (guía LLM)",
+    description: "RSI 1h considerado sobrecomprado. El LLM lo usa como referencia contextual en su razonamiento. No bloquea ejecuciones.",
     type: "slider", min: 60, max: 85, step: 1, unit: "",
     format: v => String(v), parse: parseInt,
   },
   conf_threshold_trending_up: {
-    label: "Umbral confianza — TRENDING_UP",
-    description: "Confianza mínima para ejecutar BUY en régimen alcista. Menor valor = más trades.",
+    label: "Confianza mínima sugerida — TRENDING_UP",
+    description: "Guía para el LLM: confidence mínima recomendada para BUY en tendencia alcista. El LLM tiene autonomía para desviarse con justificación.",
     type: "slider", min: 0.40, max: 0.85, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_threshold_range: {
-    label: "Umbral confianza — RANGE",
-    description: "Confianza mínima para ejecutar BUY en régimen lateral. Más exigente que TRENDING_UP.",
+    label: "Confianza mínima sugerida — RANGE",
+    description: "Guía para el LLM: confidence mínima recomendada para BUY en mercado lateral. El LLM tiene autonomía para desviarse con justificación.",
     type: "slider", min: 0.50, max: 0.90, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_threshold_high_vol: {
-    label: "Umbral confianza — HIGH_VOLATILITY",
-    description: "Confianza mínima para ejecutar BUY en alta volatilidad. Más exigente que RANGE.",
+    label: "Confianza mínima sugerida — HIGH_VOLATILITY",
+    description: "Guía para el LLM: confidence mínima recomendada para BUY en alta volatilidad. El LLM tiene autonomía para desviarse con justificación.",
     type: "slider", min: 0.60, max: 0.95, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
 
-  // ── Fórmula de confianza — base confluencias ──────────────────────────────
+  // ── Calibración de confidence (guías para el LLM) ────────────────────────
   conf_base_0: {
-    label: "Base — 0 confluencias",
-    description: "Confianza base cuando no hay ninguna confluencia activa del playbook.",
+    label: "Confidence base — 0 confluencias",
+    description: "Guía LLM: nivel de referencia de confidence con 0 confluencias. El LLM lo usa para calibrar su propia confidence_base.",
     type: "slider", min: 0.10, max: 0.50, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_base_1: {
-    label: "Base — 1 confluencia",
-    description: "Confianza base con 1 confluencia activa.",
+    label: "Confidence base — 1 confluencia",
+    description: "Guía LLM: nivel de referencia con 1 confluencia activa.",
     type: "slider", min: 0.30, max: 0.65, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_base_2: {
-    label: "Base — 2 confluencias",
-    description: "Confianza base con 2 confluencias activas.",
+    label: "Confidence base — 2 confluencias",
+    description: "Guía LLM: nivel de referencia con 2 confluencias activas.",
     type: "slider", min: 0.45, max: 0.80, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_base_3: {
-    label: "Base — 3 confluencias",
-    description: "Confianza base con 3 confluencias activas.",
+    label: "Confidence base — 3 confluencias",
+    description: "Guía LLM: nivel de referencia con 3 confluencias activas.",
     type: "slider", min: 0.60, max: 0.90, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   conf_base_4plus: {
-    label: "Base — 4+ confluencias",
-    description: "Confianza base con 4 o más confluencias activas.",
+    label: "Confidence base — 4+ confluencias",
+    description: "Guía LLM: nivel de referencia con 4 o más confluencias activas (cap).",
     type: "slider", min: 0.75, max: 1.00, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
-
-  // ── Fórmula de confianza — pesos timeframe ────────────────────────────────
-  peso_timeframe_partial: {
-    label: "Peso timeframe — solo 15m",
-    description: "Multiplicador cuando solo el 15m confirma la dirección y el 1h es neutral.",
-    type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
-    format: fmt2, parse: parseFloat,
-  },
-  peso_timeframe_minimal: {
-    label: "Peso timeframe — solo 5m",
-    description: "Multiplicador cuando solo el 5m confirma, con 15m y 1h discordantes.",
-    type: "slider", min: 0.40, max: 0.90, step: 0.05, unit: "",
-    format: fmt2, parse: parseFloat,
-  },
-
-  // ── Fórmula de confianza — pesos régimen ─────────────────────────────────
   peso_regime_range: {
-    label: "Peso régimen — RANGE",
-    description: "Multiplicador de confianza base cuando el mercado está en rango lateral.",
+    label: "Factor régimen — RANGE (guía LLM)",
+    description: "Guía LLM: multiplicador de confianza base sugerido para régimen lateral. Se inyecta en el system prompt como referencia.",
     type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
   peso_regime_high_vol: {
-    label: "Peso régimen — HIGH_VOLATILITY",
-    description: "Multiplicador de confianza base en alta volatilidad. Generalmente menor que RANGE.",
+    label: "Factor régimen — HIGH_VOLATILITY (guía LLM)",
+    description: "Guía LLM: multiplicador de confianza base sugerido para alta volatilidad. Generalmente menor que RANGE.",
     type: "slider", min: 0.40, max: 0.90, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
-
-  // ── Fórmula de confianza — ajustes ────────────────────────────────────────
   adj_volume_boost: {
-    label: "Ajuste — boost por volumen",
-    description: "Se suma a la confianza cuando el volumen del 5m supera el ratio configurado × la media.",
+    label: "Boost por volumen (guía LLM)",
+    description: "Guía LLM: boost de confidence sugerido cuando el volumen supera adj_volume_ratio × la media. Referencia para confidence_adjustment.",
     type: "slider", min: 0.00, max: 0.15, step: 0.01, unit: "",
     format: fmt2, parse: parseFloat,
   },
   adj_volume_ratio: {
-    label: "Ratio de volumen (boost)",
-    description: "Múltiplo de la media de volumen 5m requerido para activar el boost de confianza.",
+    label: "Ratio de volumen para boost (guía LLM)",
+    description: "Guía LLM: múltiplo del volumen medio que activa el boost de confianza. Referencia inyectada en el prompt.",
     type: "slider", min: 1.0, max: 3.0, step: 0.1, unit: "× avg",
     format: fmt1, parse: parseFloat,
   },
-  adj_antipattern_penalty: {
-    label: "Ajuste — penalización anti-patrón",
-    description: "Se resta a la confianza cuando se detecta un anti-patrón (FOMO, overtrading, etc.).",
-    type: "slider", min: -0.25, max: 0.00, step: 0.01, unit: "",
-    format: fmt2, parse: parseFloat,
-  },
   adj_spread_penalty: {
-    label: "Ajuste — penalización spread",
-    description: "Se resta a la confianza cuando el spread supera el umbral configurado.",
+    label: "Penalización por spread (guía LLM)",
+    description: "Guía LLM: penalización de confidence sugerida cuando el spread supera el umbral. Referencia para confidence_adjustment.",
     type: "slider", min: -0.15, max: 0.00, step: 0.01, unit: "",
     format: fmt2, parse: parseFloat,
   },
   adj_spread_threshold_pct: {
-    label: "Umbral spread (penalización)",
-    description: "Spread máximo (% del precio) antes de aplicar la penalización de confianza.",
+    label: "Umbral de spread (guía LLM)",
+    description: "Spread (% del precio) que el LLM considera zona de mayor riesgo. Usado como referencia en el system prompt.",
     type: "slider", min: 0.01, max: 0.20, step: 0.01, unit: "%",
     format: v => `${(v * 100).toFixed(2)}%`, parse: parseFloat,
   },
-  adj_orderbook_penalty: {
-    label: "Ajuste — penalización order book",
-    description: "Se resta a la confianza cuando el bid_wall supera el ratio sobre ask_wall en zona contraria.",
-    type: "slider", min: -0.15, max: 0.00, step: 0.01, unit: "",
-    format: fmt2, parse: parseFloat,
-  },
-  adj_orderbook_ratio: {
-    label: "Ratio bid/ask wall (penalización)",
-    description: "Múltiplo bid_wall / ask_wall que activa la penalización de order book.",
-    type: "slider", min: 2.0, max: 10.0, step: 0.5, unit: "× ask",
-    format: fmt1, parse: parseFloat,
-  },
   subjective_adj_max: {
-    label: "Ajuste subjetivo máximo",
-    description: "Límite del ajuste de confianza que el LLM puede aplicar por criterio propio (±). Valor más bajo = mayor control.",
+    label: "Límite de ajuste subjetivo",
+    description: "Máximo ajuste de confidence que el LLM puede declarar en confidence_adjustment (±). Enforced por Pydantic. Menor = mayor control sobre el ajuste.",
     type: "slider", min: 0.00, max: 0.20, step: 0.01, unit: "",
     format: fmt2, parse: parseFloat,
   },
   confluence_weak_factor: {
-    label: "Factor confluencia débil",
-    description: "Multiplicador aplicado a una confluencia débil respecto a una sólida en el cálculo de confianza. 1.0 = igual peso.",
+    label: "Factor confluencia débil (guía LLM)",
+    description: "Guía LLM: peso relativo de una confluencia débil vs una sólida al calibrar confidence. 1.0 = igual peso. Referencia en el contexto.",
     type: "slider", min: 0.0, max: 1.0, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
 
-  // ── Decisor v2 — controles operacionales ─────────────────────────────────
+  // ── Decisor — controles operacionales ────────────────────────────────────
   min_fees_to_tp_ratio: {
     label: "Ratio mínimo TP / fees",
     description: "El movimiento al TP debe ser al menos este múltiplo del costo de fees ida y vuelta. Filtra trades con TP demasiado pequeño.",
@@ -372,13 +355,14 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   },
 };
 
-const GROUPS: { title: string; keys: string[]; color: string }[] = [
+const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] = [
   {
     title: "Gestión de riesgo",
     color: "amber",
     keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
-           "max_position_pct", "max_simultaneous_trades", "daily_stop_pct", "max_drawdown_pct",
-           "max_slippage_pct", "atr_timeframe"],
+           "max_position_pct", "min_position_size", "max_simultaneous_trades",
+           "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe"],
+    note: "Parámetros con enforcement real en el Risk Gate (R1–R10). El LLM no puede ignorarlos.",
   },
   {
     title: "Motor de decisiones",
@@ -386,37 +370,38 @@ const GROUPS: { title: string; keys: string[]; color: string }[] = [
     keys: ["decisor_interval_min", "orderbook_levels", "kill_switch"],
   },
   {
-    title: "Umbrales de confianza",
+    title: "LLM-Centric — Decisor autónomo",
     color: "sky",
-    keys: ["rsi_overbought_1h", "conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol"],
+    keys: ["coherence_strict_mode", "two_pass_enabled"],
+    note: "Controles del nuevo modelo LLM-centric. El CoherenceChecker audita inconsistencias del LLM; en modo estricto las bloquea.",
   },
   {
-    title: "Fórmula de confianza",
+    title: "Guías para el LLM — Umbrales de confianza",
     color: "violet",
+    keys: ["conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol", "rsi_overbought_1h"],
+    note: "⚠ Estas son guías inyectadas en el prompt del Decisor, no límites de enforcement. El LLM tiene autonomía para desviarse con justificación.",
+  },
+  {
+    title: "Guías para el LLM — Calibración de confidence",
+    color: "indigo",
     keys: [
       "conf_base_0", "conf_base_1", "conf_base_2", "conf_base_3", "conf_base_4plus",
-      "peso_timeframe_partial", "peso_timeframe_minimal",
       "peso_regime_range", "peso_regime_high_vol",
       "adj_volume_boost", "adj_volume_ratio",
-      "adj_antipattern_penalty",
       "adj_spread_penalty", "adj_spread_threshold_pct",
-      "adj_orderbook_penalty", "adj_orderbook_ratio",
       "subjective_adj_max", "confluence_weak_factor",
     ],
+    note: "⚠ Parámetros de referencia para el cálculo de confidence del LLM. No son aplicados determinísticamente por el sistema.",
   },
   {
-    title: "Decisor v2 — Controles",
+    title: "Decisor — Controles operacionales",
     color: "teal",
     keys: ["min_fees_to_tp_ratio", "min_confluences_buy", "cooldown_after_sell_min", "expected_holding_max_min"],
-  },
-  {
-    title: "Sizing de posición",
-    color: "rose",
-    keys: ["factor_conf_60", "factor_conf_70", "factor_conf_80", "factor_conf_90", "factor_regime_non_trending"],
+    note: "min_confluences_buy y cooldown_after_sell_min son guías en el prompt; min_fees_to_tp_ratio es enforcement (R10).",
   },
   {
     title: "Modelos LLM",
-    color: "indigo",
+    color: "rose",
     keys: ["decisor_provider", "supervisor_provider", "llm_timeout_sec", "llm_max_retries"],
   },
   {
@@ -754,11 +739,24 @@ export function Config() {
     ...GROUPS.flatMap(g => g.keys),
     ...Array.from(FALLBACK_KEYS),
     "mode",
-    // keys internas / legacy — no se exponen en el UI
+    // internas — no se exponen en el UI
     "drawdown_reset_ts",
     "supervisor_run_now",
+    "engine_paused",
+    "engine_pause_reason",
     "pending_execute",
     "fallback_provider",
+    // legacy obsoletas — eliminadas en v1.3 LLM-centric
+    "peso_timeframe_partial",
+    "peso_timeframe_minimal",
+    "adj_antipattern_penalty",
+    "adj_orderbook_penalty",
+    "adj_orderbook_ratio",
+    "factor_conf_60",
+    "factor_conf_70",
+    "factor_conf_80",
+    "factor_conf_90",
+    "factor_regime_non_trending",
   ]);
   const otherEntries = entries.filter(e => !knownKeys.has(e.key));
 
@@ -797,10 +795,13 @@ export function Config() {
         if (groupEntries.length === 0) return null;
         return (
           <div key={group.title} className={`rounded-xl bg-zinc-900 p-5 border ${c.border}`}>
-            <div className="flex items-center gap-2 mb-5">
+            <div className="flex items-center gap-2 mb-2">
               <span className={`w-2 h-2 rounded-full ${c.dot}`} />
               <h2 className={`text-sm font-semibold uppercase tracking-wide ${c.title}`}>{group.title}</h2>
             </div>
+            {group.note && (
+              <p className="text-xs text-zinc-500 mb-4 leading-relaxed">{group.note}</p>
+            )}
             <div className="space-y-6">
               {groupEntries.map(e => {
                 const def = FIELD_DEFS[e.key];

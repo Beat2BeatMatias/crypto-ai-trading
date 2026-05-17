@@ -50,26 +50,14 @@ class ConfigKey(str, Enum):
     CONF_BASE_2 = "conf_base_2"
     CONF_BASE_3 = "conf_base_3"
     CONF_BASE_4PLUS = "conf_base_4plus"
-    # Confidence formula — peso timeframe
-    PESO_TIMEFRAME_PARTIAL = "peso_timeframe_partial"
-    PESO_TIMEFRAME_MINIMAL = "peso_timeframe_minimal"
-    # Confidence formula — peso regime
+    # Confidence formula — peso regime (guía para el LLM, no enforcement)
     PESO_REGIME_RANGE = "peso_regime_range"
     PESO_REGIME_HIGH_VOL = "peso_regime_high_vol"
-    # Confidence formula — ajustes
+    # Confidence formula — ajustes (guía para el LLM, no enforcement)
     ADJ_VOLUME_BOOST = "adj_volume_boost"
     ADJ_VOLUME_RATIO = "adj_volume_ratio"
-    ADJ_ANTIPATTERN_PENALTY = "adj_antipattern_penalty"
     ADJ_SPREAD_PENALTY = "adj_spread_penalty"
     ADJ_SPREAD_THRESHOLD_PCT = "adj_spread_threshold_pct"
-    ADJ_ORDERBOOK_PENALTY = "adj_orderbook_penalty"
-    ADJ_ORDERBOOK_RATIO = "adj_orderbook_ratio"
-    # Position sizing factors
-    FACTOR_CONF_60 = "factor_conf_60"
-    FACTOR_CONF_70 = "factor_conf_70"
-    FACTOR_CONF_80 = "factor_conf_80"
-    FACTOR_CONF_90 = "factor_conf_90"
-    FACTOR_REGIME_NON_TRENDING = "factor_regime_non_trending"
     # Decisor v2 — operational parameters
     MIN_FEES_TO_TP_RATIO = "min_fees_to_tp_ratio"
     MIN_CONFLUENCES_BUY = "min_confluences_buy"
@@ -133,62 +121,92 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.MIN_RR_RATIO: _Default("1.3", "float", "Min reward/risk ratio for BUY approval"),
     ConfigKey.SL_ATR_MULTIPLIER: _Default("0.3", "float", "Min SL distance as ATR multiplier"),
     ConfigKey.SL_ATR_MAX_MULTIPLIER: _Default("1.5", "float", "Max SL distance as ATR multiplier"),
-    ConfigKey.CONF_THRESHOLD_TRENDING_UP: _Default("0.60", "float", "Min confidence for BUY — TRENDING_UP"),
-    ConfigKey.CONF_THRESHOLD_RANGE: _Default("0.70", "float", "Min confidence for BUY — RANGE"),
-    ConfigKey.CONF_THRESHOLD_HIGH_VOL: _Default("0.80", "float", "Min confidence for BUY — HIGH_VOLATILITY"),
-    ConfigKey.RSI_OVERBOUGHT_1H: _Default("70", "int", "RSI 1h overbought threshold"),
-    # conf_base_N deriva de 0.40 + 0.15×N (fórmula canónica del decisor).
-    # Para actualizar instalaciones existentes:
-    #   UPDATE config_entry SET value='0.40' WHERE key='conf_base_0';
-    #   UPDATE config_entry SET value='0.55' WHERE key='conf_base_1';
-    #   UPDATE config_entry SET value='0.70' WHERE key='conf_base_2';
-    #   UPDATE config_entry SET value='0.85' WHERE key='conf_base_3';
-    #   UPDATE config_entry SET value='1.00' WHERE key='conf_base_4plus';
-    #   UPDATE config_entry SET value='0.75' WHERE key='peso_regime_high_vol';
-    ConfigKey.CONF_BASE_0: _Default("0.40", "float", "Base confidence — 0 confluences (formula: 0.40+0.15×0)"),
-    ConfigKey.CONF_BASE_1: _Default("0.55", "float", "Base confidence — 1 confluence (formula: 0.40+0.15×1)"),
-    ConfigKey.CONF_BASE_2: _Default("0.70", "float", "Base confidence — 2 confluences (formula: 0.40+0.15×2)"),
-    ConfigKey.CONF_BASE_3: _Default("0.85", "float", "Base confidence — 3 confluences (formula: 0.40+0.15×3)"),
-    ConfigKey.CONF_BASE_4PLUS: _Default("1.00", "float", "Base confidence — 4+ confluences (formula: capped at 1.0)"),
-    ConfigKey.PESO_TIMEFRAME_PARTIAL: _Default("0.85", "float", "Timeframe weight — 15m only aligned"),
-    ConfigKey.PESO_TIMEFRAME_MINIMAL: _Default("0.70", "float", "Timeframe weight — 5m only aligned"),
-    ConfigKey.PESO_REGIME_RANGE: _Default("0.85", "float", "Regime weight — RANGE"),
-    ConfigKey.PESO_REGIME_HIGH_VOL: _Default("0.75", "float", "Regime weight — HIGH_VOLATILITY"),
-    ConfigKey.ADJ_VOLUME_BOOST: _Default("0.05", "float", "Confidence boost — volume > ratio×avg"),
-    ConfigKey.ADJ_VOLUME_RATIO: _Default("1.5", "float", "Volume ratio to trigger ADJ_VOLUME_BOOST"),
-    ConfigKey.ADJ_ANTIPATTERN_PENALTY: _Default("-0.10", "float", "Confidence penalty — anti-pattern present"),
-    ConfigKey.ADJ_SPREAD_PENALTY: _Default("-0.05", "float", "Confidence penalty — spread > threshold"),
-    ConfigKey.ADJ_SPREAD_THRESHOLD_PCT: _Default("0.05", "float", "Spread threshold (%) for ADJ_SPREAD_PENALTY"),
-    ConfigKey.ADJ_ORDERBOOK_PENALTY: _Default("-0.05", "float", "Confidence penalty — bid wall > ratio×ask"),
-    ConfigKey.ADJ_ORDERBOOK_RATIO: _Default("5.0", "float", "Bid/ask ratio to trigger ADJ_ORDERBOOK_PENALTY"),
-    ConfigKey.FACTOR_CONF_60: _Default("0.50", "float", "Size factor — confidence 0.60-0.69"),
-    ConfigKey.FACTOR_CONF_70: _Default("0.70", "float", "Size factor — confidence 0.70-0.79"),
-    ConfigKey.FACTOR_CONF_80: _Default("0.85", "float", "Size factor — confidence 0.80-0.89"),
-    ConfigKey.FACTOR_CONF_90: _Default("1.00", "float", "Size factor — confidence 0.90+"),
-    ConfigKey.FACTOR_REGIME_NON_TRENDING: _Default("0.50", "float", "Size factor — RANGE | HIGH_VOLATILITY"),
+    ConfigKey.CONF_THRESHOLD_TRENDING_UP: _Default(
+        "0.60", "float",
+        "Guía LLM: confidence mínima recomendada para BUY en TRENDING_UP. No es enforcement; el LLM decide autónomamente y puede desviarse con justificación.",
+    ),
+    ConfigKey.CONF_THRESHOLD_RANGE: _Default(
+        "0.70", "float",
+        "Guía LLM: confidence mínima recomendada para BUY en RANGE. No es enforcement; el LLM decide autónomamente.",
+    ),
+    ConfigKey.CONF_THRESHOLD_HIGH_VOL: _Default(
+        "0.80", "float",
+        "Guía LLM: confidence mínima recomendada para BUY en HIGH_VOLATILITY. No es enforcement; el LLM decide autónomamente.",
+    ),
+    ConfigKey.RSI_OVERBOUGHT_1H: _Default(
+        "70", "int",
+        "Guía LLM/Supervisor: RSI 1h considerado sobrecomprado. El Supervisor puede sugerirlo; el Decisor lo usa como referencia contextual, no como bloqueo.",
+    ),
+    # conf_base_N: guías de referencia para la fórmula de confidence que el LLM usa internamente.
+    # Aparecen en el system prompt del Decisor como calibración sugerida.
+    # El LLM declara su propia confidence; el sistema no la recalcula ni la fuerza.
+    ConfigKey.CONF_BASE_0: _Default(
+        "0.40", "float",
+        "Guía LLM: confidence_base de referencia con 0 confluencias activas. El LLM calibra su propia confidence usando esta escala como guía.",
+    ),
+    ConfigKey.CONF_BASE_1: _Default(
+        "0.55", "float",
+        "Guía LLM: confidence_base de referencia con 1 confluencia activa.",
+    ),
+    ConfigKey.CONF_BASE_2: _Default(
+        "0.70", "float",
+        "Guía LLM: confidence_base de referencia con 2 confluencias activas.",
+    ),
+    ConfigKey.CONF_BASE_3: _Default(
+        "0.85", "float",
+        "Guía LLM: confidence_base de referencia con 3 confluencias activas.",
+    ),
+    ConfigKey.CONF_BASE_4PLUS: _Default(
+        "1.00", "float",
+        "Guía LLM: confidence_base de referencia con 4+ confluencias activas (cap).",
+    ),
+    ConfigKey.PESO_REGIME_RANGE: _Default(
+        "0.85", "float",
+        "Guía LLM: factor de confianza base en régimen RANGE (0=conservador, 1=full). El LLM lo usa como referencia en su cálculo de confidence.",
+    ),
+    ConfigKey.PESO_REGIME_HIGH_VOL: _Default(
+        "0.75", "float",
+        "Guía LLM: factor de confianza base en régimen HIGH_VOLATILITY. Generalmente menor que RANGE para reflejar mayor riesgo.",
+    ),
+    ConfigKey.ADJ_VOLUME_BOOST: _Default(
+        "0.05", "float",
+        "Guía LLM: boost sugerido de confidence cuando el volumen supera adj_volume_ratio × la media. El LLM puede aplicarlo como confidence_adjustment.",
+    ),
+    ConfigKey.ADJ_VOLUME_RATIO: _Default(
+        "1.5", "float",
+        "Guía LLM: múltiplo del volumen medio 5m que activa el boost de confianza. Referencia para el LLM.",
+    ),
+    ConfigKey.ADJ_SPREAD_PENALTY: _Default(
+        "-0.05", "float",
+        "Guía LLM: penalización sugerida de confidence cuando el spread supera adj_spread_threshold_pct. Referencia para el LLM.",
+    ),
+    ConfigKey.ADJ_SPREAD_THRESHOLD_PCT: _Default(
+        "0.05", "float",
+        "Umbral de spread (% del precio) que el LLM interpreta como señal de mayor riesgo. Usado también en el system prompt del Decisor.",
+    ),
     ConfigKey.MIN_FEES_TO_TP_RATIO: _Default(
         "3.0", "float",
         "Min TP movement as multiple of round-trip fees for BUY approval (R10). Range 1.5–6.0.",
     ),
     ConfigKey.MIN_CONFLUENCES_BUY: _Default(
         "2", "int",
-        "Minimum number of confluences required to allow BUY. Range 1–4.",
+        "Guía LLM: número mínimo de confluencias recomendado para BUY. Inyectado en el system prompt como regla de calidad; el LLM lo considera pero tiene autonomía final. Rango 1–4.",
     ),
     ConfigKey.COOLDOWN_AFTER_SELL_MIN: _Default(
         "15", "int",
-        "Minutes of cooldown after a SELL before next BUY is allowed. Range 0–120.",
+        "Guía LLM: minutos de cooldown recomendados tras un SELL antes de una nueva entrada BUY. Inyectado en el system prompt; el LLM lo respeta como norma de calidad. Rango 0–120.",
     ),
     ConfigKey.SUBJECTIVE_ADJ_MAX: _Default(
         "0.10", "float",
-        "Maximum allowed subjective confidence adjustment (±). Range 0.00–0.20.",
+        "Límite del confidence_adjustment subjetivo que el LLM puede declarar (±). Enforced por Pydantic. Rango 0.00–0.20.",
     ),
     ConfigKey.EXPECTED_HOLDING_MAX_MIN: _Default(
         "240", "int",
-        "Maximum expected holding time in minutes; used for zombie-trade detection. Range 30–1440.",
+        "Tiempo máximo de holding esperado en minutos. Usado por el Supervisor para detección de trades zombie y por el CoherenceChecker (C6). Rango 30–1440.",
     ),
     ConfigKey.CONFLUENCE_WEAK_FACTOR: _Default(
         "0.5", "float",
-        "Multiplier applied to a weak confluence vs a solid one in confidence calc. Range 0.0–1.0.",
+        "Guía LLM: multiplicador aplicado a una confluencia débil vs una sólida al calibrar confidence. Referencia inyectada en el contexto; el LLM decide el peso real.",
     ),
     ConfigKey.DRAWDOWN_RESET_TS: _Default(
         "", "string",

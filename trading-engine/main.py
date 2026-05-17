@@ -218,7 +218,10 @@ async def run() -> None:
             max_slippage_pct = await store.get_typed(ConfigKey.MAX_SLIPPAGE_PCT)
             cb.update_thresholds(daily_stop_pct=daily_stop, max_drawdown_pct=max_drawdown_pct)
             calibration = {
+                # Risk Gate / SL bounds
                 "sl_atr_max_multiplier": await store.get_typed(ConfigKey.SL_ATR_MAX_MULTIPLIER),
+                "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
+                # Guías para el LLM — se inyectan en el system prompt (no enforcement)
                 "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
                 "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
                 "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
@@ -228,23 +231,12 @@ async def run() -> None:
                 "conf_base_2": await store.get_typed(ConfigKey.CONF_BASE_2),
                 "conf_base_3": await store.get_typed(ConfigKey.CONF_BASE_3),
                 "conf_base_4plus": await store.get_typed(ConfigKey.CONF_BASE_4PLUS),
-                "peso_timeframe_partial": await store.get_typed(ConfigKey.PESO_TIMEFRAME_PARTIAL),
-                "peso_timeframe_minimal": await store.get_typed(ConfigKey.PESO_TIMEFRAME_MINIMAL),
                 "peso_regime_range": await store.get_typed(ConfigKey.PESO_REGIME_RANGE),
                 "peso_regime_high_vol": await store.get_typed(ConfigKey.PESO_REGIME_HIGH_VOL),
                 "adj_volume_boost": await store.get_typed(ConfigKey.ADJ_VOLUME_BOOST),
                 "adj_volume_ratio": await store.get_typed(ConfigKey.ADJ_VOLUME_RATIO),
-                "adj_antipattern_penalty": await store.get_typed(ConfigKey.ADJ_ANTIPATTERN_PENALTY),
                 "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
                 "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
-                "adj_orderbook_penalty": await store.get_typed(ConfigKey.ADJ_ORDERBOOK_PENALTY),
-                "adj_orderbook_ratio": await store.get_typed(ConfigKey.ADJ_ORDERBOOK_RATIO),
-                "factor_conf_60": await store.get_typed(ConfigKey.FACTOR_CONF_60),
-                "factor_conf_70": await store.get_typed(ConfigKey.FACTOR_CONF_70),
-                "factor_conf_80": await store.get_typed(ConfigKey.FACTOR_CONF_80),
-                "factor_conf_90": await store.get_typed(ConfigKey.FACTOR_CONF_90),
-                "factor_regime_non_trending": await store.get_typed(ConfigKey.FACTOR_REGIME_NON_TRENDING),
-                "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
             }
             coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
             two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
