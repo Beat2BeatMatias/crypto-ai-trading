@@ -80,6 +80,9 @@ class ConfigKey(str, Enum):
     DRAWDOWN_RESET_TS = "drawdown_reset_ts"
     ENGINE_PAUSED = "engine_paused"
     ENGINE_PAUSE_REASON = "engine_pause_reason"
+    # Supervisor — fase de ratificación del playbook (01-functional-spec §F5.bis.5)
+    MAX_PLAYBOOK_AGE_DAYS = "max_playbook_age_days"
+    PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT = "playbook_force_regen_wr_delta_pct"
 
 
 @dataclass(frozen=True)
@@ -194,6 +197,14 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.ENGINE_PAUSE_REASON: _Default(
         "", "string",
         "internal: razón de la última pausa del circuit breaker.",
+    ),
+    ConfigKey.MAX_PLAYBOOK_AGE_DAYS: _Default(
+        "7", "int",
+        "Edad máxima (días) del playbook activo antes de forzar regeneración por el Supervisor. Rango 1–30.",
+    ),
+    ConfigKey.PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT: _Default(
+        "15", "float",
+        "Diferencia absoluta de win rate (puntos %) vs. baseline del playbook activo que fuerza regeneración. Rango 1–50.",
     ),
 }
 

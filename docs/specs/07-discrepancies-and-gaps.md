@@ -25,9 +25,9 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 |-----------|----------|-----|
 | 🔴 CRÍTICO | 3 | D-001, D-002, D-003 |
 | 🟠 ALTO | 5 | D-004, D-005, D-006, D-009, D-013 |
-| 🟡 MEDIO | 7 | D-007, D-008, D-010, D-011, D-014, D-015, D-019 |
+| 🟡 MEDIO | 8 | D-007, D-008, D-010, D-011, D-014, D-015, D-019, D-021 |
 | 🟢 INFO | 5 | D-012, D-016, D-017, D-018, D-020 |
-| **Total** | **20** | |
+| **Total** | **21** | |
 
 ### 1.3 Estado de resolución (actualizado 2026-05-17)
 
@@ -53,6 +53,7 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | D-018 | 🟢 | 📋 DOCUMENTADA | pandas puro en lugar de pandas-ta; sin impacto operativo |
 | D-019 | 🟡 | ✅ RESUELTA | Test `test_signal_buy_requires_min_confluences` corregido con fixture completa (open, close, ema200_slope_pct) |
 | D-020 | 🟢 | ✅ RESUELTA | `order_id_open` y `order_id_close` agregados a `TradeOut` y `_to_out()` en `web/api/trades.py` |
+| D-021 | 🟡 | ✅ RESUELTA | Fase de ratificación del Supervisor (§F5.bis.5 + §2.7.4) elimina la obligación de generar `PlaybookVersion` por ciclo. Audit trail garantizado por AC-14. |
 
 ---
 

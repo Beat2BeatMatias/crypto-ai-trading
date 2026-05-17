@@ -47,6 +47,7 @@ async def ws_endpoint(ws: WebSocket):
     factory = ws.app.state.session_factory
     now = datetime.now(tz=timezone.utc)
     last_decision_ts = now
+    last_supervisor_decision_ts = now
     last_trade_open_ts = now
     last_trade_close_ts = now
     last_playbook_ts = now
@@ -69,6 +70,27 @@ async def ws_endpoint(ws: WebSocket):
                             "confidence": d.output.get("confidence"),
                             "reasoning": d.output.get("reasoning", ""),
                         })
+
+                # --- supervisor_ran (emit on every supervisor execution, AC-14) ---
+                new_supervisor_decisions = (await s.execute(
+                    select(Decision).where(
+                        Decision.ts > last_supervisor_decision_ts,
+                        Decision.agent == "supervisor",
+                    ).order_by(Decision.ts)
+                )).scalars().all()
+                for d in new_supervisor_decisions:
+                    out = d.output or {}
+                    ratified = bool(out.get("ratified", False))
+                    await manager.broadcast("supervisor_ran", {
+                        "ts": d.ts.isoformat(),
+                        "ratified": ratified,
+                        "ratify_reason": out.get("ratify_reason"),
+                        "force_regen_reason": out.get("force_regen_reason"),
+                        "mode": out.get("mode"),
+                        "new_version": out.get("new_version") if not ratified else None,
+                    })
+                if new_supervisor_decisions:
+                    last_supervisor_decision_ts = max(d.ts for d in new_supervisor_decisions)
 
                 # --- positions ---
                 positions = (await s.execute(

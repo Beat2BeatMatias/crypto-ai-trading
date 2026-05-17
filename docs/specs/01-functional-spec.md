@@ -163,8 +163,11 @@ Antes de ejecutar la decisión, el Risk Gate verifica reglas absolutas (ver `05-
   - Resumen de mercado (precio open/close, low/high, ATR, label de volatilidad).
 - Modo **`diagnostic`** si hay menos trades cerrados que `min_trades` (5): genera diagnóstico (mercado lateral/bajista, playbook restrictivo, etc.).
 - Modo **`normal`** con suficientes trades: optimiza el playbook.
-- Guarda nueva `PlaybookVersion` (active=true, anteriores active=false).
-- **Segunda llamada LLM** para sugerencias de configuración: propone valores nuevos para `atr_timeframe`, `sl_atr_multiplier`, `min_rr_ratio`, `decisor_interval_min`, `max_position_pct`, `conf_threshold_*`. Solo aplica las que caen dentro de **guardrails** (`_SAFE_BOUNDS`); el resto se persiste como sugerencia rechazada con motivo.
+- **Decisión binaria en dos fases (ver §F5.bis.5)**:
+  1. **Evaluación** — Primera llamada LLM corta (JSON estricto) responde si el playbook activo sigue siendo válido (`ratify`) o si requiere regeneración (`regenerate`). Antes de consultar al LLM, se evalúan **guardrails determinísticos** (`max_playbook_age_days`, delta WR, cambio de régimen, kill switch disparado) que pueden forzar regeneración sin opinión del LLM.
+  2. **Regeneración** (sólo si la fase 1 resolvió `regenerate`) — Segunda llamada LLM produce el nuevo `PlaybookVersion` (`active=true`, anteriores `active=false`).
+- Si la fase 1 resuelve **`ratify`**: **no** se inserta nueva versión. El playbook activo se mantiene y la actividad queda auditada en `decisions` (`agent="supervisor"`, `output.ratified=true`, `output.ratify_reason`).
+- **Llamada LLM adicional** para sugerencias de configuración (independiente del resultado anterior): propone valores nuevos para `atr_timeframe`, `sl_atr_multiplier`, `min_rr_ratio`, `decisor_interval_min`, `max_position_pct`, `conf_threshold_*`. Solo aplica las que caen dentro de **guardrails** (`_SAFE_BOUNDS`); el resto se persiste como sugerencia rechazada con motivo.
 
 ### F5.bis. Aprendizaje: alcance y límites
 
@@ -174,8 +177,8 @@ El sistema "aprende día a día" en un sentido **acotado y trazable**, no por en
 
 | Lazo | Frecuencia | Qué cambia | Quién aplica | Reversible |
 |------|-----------|------------|--------------|------------|
-| Lazo 1 — Playbook | 1×/día (00:00 UTC) o manual | Markdown del playbook activo (`setups`, `patrones a evitar`, `reglas específicas`, régimen esperado). | Supervisor LLM → `PlaybookVersion` con `active=true`. | Sí, rollback a versión anterior con 1 click. |
-| Lazo 2 — Configuración | 1×/día junto con lazo 1 | Valores numéricos de 14 parámetros dentro de `_SAFE_BOUNDS`. | Supervisor LLM → `ConfigStore.set` con `changed_by="supervisor"`. | Sí, vía `config_history` y override manual desde la UI. |
+| Lazo 1 — Playbook | 1×/día (00:00 UTC) o manual. **No siempre produce una nueva versión** (ver §F5.bis.5). | Markdown del playbook activo (`setups`, `patrones a evitar`, `reglas específicas`, régimen esperado). | Supervisor LLM en dos fases: (a) `ratify` mantiene el playbook activo; (b) `regenerate` produce `PlaybookVersion` con `active=true`. | Sí, rollback a versión anterior con 1 click. |
+| Lazo 2 — Configuración | 1×/día junto con lazo 1 (siempre se ejecuta, ratifique o no). | Valores numéricos de 14 parámetros dentro de `_SAFE_BOUNDS`. | Supervisor LLM → `ConfigStore.set` con `changed_by="supervisor"`. | Sí, vía `config_history` y override manual desde la UI. |
 
 #### F5.bis.2 Qué **no** es este aprendizaje
 
@@ -202,7 +205,28 @@ Si `closed_trades < min_trades` (default 5) en la ventana de 24 h, el Supervisor
 - **(d)** Poca actividad del Decisor → analizar si el mercado justifica HOLD.
 - **(e)** Edge negativo (WR < 30% o PF < 0.8) → `[STRICT]` endurecer criterios.
 
-> Implicancia operativa: en mercados laterales o bajistas prolongados, el playbook puede mantenerse igual varios días seguidos sin que eso sea un defecto. Está documentado como comportamiento esperado.
+> Implicancia operativa: en mercados laterales o bajistas prolongados, el playbook puede mantenerse igual varios días seguidos sin que eso sea un defecto. Está documentado como comportamiento esperado y se materializa vía la fase de **ratificación** (§F5.bis.5), que evita inflar `playbook_versions` con copias casi idénticas.
+
+#### F5.bis.5 Ratificación del playbook (fase 1 del Lazo 1)
+
+El Supervisor no está obligado a generar una nueva versión por ciclo. Antes de consultar al LLM para regenerar, resuelve un veredicto binario `ratify | regenerate` siguiendo el orden:
+
+1. **Guardrails determinísticos (cortocircuito)** — fuerzan `regenerate` sin consultar al LLM si se cumple alguna:
+   - `days_since_active >= max_playbook_age_days` (default `7`). Garantiza que ningún playbook quede activo indefinidamente.
+   - `abs(win_rate_24h − playbook.win_rate_baseline) > playbook_force_regen_wr_delta_pct` (default `15`). Detecta degradación o mejora material vs. la línea base que justificó el playbook activo.
+   - Cambio de régimen estructural entre el playbook activo y la métrica 24h.
+   - Kill switch activado en algún momento del período.
+   - Modo `diagnostic` con causa identificada `(b)` (playbook restrictivo) o `(e)` (edge negativo) — ver §F5.bis.4.
+2. **Consulta LLM (sólo si ningún guardrail cortocircuita)** — prompt corto con JSON estricto `{ratify: bool, reason: str, suggested_change_summary?: str }`. El LLM decide si las métricas y el contexto del período justifican rediseñar el playbook.
+
+Persistencia según el veredicto:
+
+| Veredicto | `playbook_versions` | `decisions` (siempre) | Evento WebSocket |
+|-----------|---------------------|------------------------|------------------|
+| `ratify` | sin cambios | 1 fila `output.ratified=true, ratify_reason, mode` | `supervisor_ran` |
+| `regenerate` | nueva fila `active=true`, anteriores `active=false` | 1 fila `output.ratified=false, force_regen_reason \| null, playbook, mode` | `playbook_updated` |
+
+> Auditoría: el operador siempre puede ver que el Supervisor corrió (vía `decisions` o `/api/decisions?agent=supervisor`), independientemente de si generó una versión nueva.
 
 ### F6. Control operativo (Web)
 
@@ -301,11 +325,21 @@ Componente full-width integrado en la página principal del Dashboard (ruta `/`)
 ```
 1. Compute metrics 24h (trades, decisiones, P&L, regime, ATR, vol_label).
 2. Si closed_trades < min_trades → mode = "diagnostic", inyectar header.
-3. Llamada LLM Supervisor → playbook markdown nuevo.
-4. Guardar PlaybookVersion (version = prev+1, active=true, anteriores false).
-5. Llamada LLM #2 → sugerencias de configuración estructuradas (JSON).
+3. Fase 1 — Evaluación (§F5.bis.5):
+   a. Guardrails determinísticos (max_playbook_age_days, delta WR,
+      cambio de régimen, kill switch, modo diagnostic con causa b|e).
+      Si alguno cortocircuita → verdict = "regenerate" con force_regen_reason.
+   b. Caso contrario → Llamada LLM Supervisor #1 (JSON estricto):
+        { ratify: bool, reason: str, suggested_change_summary?: str }
+4. Fase 2 — Regeneración (sólo si verdict == "regenerate"):
+   a. Llamada LLM Supervisor #2 → playbook markdown nuevo.
+   b. Guardar PlaybookVersion (version = prev+1, active=true, anteriores false).
+5. Llamada LLM #3 → sugerencias de configuración estructuradas (JSON).
 6. Aplicar sólo claves dentro de _SAFE_BOUNDS; persistir rejected con motivo.
-7. Registrar Decision (agent="supervisor", output con playbook + suggestions).
+7. Registrar Decision (agent="supervisor"):
+   - Si ratify: output={ratified:true, ratify_reason, mode, config_*}.
+   - Si regenerate: output={ratified:false, force_regen_reason|null,
+                            playbook, mode, config_*}.
 ```
 
 ### 5.3 Cierre de un trade
@@ -415,14 +449,16 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | AC-02 | Una decisión BUY con `confidence < 0.60` o régimen `TRENDING_DOWN` es **siempre** sobreescrita a HOLD por el override determinístico. |
 | AC-03 | Toda decisión BUY que cruce el Risk Gate ejecuta una market order + bracket SL/TP. |
 | AC-04 | Toda decisión rechazada queda con `executed=false` y `rejected_reason` poblado. |
-| AC-05 | El Supervisor genera una nueva `PlaybookVersion` cada 24 h con `active=true` y desactiva las anteriores. |
+| AC-05 | El Supervisor evalúa cada 24 h (`ratify | regenerate`, §F5.bis.5). Si decide `regenerate`, genera una nueva `PlaybookVersion` con `active=true` y desactiva las anteriores. Si decide `ratify`, **no** inserta nueva versión y persiste una `Decision` con `output.ratified=true`. |
 | AC-06 | Las sugerencias del Supervisor **fuera de `_SAFE_BOUNDS`** se persisten como rechazadas con `reject_reason`, sin aplicarse. |
 | AC-07 | El WebSocket emite eventos `ticker`, `decision` y `positions` continuamente sin requerir polling adicional desde la UI. |
 | AC-08 | Cambiar de modo a `LIVE` sin la frase exacta de confirmación responde HTTP 400. |
 | AC-09 | Toda escritura en `config` queda registrada en `config_history` con `changed_by`. |
 | AC-10 | El operador puede activar una versión anterior del playbook con un click (rollback). |
 | AC-11 | Un BUY del LLM con `position_size_pct > max_position_pct` queda **reescrito** (no rechazado) por el override determinístico al valor escalonado correspondiente y el Risk Gate lo aprueba. |
-| AC-12 | El Supervisor en modo `diagnostic` (con `closed_trades < min_trades`) produce un nuevo `PlaybookVersion` que conserva la estructura obligatoria de secciones y **no** introduce confluencias fuera del catálogo A–H ni valores de parámetros del sistema. |
+| AC-12 | El Supervisor en modo `diagnostic` (con `closed_trades < min_trades`) puede ratificar el playbook activo. Cuando regenera, el nuevo `PlaybookVersion` conserva la estructura obligatoria de secciones y **no** introduce confluencias fuera del catálogo A–H ni valores de parámetros del sistema. |
+| AC-13 | El Supervisor fuerza la regeneración del playbook (sin consultar al LLM en la fase 1) cuando se cumple alguno de los guardrails determinísticos: `days_since_active >= max_playbook_age_days`, `abs(wr_24h − wr_baseline) > playbook_force_regen_wr_delta_pct`, cambio de régimen estructural, o kill switch activado en el período. `force_regen_reason` queda registrado en la `Decision`. |
+| AC-14 | Cada ejecución del Supervisor (ratifique o regenere) inserta exactamente **una** fila en `decisions` con `agent="supervisor"`. El operador puede auditar la actividad vía `GET /api/decisions?agent=supervisor` aunque no haya nuevas versiones de playbook. |
 
 ### 8.2 No funcionales
 
@@ -443,6 +479,7 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 |--------|---------|------------|
 | LLM "alucina" un valor numérico fuera de R1–R10 | Pérdida potencial > límite | Risk Gate determinístico bloquea; override fuerza HOLD si `confidence < 0.60`. |
 | Supervisor cambia parámetros críticos | Estrategia degradada | `_SAFE_BOUNDS` excluye `daily_stop_pct` y `max_drawdown_pct`; rollback de playbook a un click. |
+| Supervisor "se acomoda" ratificando indefinidamente | Playbook stale en mercado cambiante | Guardrails determinísticos (§F5.bis.5): `max_playbook_age_days` (techo de edad) y `playbook_force_regen_wr_delta_pct` (delta WR) fuerzan regeneración sin opinión del LLM. |
 | Velas anómalas en testnet (flash low) inflan ATR | SL/TP irreales | TR winsorizado a 3× mediana móvil. |
 | Provider LLM saturado / rate limit | Sin decisión por ciclo | Cascade de fallbacks (Gemini + 5 Groq); `CircuitBreaker` corta tras 5 fallas. |
 | Pérdida de conexión a Binance | Trades zombi | `OrderTracker` cada 30 s reconcilia fills; engine pausa tras 5 fallas. |

@@ -166,7 +166,32 @@ Parámetros query:
 }
 ```
 
-> Para decisiones del Supervisor, `output` puede contener `{ "playbook": "markdown", "mode": "normal|diagnostic", "config_suggestions": {...}, "config_applied": [...], "config_rejected": [...] }`.
+> Para decisiones del Supervisor, `output` siempre incluye `mode`, `ratified` y los campos de configuración. La forma cambia según el veredicto de ratificación (ver `01-functional-spec.md §F5.bis.5` y `02-technical-spec.md §2.7.4`):
+>
+> ```jsonc
+> // ratify (sin nuevo playbook)
+> {
+>   "ratified": true,
+>   "ratify_reason": "Mercado estable; WR dentro de rango baseline.",
+>   "force_regen_reason": null,
+>   "mode": "normal",
+>   "config_suggestions": { ... },
+>   "config_applied": [ ... ],
+>   "config_rejected": [ ... ]
+> }
+>
+> // regenerate (con nuevo playbook)
+> {
+>   "ratified": false,
+>   "ratify_reason": null,
+>   "force_regen_reason": "playbook_age_days=8 >= max_playbook_age_days=7",  // null si vino del LLM
+>   "playbook": "# Playbook v13 — ...",
+>   "mode": "normal",
+>   "config_suggestions": { ... },
+>   "config_applied": [ ... ],
+>   "config_rejected": [ ... ]
+> }
+> ```
 
 ---
 
@@ -447,7 +472,46 @@ Fuente: Binance REST `/api/v3/ticker/price` (testnet o mainnet según `BINANCE_T
 
 > El array puede estar vacío.
 
-### 3.4 Manejo de cliente recomendado
+### 3.4 Event `supervisor_ran` (cada ejecución del Supervisor)
+
+Emitido **siempre** que el Supervisor corre (ratifique o regenere). Permite a la UI mostrar el timeline completo de ejecuciones, incluso cuando no hay nueva versión de playbook.
+
+```jsonc
+{
+  "event": "supervisor_ran",
+  "data": {
+    "ts": "2026-05-14T00:00:01Z",
+    "ratified": true,
+    "ratify_reason": "Mercado estable; WR dentro de rango baseline.",
+    "force_regen_reason": null,
+    "mode": "normal",
+    "new_version": null
+  }
+}
+```
+
+- Si `ratified=false`, `new_version` contiene el `version` recién creado y `force_regen_reason` puede tener el motivo determinístico (o `null` si vino del LLM).
+- Si `ratified=true`, `new_version` es `null` y no se emite `playbook_updated`.
+
+### 3.5 Event `playbook_updated` (sólo en regeneraciones)
+
+Emitido únicamente cuando el Supervisor (o un rollback manual) genera/activa una versión nueva en `playbook_versions`.
+
+```jsonc
+{
+  "event": "playbook_updated",
+  "data": {
+    "version": 13,
+    "ts_generated": "2026-05-14T00:00:01Z",
+    "model": "gemini-2.5-pro",
+    "active": true,
+    "trades_analyzed": 23,
+    "win_rate": 0.6087
+  }
+}
+```
+
+### 3.6 Manejo de cliente recomendado
 
 - Reconectar con backoff exponencial si el socket cierra.
 - Mantener última señal `connected` para mostrar status en UI.

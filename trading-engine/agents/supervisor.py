@@ -48,6 +48,23 @@ _INVARIANTS: list[tuple[str, str, str]] = [
     ("conf_threshold_range",       "conf_threshold_high_vol", "conf_threshold_range <= conf_threshold_high_vol"),
 ]
 
+# Defaults used when current_config does not provide the ratification keys.
+# Mirror shared/config_store.py DEFAULTS for MAX_PLAYBOOK_AGE_DAYS / PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT.
+_RATIFY_DEFAULTS: dict[str, float] = {
+    "max_playbook_age_days": 7,
+    "playbook_force_regen_wr_delta_pct": 15.0,
+}
+
+
+def _parse_json_strict(text: str) -> dict:
+    """Parse JSON tolerating optional ```json fences emitted by some LLM providers."""
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
 _CONFIG_SUGGESTION_PROMPT = """Eres un analista cuantitativo de risk management. Basándote en las métricas
 de trading del período, sugiere los valores óptimos para los parámetros de configuración del sistema.
 
@@ -138,11 +155,25 @@ class Supervisor:
         self.prompt_manager = prompt_manager or PromptManager(session)
 
     async def run(self, *, current_config: dict | None = None) -> None:
+        """Run the daily supervisor cycle.
+
+        Two-phase flow (see 01-functional-spec.md §F5.bis.5):
+          1. Ratification — deterministic guardrails + optional LLM eval call.
+          2. Regeneration — full LLM playbook call ONLY when phase 1 says regenerate.
+        Plus a third LLM call for config suggestions (independent of phase 1/2).
+
+        Persistence guarantees (AC-14):
+          - Exactly one Decision row per run (`agent="supervisor"`), regardless of veredict.
+          - A new PlaybookVersion is inserted ONLY when phase 1 resolves "regenerate".
+        """
         since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
         metrics = await self._compute_metrics(since)
         rejected_reason = None
-        resp = None
-        ctx = None
+        gen_resp = None
+        eval_tokens_in = 0
+        eval_tokens_out = 0
+        eval_latency_ms = 0
+        ctx: dict | None = None
         output: dict = {}
 
         mode = "diagnostic" if metrics["closed_trades"] < self.min_trades else "normal"
@@ -152,101 +183,57 @@ class Supervisor:
 
         try:
             op_ctx = await self._compute_operational_context(since)
+            metrics["kill_switch_in_period"] = op_ctx.get("kill_switch_in_period", False)
 
-            cfg = current_config or {}
-            decisor_interval_min = int(cfg.get("decisor_interval_min", 10))
-            atr_timeframe_cfg = str(cfg.get("atr_timeframe", "15m"))
-            expected_holding_max = int(cfg.get("expected_holding_max_min", 240))
-            operative_profile = self._derive_operative_profile(decisor_interval_min, atr_timeframe_cfg)
+            active_playbook = await self.prompt_manager.get_active_playbook()
 
-            since_7d = datetime.now(tz=timezone.utc) - timedelta(days=7)
-            weekly_gate = await self._compute_weekly_gate(since_7d)
+            # ----- Phase 1: ratification verdict -----
+            verdict = await self._evaluate_ratification(
+                metrics=metrics,
+                active_playbook=active_playbook,
+                current_config=current_config,
+                mode=mode,
+            )
+            eval_tokens_in = int(verdict.get("eval_tokens_in", 0) or 0)
+            eval_tokens_out = int(verdict.get("eval_tokens_out", 0) or 0)
+            eval_latency_ms = int(verdict.get("eval_latency_ms", 0) or 0)
 
-            previous = await self.prompt_manager.get_active_playbook()
-            raw_previous = previous.content if previous else "# (vacío)"
-            previous_version_num = previous.version if previous else 0
-            previous_content = self._trim_previous_playbook(raw_previous, version=previous_version_num)
-            decisions_since = (await self.session.execute(
-                select(Decision).where(Decision.ts >= since, Decision.agent == "decisor")
-                .order_by(Decision.ts.asc())
-            )).scalars().all()
-            # Limit to last 40 decisions to avoid exceeding provider token limits.
-            # Earlier decisions are already captured in the aggregate metrics above.
-            _MAX_DECISIONS_DUMP = 40
-            decisions_sample = decisions_since[-_MAX_DECISIONS_DUMP:]
-            decisions_dump = "\n".join([
-                json.dumps({
-                    "ts": d.ts.isoformat(),
-                    "action": d.output.get("action"),
-                    "confidence": d.output.get("confidence"),
-                    "regime": d.output.get("regime"),
-                    "confluences": d.output.get("confluences", []),
-                    "executed": d.executed,
-                    "rejected_reason": d.rejected_reason or None,
-                    "reasoning": (d.output.get("reasoning") or "")[:60],
-                })
-                for d in decisions_sample
-            ])
-            if len(decisions_since) > _MAX_DECISIONS_DUMP:
-                decisions_dump = (
-                    f"[{len(decisions_since) - _MAX_DECISIONS_DUMP} decisiones anteriores omitidas — "
-                    f"resumen en metricas]\n" + decisions_dump
+            output["mode"] = mode
+            output["ratified"] = bool(verdict["ratify"])
+            output["ratify_reason"] = verdict.get("ratify_reason")
+            output["force_regen_reason"] = verdict.get("force_regen_reason")
+            output["playbook_age_days"] = verdict.get("playbook_age_days")
+            output["playbook_win_rate_baseline"] = verdict.get("playbook_win_rate_baseline")
+
+            if verdict["ratify"]:
+                logger.info(
+                    "supervisor.playbook_ratified",
+                    version=active_playbook.version if active_playbook else None,
+                    reason=verdict.get("ratify_reason"),
+                    mode=mode,
+                )
+                output["active_version"] = active_playbook.version if active_playbook else None
+            else:
+                # ----- Phase 2: regeneration -----
+                ctx, gen_resp = await self._regenerate_playbook(
+                    since=since,
+                    metrics=metrics,
+                    mode=mode,
+                    op_ctx=op_ctx,
+                    active_playbook=active_playbook,
+                    current_config=current_config,
+                )
+                output["playbook"] = gen_resp.text
+                new_version = (active_playbook.version + 1) if active_playbook else 0
+                output["new_version"] = new_version
+                logger.info(
+                    "supervisor.playbook_saved",
+                    version=new_version,
+                    mode=mode,
+                    regen_reason=verdict.get("force_regen_reason") or "llm_decision",
                 )
 
-            mode_header = (
-                "\n[MODO DIAGNÓSTICO] Sin trades cerrados en 24h. "
-                "Diagnosticá por qué no se ejecutaron trades: puede ser mercado lateral/bajista (HOLD correcto), "
-                "playbook demasiado restrictivo, o entradas bloqueadas por el Risk Gate. "
-                "Analizá las métricas y el contexto de mercado antes de decidir si ajustar el playbook.\n"
-                if mode == "diagnostic" else ""
-            )
-
-            ctx = {
-                **metrics,
-                "mode": mode,
-                "mode_header": mode_header,
-                "previous_version": previous.version if previous else 0,
-                "new_version": (previous.version + 1) if previous else 0,
-                "previous_playbook": previous_content,
-                "decisions_dump": decisions_dump,
-                "decisions_sample_count": len(decisions_sample),
-                "date": datetime.now(tz=timezone.utc).date().isoformat(),
-                "min_trades": self.min_trades,
-                # A2: bloques de análisis enriquecido
-                "regime_distribution_block": self._format_regime_distribution(
-                    metrics["regime_distribution"]
-                ),
-                "rejection_breakdown_block": self._format_rejection_breakdown(
-                    metrics["rejection_breakdown"]
-                ),
-                # A3: contexto operacional
-                "kill_switch_status": "ACTIVO ⚠️" if op_ctx["kill_switch"] else "inactivo",
-                "config_changes_block": self._format_config_changes(op_ctx["config_changes"]),
-                "roundtrip_fee_pct": op_ctx["roundtrip_fee_pct"],
-                # A4: perfil operativo
-                "operative_profile": operative_profile,
-                "decisor_interval_min_cfg": decisor_interval_min,
-                "atr_timeframe_cfg": atr_timeframe_cfg,
-                "expected_holding_max_min": expected_holding_max,
-                # A1: gate LIVE semanal
-                "weekly_gate_block": self._format_weekly_gate(weekly_gate),
-            }
-            system_prompt = self.prompt_manager.load_system_prompt("supervisor")
-            user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
-            resp = await self.llm.call(provider=self.provider, system_prompt=system_prompt,
-                                        user_prompt=user_prompt, fallbacks=self.fallbacks,
-                                        json_mode=False)
-            output["playbook"] = resp.text
-            output["mode"] = mode
-            await self.prompt_manager.save_playbook(
-                content=resp.text, model=self.provider.value,
-                trades_analyzed=metrics["closed_trades"],
-                win_rate=metrics["win_rate"],
-                pnl_summary={"pnl_usdt": metrics["total_pnl"], "avg_win": metrics["avg_win"]},
-            )
-            logger.info("supervisor.playbook_saved", version=ctx["new_version"], mode=mode)
-
-            # Segunda llamada LLM: sugerencias de configuración y auto-apply dentro de guardrails
+            # ----- Phase 3: config suggestions (always, independent of phases 1/2) -----
             if current_config:
                 try:
                     suggestions = await self._generate_config_suggestions(metrics, current_config)
@@ -267,15 +254,271 @@ class Supervisor:
         self.session.add(Decision(
             ts=datetime.now(tz=timezone.utc),
             agent="supervisor", model=self.provider.value,
-            tokens_in=resp.tokens_in if resp else 0,
-            tokens_out=resp.tokens_out if resp else 0,
-            latency_ms=resp.latency_ms if resp else 0,
+            tokens_in=(gen_resp.tokens_in if gen_resp else 0) + eval_tokens_in,
+            tokens_out=(gen_resp.tokens_out if gen_resp else 0) + eval_tokens_out,
+            latency_ms=(gen_resp.latency_ms if gen_resp else 0) + eval_latency_ms,
             input={k: str(v)[:500] for k, v in ctx.items()} if ctx else {},
             output=output,
             executed=rejected_reason is None,
             rejected_reason=rejected_reason,
         ))
         await self.session.commit()
+
+    async def _evaluate_ratification(
+        self,
+        *,
+        metrics: dict,
+        active_playbook,
+        current_config: dict | None,
+        mode: str,
+    ) -> dict:
+        """Phase 1: decide `ratify | regenerate`.
+
+        Returns a dict with keys:
+          - ratify (bool)
+          - ratify_reason (str | None) — LLM reason when ratify=True
+          - force_regen_reason (str | None) — deterministic guardrail reason when ratify=False
+          - playbook_age_days (int | None)
+          - playbook_win_rate_baseline (float | None)
+          - eval_tokens_in / eval_tokens_out / eval_latency_ms (int) — only if LLM was called
+        """
+        if active_playbook is None:
+            return self._regen_verdict("no_active_playbook", age_days=None, baseline_wr=None)
+
+        cfg = current_config or {}
+        try:
+            max_age = int(cfg.get("max_playbook_age_days", _RATIFY_DEFAULTS["max_playbook_age_days"]))
+        except (TypeError, ValueError):
+            max_age = int(_RATIFY_DEFAULTS["max_playbook_age_days"])
+        try:
+            wr_delta_pct = float(cfg.get(
+                "playbook_force_regen_wr_delta_pct",
+                _RATIFY_DEFAULTS["playbook_force_regen_wr_delta_pct"],
+            ))
+        except (TypeError, ValueError):
+            wr_delta_pct = float(_RATIFY_DEFAULTS["playbook_force_regen_wr_delta_pct"])
+
+        now = datetime.now(tz=timezone.utc)
+        ts_gen = active_playbook.ts_generated
+        if ts_gen is not None and ts_gen.tzinfo is None:
+            ts_gen = ts_gen.replace(tzinfo=timezone.utc)
+        age_days = (now - ts_gen).days if ts_gen else 0
+
+        baseline_wr = float(active_playbook.win_rate or 0.0)
+        wr_24h = float(metrics.get("win_rate", 0.0))
+
+        if age_days >= max_age:
+            return self._regen_verdict(
+                f"playbook_age_days={age_days} >= max_playbook_age_days={max_age}",
+                age_days=age_days, baseline_wr=baseline_wr,
+            )
+
+        if baseline_wr > 0 and abs(wr_24h - baseline_wr) > wr_delta_pct:
+            return self._regen_verdict(
+                f"abs(wr_24h={wr_24h:.1f} - baseline_wr={baseline_wr:.1f}) > "
+                f"playbook_force_regen_wr_delta_pct={wr_delta_pct}",
+                age_days=age_days, baseline_wr=baseline_wr,
+            )
+
+        active_regime = PromptManager.parse_regime_from_playbook(active_playbook.content)
+        dominant_regime = self._dominant_regime(metrics.get("regime_distribution") or {})
+        if (
+            active_regime not in (None, "NEUTRAL", "UNKNOWN")
+            and dominant_regime not in (None, "NEUTRAL", "UNKNOWN")
+            and active_regime != dominant_regime
+        ):
+            return self._regen_verdict(
+                f"regime_changed: playbook_regime={active_regime} vs market_dominant={dominant_regime}",
+                age_days=age_days, baseline_wr=baseline_wr,
+            )
+
+        if metrics.get("kill_switch_in_period"):
+            return self._regen_verdict(
+                "kill_switch_was_triggered_in_period",
+                age_days=age_days, baseline_wr=baseline_wr,
+            )
+
+        # No deterministic guardrail fired — consult the LLM.
+        try:
+            trimmed_pb = self._trim_previous_playbook(
+                active_playbook.content,
+                version=active_playbook.version,
+                max_chars=600,
+            )
+            eval_ctx = {
+                **metrics,
+                "date": now.date().isoformat(),
+                "previous_version": active_playbook.version,
+                "previous_playbook": trimmed_pb,
+                "playbook_age_days": age_days,
+                "playbook_win_rate_baseline": round(baseline_wr, 1),
+                "dominant_regime": dominant_regime or "UNKNOWN",
+                "regime_distribution_block": self._format_regime_distribution(
+                    metrics.get("regime_distribution") or {}
+                ),
+                "rejection_breakdown_block": self._format_rejection_breakdown(
+                    metrics.get("rejection_breakdown") or {}
+                ),
+            }
+            system_prompt = self.prompt_manager.load_system_prompt("supervisor_eval")
+            user_prompt = self.prompt_manager.render_user_prompt(
+                "supervisor_eval", eval_ctx, strict=False,
+            )
+            resp = await self.llm.call(
+                provider=self.provider, system_prompt=system_prompt,
+                user_prompt=user_prompt, fallbacks=self.fallbacks, json_mode=True,
+            )
+            parsed = _parse_json_strict(resp.text)
+            ratify = bool(parsed.get("ratify", False))
+            if ratify:
+                return {
+                    "ratify": True,
+                    "ratify_reason": str(parsed.get("reason") or "").strip()[:240],
+                    "force_regen_reason": None,
+                    "playbook_age_days": age_days,
+                    "playbook_win_rate_baseline": round(baseline_wr, 1),
+                    "eval_tokens_in": resp.tokens_in,
+                    "eval_tokens_out": resp.tokens_out,
+                    "eval_latency_ms": resp.latency_ms,
+                }
+            verdict = self._regen_verdict(
+                None, age_days=age_days, baseline_wr=baseline_wr,
+            )
+            verdict["eval_tokens_in"] = resp.tokens_in
+            verdict["eval_tokens_out"] = resp.tokens_out
+            verdict["eval_latency_ms"] = resp.latency_ms
+            return verdict
+        except Exception as e:
+            logger.warning(
+                "supervisor.eval_failed_defaulting_to_regenerate",
+                error=str(e), error_type=type(e).__name__,
+            )
+            return self._regen_verdict(
+                f"eval_llm_error: {type(e).__name__}",
+                age_days=age_days, baseline_wr=baseline_wr,
+            )
+
+    @staticmethod
+    def _regen_verdict(reason: str | None, *, age_days: int | None, baseline_wr: float | None) -> dict:
+        return {
+            "ratify": False,
+            "ratify_reason": None,
+            "force_regen_reason": reason,
+            "playbook_age_days": age_days,
+            "playbook_win_rate_baseline": round(baseline_wr, 1) if baseline_wr is not None else None,
+        }
+
+    @staticmethod
+    def _dominant_regime(regime_distribution: dict) -> str | None:
+        """Return the regime with the most decisions; None if no signal."""
+        totals = {
+            r: sum(counts.values())
+            for r, counts in regime_distribution.items()
+            if r != "UNKNOWN" and sum(counts.values()) > 0
+        }
+        if not totals:
+            return None
+        return max(totals, key=totals.get)
+
+    async def _regenerate_playbook(
+        self,
+        *,
+        since: datetime,
+        metrics: dict,
+        mode: str,
+        op_ctx: dict,
+        active_playbook,
+        current_config: dict | None,
+    ):
+        """Phase 2: full LLM call to produce a new playbook + persist a new PlaybookVersion.
+
+        Returns (ctx_for_audit, llm_response).
+        """
+        cfg = current_config or {}
+        decisor_interval_min = int(cfg.get("decisor_interval_min", 10))
+        atr_timeframe_cfg = str(cfg.get("atr_timeframe", "15m"))
+        expected_holding_max = int(cfg.get("expected_holding_max_min", 240))
+        operative_profile = self._derive_operative_profile(decisor_interval_min, atr_timeframe_cfg)
+
+        since_7d = datetime.now(tz=timezone.utc) - timedelta(days=7)
+        weekly_gate = await self._compute_weekly_gate(since_7d)
+
+        raw_previous = active_playbook.content if active_playbook else "# (vacío)"
+        previous_version_num = active_playbook.version if active_playbook else 0
+        previous_content = self._trim_previous_playbook(raw_previous, version=previous_version_num)
+
+        decisions_since = (await self.session.execute(
+            select(Decision).where(Decision.ts >= since, Decision.agent == "decisor")
+            .order_by(Decision.ts.asc())
+        )).scalars().all()
+        _MAX_DECISIONS_DUMP = 40
+        decisions_sample = decisions_since[-_MAX_DECISIONS_DUMP:]
+        decisions_dump = "\n".join([
+            json.dumps({
+                "ts": d.ts.isoformat(),
+                "action": d.output.get("action"),
+                "confidence": d.output.get("confidence"),
+                "regime": d.output.get("regime"),
+                "confluences": d.output.get("confluences", []),
+                "executed": d.executed,
+                "rejected_reason": d.rejected_reason or None,
+                "reasoning": (d.output.get("reasoning") or "")[:60],
+            })
+            for d in decisions_sample
+        ])
+        if len(decisions_since) > _MAX_DECISIONS_DUMP:
+            decisions_dump = (
+                f"[{len(decisions_since) - _MAX_DECISIONS_DUMP} decisiones anteriores omitidas — "
+                f"resumen en metricas]\n" + decisions_dump
+            )
+
+        mode_header = (
+            "\n[MODO DIAGNÓSTICO] Sin trades cerrados en 24h. "
+            "Diagnosticá por qué no se ejecutaron trades: puede ser mercado lateral/bajista (HOLD correcto), "
+            "playbook demasiado restrictivo, o entradas bloqueadas por el Risk Gate. "
+            "Analizá las métricas y el contexto de mercado antes de decidir si ajustar el playbook.\n"
+            if mode == "diagnostic" else ""
+        )
+
+        ctx = {
+            **metrics,
+            "mode": mode,
+            "mode_header": mode_header,
+            "previous_version": previous_version_num,
+            "new_version": (previous_version_num + 1) if active_playbook else 0,
+            "previous_playbook": previous_content,
+            "decisions_dump": decisions_dump,
+            "decisions_sample_count": len(decisions_sample),
+            "date": datetime.now(tz=timezone.utc).date().isoformat(),
+            "min_trades": self.min_trades,
+            "regime_distribution_block": self._format_regime_distribution(
+                metrics.get("regime_distribution") or {}
+            ),
+            "rejection_breakdown_block": self._format_rejection_breakdown(
+                metrics.get("rejection_breakdown") or {}
+            ),
+            "kill_switch_status": "ACTIVO ⚠️" if op_ctx["kill_switch"] else "inactivo",
+            "config_changes_block": self._format_config_changes(op_ctx["config_changes"]),
+            "roundtrip_fee_pct": op_ctx["roundtrip_fee_pct"],
+            "operative_profile": operative_profile,
+            "decisor_interval_min_cfg": decisor_interval_min,
+            "atr_timeframe_cfg": atr_timeframe_cfg,
+            "expected_holding_max_min": expected_holding_max,
+            "weekly_gate_block": self._format_weekly_gate(weekly_gate),
+        }
+        system_prompt = self.prompt_manager.load_system_prompt("supervisor")
+        user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
+        resp = await self.llm.call(
+            provider=self.provider, system_prompt=system_prompt,
+            user_prompt=user_prompt, fallbacks=self.fallbacks, json_mode=False,
+        )
+        await self.prompt_manager.save_playbook(
+            content=resp.text, model=self.provider.value,
+            trades_analyzed=metrics["closed_trades"],
+            win_rate=metrics["win_rate"],
+            pnl_summary={"pnl_usdt": metrics["total_pnl"], "avg_win": metrics["avg_win"]},
+        )
+        return ctx, resp
 
     async def _apply_config_suggestions(
         self, suggestions: dict, current_config: dict
@@ -352,7 +595,12 @@ class Supervisor:
         return applied, rejected
 
     async def _compute_operational_context(self, since: datetime) -> dict:
-        """Fetch kill_switch status, config changes, and latest fee for operational context (A3)."""
+        """Fetch kill_switch status, config changes, and latest fee for operational context (A3).
+
+        `kill_switch_in_period` is True when the kill switch is currently active OR
+        when it was activated at any point inside the period. Used by the ratification
+        guardrails (§F5.bis.5) to force regeneration when the operator intervened.
+        """
         _INTERNAL_KEYS = {"supervisor_run_now"}
 
         kill_switch_entry = (await self.session.execute(
@@ -360,11 +608,16 @@ class Supervisor:
         )).scalar_one_or_none()
         kill_switch = (kill_switch_entry.value.lower() == "true") if kill_switch_entry else False
 
-        config_changes = (await self.session.execute(
+        config_changes_all = (await self.session.execute(
             select(ConfigHistory).where(ConfigHistory.ts >= since)
             .order_by(ConfigHistory.ts.asc())
         )).scalars().all()
-        config_changes = [c for c in config_changes if c.key not in _INTERNAL_KEYS]
+        config_changes = [c for c in config_changes_all if c.key not in _INTERNAL_KEYS]
+
+        kill_switch_in_period = kill_switch or any(
+            c.key == "kill_switch" and (c.new_value or "").lower() == "true"
+            for c in config_changes_all
+        )
 
         fee_snap = (await self.session.execute(
             select(FeeSnapshot).order_by(FeeSnapshot.ts.desc()).limit(1)
@@ -373,6 +626,7 @@ class Supervisor:
 
         return {
             "kill_switch": kill_switch,
+            "kill_switch_in_period": kill_switch_in_period,
             "config_changes": config_changes,
             "roundtrip_fee_pct": round(roundtrip_fee_pct, 4),
         }

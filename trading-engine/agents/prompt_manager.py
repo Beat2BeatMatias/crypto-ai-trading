@@ -57,6 +57,25 @@ class PromptManager:
     }
 
     @classmethod
+    def parse_regime_from_playbook(cls, content: str) -> str | None:
+        """Extract the regime declared under '## Régimen esperado próximas 24h'.
+
+        Returns None when the section is missing or unparseable. Used by the
+        supervisor ratification guardrails (§F5.bis.5) to detect regime drift.
+        """
+        regime_header = "## Régimen esperado próximas 24h"
+        if regime_header not in content:
+            return None
+        after = content.split(regime_header, 1)[1].strip()
+        first_line = after.split("\n")[0].strip()
+        import re as _re
+        token_match = _re.match(r"([A-Z_]+)", first_line)
+        if not token_match:
+            return None
+        regime_value = token_match.group(1)
+        return regime_value if regime_value in cls._VALID_REGIMES else None
+
+    @classmethod
     def validate_playbook_markdown(cls, content: str) -> list[str]:
         """Returns a list of validation errors. Empty list means the playbook is valid."""
         errors: list[str] = []
@@ -64,13 +83,10 @@ class PromptManager:
             if header not in content:
                 errors.append(f"Sección faltante: '{header}'")
 
-        # Check Régimen esperado value — toma solo el primer token alfa para tolerar
-        # texto adicional del LLM (ej.: "TRENDING_UP — confirmado por EMA alineadas")
         regime_header = "## Régimen esperado próximas 24h"
         if regime_header in content:
             after = content.split(regime_header, 1)[1].strip()
             first_line = after.split("\n")[0].strip()
-            # Extraer el primer token alfanumérico (acepta guion bajo) en la línea
             import re as _re
             token_match = _re.match(r"([A-Z_]+)", first_line)
             regime_value = token_match.group(1) if token_match else first_line

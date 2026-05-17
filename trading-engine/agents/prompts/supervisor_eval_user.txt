@@ -1,0 +1,23 @@
+=== EVALUACIÓN DIARIA — {date} UTC ===
+
+PLAYBOOK ACTIVO: v{previous_version} (edad: {playbook_age_days} días, baseline WR: {playbook_win_rate_baseline}%)
+
+MÉTRICAS DEL PERÍODO (últimas 24h):
+  Trades cerrados: {closed_trades} | Win rate: {win_rate:.1f}% | Profit factor: {profit_factor:.2f}
+  P&L total: ${total_pnl:+,.2f} | Max DD: ${max_dd_usdt:+,.2f} | Sharpe período: {sharpe_period:.2f}
+  Decisiones: BUY {buy_count} | SELL {sell_count} | HOLD {hold_count} | Rechazadas RG: {rejected_count}
+
+DISTRIBUCIÓN POR RÉGIMEN:
+{regime_distribution_block}
+
+RECHAZOS DEL RISK GATE (por regla):
+{rejection_breakdown_block}
+
+MERCADO:
+  BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%) | ATR(1h): ${atr_avg:,.0f} ({atr_pct:.2f}%, {vol_label})
+  Régimen dominante actual: {dominant_regime}
+
+PLAYBOOK ACTIVO (extracto):
+{previous_playbook}
+
+=== Respondé ÚNICAMENTE con el JSON especificado en el system prompt. ===

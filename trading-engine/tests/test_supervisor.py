@@ -1,6 +1,7 @@
-"""Tests for Supervisor — daily playbook generator."""
+"""Tests for Supervisor — daily ratification + playbook generator (§F5.bis.5)."""
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -14,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from shared.db.models import Decision, Trade, PlaybookVersion
+from shared.db.models import Decision, Trade, PlaybookVersion, ConfigHistory
 from agents.supervisor import Supervisor
 from agents.llm_client import LLMResponse
 
@@ -60,6 +61,8 @@ _trades_table = Table(
     Column("close_reason", String(20)),
     Column("order_id_open", String(50)),
     Column("order_id_close", String(50)),
+    Column("order_id_sl", String(50)),
+    Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),
 )
@@ -94,6 +97,44 @@ _playbook_versions_table = Table(
     Column("active", Boolean, default=False),
 )
 
+_config_history_table = Table(
+    "config_history", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("ts", DateTime, nullable=False),
+    Column("key", String(50), nullable=False),
+    Column("old_value", String(500)),
+    Column("new_value", String(500)),
+    Column("changed_by", String(20)),
+)
+
+_config_table = Table(
+    "config", _sqlite_metadata,
+    Column("key", String(60), primary_key=True),
+    Column("value", Text, nullable=False),
+    Column("value_type", String(20), nullable=False),
+    Column("description", Text),
+    Column("updated_at", DateTime),
+)
+
+_fee_snapshots_table = Table(
+    "fee_snapshots", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("ts", DateTime, nullable=False),
+    Column("symbol", String(20), nullable=False, default="BTC/USDT"),
+    Column("maker_fee", Numeric(8, 6), nullable=False),
+    Column("taker_fee", Numeric(8, 6), nullable=False),
+    Column("raw", JSON, nullable=False),
+)
+
+_balance_snapshots_table = Table(
+    "balance_snapshots", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("ts", DateTime, nullable=False),
+    Column("usdt", Numeric(18, 4), nullable=False),
+    Column("btc", Numeric(18, 8), nullable=False),
+    Column("source", String(20), nullable=False, default="binance"),
+)
+
 
 # ---------------------------------------------------------------------------
 # ORM before-insert hooks for SQLite UUID/timestamp generation
@@ -118,6 +159,13 @@ def _before_insert_playbook(mapper, connection, target):
         target.ts_generated = datetime.now(timezone.utc)
 
 
+def _before_insert_config_history(mapper, connection, target):
+    if target.id is None:
+        target.id = uuid.uuid4()
+    if target.ts is None:
+        target.ts = datetime.now(timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -128,6 +176,7 @@ async def session():
     event.listen(Decision, "before_insert", _before_insert_decision)
     event.listen(Trade, "before_insert", _before_insert_trade)
     event.listen(PlaybookVersion, "before_insert", _before_insert_playbook)
+    event.listen(ConfigHistory, "before_insert", _before_insert_config_history)
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     async with engine.begin() as conn:
@@ -168,6 +217,7 @@ async def session():
     event.remove(Decision, "before_insert", _before_insert_decision)
     event.remove(Trade, "before_insert", _before_insert_trade)
     event.remove(PlaybookVersion, "before_insert", _before_insert_playbook)
+    event.remove(ConfigHistory, "before_insert", _before_insert_config_history)
     await engine.dispose()
 
 
@@ -277,3 +327,278 @@ async def test_run_with_zero_trades_marks_decision_as_diagnostic(session, fake_l
     )).scalar_one()
     assert sup_decision.executed is True
     assert sup_decision.output.get("mode") == "diagnostic"
+
+
+# ---------------------------------------------------------------------------
+# Ratification flow (§F5.bis.5 + §2.7.4)
+# ---------------------------------------------------------------------------
+
+_VALID_PLAYBOOK_MARKDOWN = (
+    "# Playbook v5 — 2026-05-10 UTC\n\n"
+    "## Métricas del período\nWR 60%.\n\n"
+    "## Setups que funcionaron\n- G+B en TRENDING_UP.\n\n"
+    "## Patrones a evitar\n- BUY sin volumen.\n\n"
+    "## Contexto de mercado actual\nAlcista moderado.\n\n"
+    "## Régimen esperado próximas 24h\nTRENDING_UP\n\n"
+    "## Reglas específicas\n1. Exigir 3 confluencias.\n\n"
+    "## Cambios vs playbook anterior\nPrimer playbook.\n\n"
+    "## Limitaciones del análisis\nSin limitaciones identificadas en este período.\n"
+)
+
+
+def _llm_with_sequence(*responses: str) -> MagicMock:
+    """LLM mock whose .call() returns the given texts in order."""
+    llm = MagicMock()
+    llm.call = AsyncMock(side_effect=[
+        LLMResponse(text=t, tokens_in=100, tokens_out=50, latency_ms=200, provider="gemini-2.5-pro")
+        for t in responses
+    ])
+    return llm
+
+
+async def _seed_active_playbook(
+    session,
+    *,
+    version: int = 5,
+    ts_generated: datetime | None = None,
+    win_rate: float | None = 60.0,
+    content: str = _VALID_PLAYBOOK_MARKDOWN,
+) -> PlaybookVersion:
+    """Reset the active playbook to a controlled state for ratification tests."""
+    await session.execute(delete(PlaybookVersion))
+    pb = PlaybookVersion(
+        version=version,
+        ts_generated=ts_generated or datetime.now(timezone.utc),
+        content=content,
+        model="gemini-2.5-pro",
+        trades_analyzed=20,
+        win_rate=Decimal(str(win_rate)) if win_rate is not None else None,
+        active=True,
+    )
+    session.add(pb)
+    await session.commit()
+    return pb
+
+
+async def test_supervisor_ratifies_when_llm_returns_ratify_true(session):
+    # GIVEN a fresh active playbook with baseline close to the period WR (100%)
+    # so the deterministic WR-delta guardrail does not short-circuit.
+    await _seed_active_playbook(session, win_rate=90.0)
+    eval_json = json.dumps({
+        "ratify": True,
+        "reason": "Métricas dentro del rango baseline; régimen estable.",
+        "suggested_change_summary": None,
+    })
+    llm = _llm_with_sequence(eval_json)
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=5)
+
+    # WHEN run() is called
+    await sup.run()
+
+    # THEN no new playbook version is created
+    versions = (await session.execute(select(PlaybookVersion))).scalars().all()
+    assert len(versions) == 1
+    assert versions[0].version == 5
+    assert versions[0].active is True
+
+    # AND exactly one supervisor decision is persisted with ratified=True (AC-14)
+    sup_decisions = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalars().all()
+    assert len(sup_decisions) == 1
+    out = sup_decisions[0].output
+    assert out["ratified"] is True
+    assert out["ratify_reason"].startswith("Métricas")
+    assert out["force_regen_reason"] is None
+    assert out["mode"] == "normal"
+    assert out.get("playbook") is None  # no new playbook in output
+
+    # AND the LLM was called exactly once (eval phase only, no regeneration, no config)
+    assert llm.call.call_count == 1
+
+
+async def test_supervisor_force_regen_when_playbook_age_exceeds_max(session, fake_llm):
+    # GIVEN an active playbook older than max_playbook_age_days (default 7)
+    # AND a baseline WR close to the period WR (so age fires first, not WR delta).
+    old_ts = datetime.now(timezone.utc) - timedelta(days=10)
+    await _seed_active_playbook(session, ts_generated=old_ts, win_rate=90.0)
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+
+    # WHEN run() is called
+    await sup.run()
+
+    # THEN a new playbook version is created
+    versions = (await session.execute(
+        select(PlaybookVersion).order_by(PlaybookVersion.version)
+    )).scalars().all()
+    assert len(versions) == 2
+    assert versions[1].active is True
+
+    # AND the decision records the deterministic force_regen_reason (AC-13)
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert out["ratify_reason"] is None
+    assert "playbook_age_days" in out["force_regen_reason"]
+    assert "max_playbook_age_days" in out["force_regen_reason"]
+
+    # AND the LLM was called exactly once (regeneration only — eval was short-circuited)
+    assert fake_llm.call.call_count == 1
+
+
+async def test_supervisor_force_regen_when_wr_delta_exceeds_threshold(session, fake_llm):
+    # GIVEN an active playbook with baseline WR 20%, but current period WR is 100%
+    # (seeded trades are all winners → WR 100%; |100-20|=80 > 15 default threshold)
+    await _seed_active_playbook(session, win_rate=20.0)
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+
+    await sup.run()
+
+    versions = (await session.execute(select(PlaybookVersion))).scalars().all()
+    assert len(versions) == 2
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert "wr_24h" in out["force_regen_reason"]
+    assert "baseline_wr" in out["force_regen_reason"]
+    # LLM eval skipped (deterministic short-circuit) → 1 call total (regeneration)
+    assert fake_llm.call.call_count == 1
+
+
+async def test_supervisor_force_regen_when_kill_switch_triggered_in_period(session, fake_llm):
+    # GIVEN an active playbook within normal bounds (baseline ~ period WR)
+    # + a kill_switch trigger in the period.
+    await _seed_active_playbook(session, win_rate=90.0)
+    session.add(ConfigHistory(
+        ts=datetime.now(timezone.utc) - timedelta(hours=2),
+        key="kill_switch",
+        old_value="false",
+        new_value="true",
+        changed_by="operator",
+    ))
+    await session.commit()
+
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    await sup.run()
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert out["force_regen_reason"] == "kill_switch_was_triggered_in_period"
+    assert fake_llm.call.call_count == 1
+
+
+async def test_supervisor_force_regen_when_no_active_playbook(session, fake_llm):
+    # GIVEN there is no active playbook at all
+    await session.execute(delete(PlaybookVersion))
+    await session.commit()
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+
+    await sup.run()
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert out["force_regen_reason"] == "no_active_playbook"
+
+
+async def test_supervisor_eval_json_parse_failure_defaults_to_regenerate(session):
+    # GIVEN an LLM that returns invalid JSON for the eval call, then a valid playbook
+    # AND a baseline that does not trigger the WR-delta guardrail.
+    await _seed_active_playbook(session, win_rate=90.0)
+    llm = _llm_with_sequence("not a json", _VALID_PLAYBOOK_MARKDOWN)
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=5)
+
+    await sup.run()
+
+    # THEN a new playbook version is created (safe default = regenerate)
+    versions = (await session.execute(select(PlaybookVersion))).scalars().all()
+    assert len(versions) == 2
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert out["force_regen_reason"].startswith("eval_llm_error")
+
+
+async def test_supervisor_ratify_emits_no_playbook_updated_signal(session):
+    # GIVEN a ratification (verified separately) the active playbook ts_generated
+    # must NOT change (no insert, no update of the active row).
+    pb = await _seed_active_playbook(session, win_rate=90.0)
+    original_ts = pb.ts_generated
+
+    eval_json = json.dumps({"ratify": True, "reason": "ok", "suggested_change_summary": None})
+    llm = _llm_with_sequence(eval_json)
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=5)
+    await sup.run()
+
+    refreshed = (await session.execute(
+        select(PlaybookVersion).where(PlaybookVersion.version == 5)
+    )).scalar_one()
+    assert refreshed.ts_generated == original_ts
+    assert refreshed.active is True
+
+
+async def test_ratify_verdict_includes_age_and_baseline_in_decision(session):
+    # GIVEN an active playbook with known age + baseline close to the period WR.
+    old_ts = datetime.now(timezone.utc) - timedelta(days=3)
+    await _seed_active_playbook(session, ts_generated=old_ts, win_rate=95.5)
+    eval_json = json.dumps({"ratify": True, "reason": "estable", "suggested_change_summary": None})
+    llm = _llm_with_sequence(eval_json)
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=5)
+
+    await sup.run()
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["playbook_age_days"] == 3
+    assert out["playbook_win_rate_baseline"] == 95.5
+
+
+async def test_supervisor_force_regen_when_regime_changes(session):
+    # GIVEN an active playbook declaring TRENDING_UP regime (content has it)
+    # AND a baseline WR close to the period WR (so regime fires first, not WR delta).
+    await _seed_active_playbook(session, win_rate=90.0)
+
+    # AND decisions in the period are dominated by RANGE regime
+    await session.execute(delete(Decision))
+    now = datetime.now(timezone.utc)
+    for i in range(8):
+        session.add(Decision(
+            ts=now - timedelta(minutes=i * 5 + 1),
+            agent="decisor", model="gemini-2.5-flash",
+            input={},
+            output={"action": "HOLD", "confidence": 0.55, "regime": "RANGE"},
+            executed=True,
+        ))
+    await session.commit()
+
+    eval_json = json.dumps({"ratify": True, "reason": "estable", "suggested_change_summary": None})
+    llm = _llm_with_sequence(eval_json, _VALID_PLAYBOOK_MARKDOWN)
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=5)
+
+    await sup.run()
+
+    sup_decision = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalar_one()
+    out = sup_decision.output
+    assert out["ratified"] is False
+    assert "regime_changed" in out["force_regen_reason"]
+    assert "TRENDING_UP" in out["force_regen_reason"]
+    assert "RANGE" in out["force_regen_reason"]
+    # LLM eval skipped → 1 call (regeneration only)
+    assert llm.call.call_count == 1

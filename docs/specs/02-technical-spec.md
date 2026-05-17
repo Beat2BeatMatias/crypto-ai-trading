@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.2 — 2026-05-17.
+> Versión: 1.3 — 2026-05-17.
+>
+> Cambios v1.3: §2.7.2 actualiza la frecuencia de escritura en `playbook_versions` (no obligatoria por ciclo); nueva §2.7.4 documenta la fase de ratificación con guardrails determinísticos (`max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`). Compatibilidad con `decisions.output` extendida.
 >
 > Cambios v1.2: se agregó §2.6.bis (Modelo de autonomía y capas de defensa) y §2.7 (Aprendizaje del Supervisor: detalles técnicos). Sin cambios en contratos de API ni en modelo de datos.
 
@@ -314,9 +316,9 @@ Complementa `01-functional-spec.md §F5.bis`. Acá se describe el contrato técn
 
 | Tabla | Registro | Frecuencia |
 |-------|----------|-----------|
-| `playbook_versions` | Nueva versión `active=true`, anteriores `active=false`. | 1×/día. |
-| `config` + `config_history` | 1 fila por cada suggestion aplicada, `changed_by="supervisor"`. | 0–14 cambios/día. |
-| `decisions` | `agent="supervisor"`, `output={playbook, mode, config_suggestions, config_applied, config_rejected}`. | 1×/día. |
+| `playbook_versions` | Nueva versión `active=true`, anteriores `active=false`. | **Sólo cuando la fase 1 resuelve `regenerate`** (ver §2.7.4). En estado estable puede haber días sin nuevas filas. |
+| `config` + `config_history` | 1 fila por cada suggestion aplicada, `changed_by="supervisor"`. | 0–14 cambios/día (independiente del veredicto del playbook). |
+| `decisions` | `agent="supervisor"`. Estructura del `output` según veredicto (ver §2.7.4). | **Exactamente 1×/ejecución**, ratifique o regenere. Garantiza el audit trail (AC-14). |
 
 #### 2.7.3 Guardrails algorítmicos (resumen)
 
@@ -329,6 +331,61 @@ Complementa `01-functional-spec.md §F5.bis`. Acá se describe el contrato técn
 - **`_VALID_ATR_TIMEFRAMES`**: `{"5m", "15m", "1h"}` para `atr_timeframe`.
 
 > Detalle de bounds en `05-risk-and-safety.md §7`.
+
+#### 2.7.4 Fase de ratificación (decisión `ratify | regenerate`)
+
+Implementada en `Supervisor._evaluate_ratification()`. Cortocircuita la segunda llamada LLM cuando el playbook activo sigue siendo válido (ver `01-functional-spec.md §F5.bis.5`).
+
+**1) Guardrails determinísticos (pre-LLM)** — fuerzan `regenerate` sin consultar al modelo:
+
+| Disparador | Config key | Default | Causa |
+|-----------|------------|---------|-------|
+| Edad del playbook | `max_playbook_age_days` | `7` | Evita stale indefinido. |
+| Delta WR vs. baseline | `playbook_force_regen_wr_delta_pct` | `15` | Detecta degradación o mejora material vs. WR del playbook activo. |
+| Cambio de régimen | — | — | Régimen actual ≠ régimen del playbook activo. |
+| Kill switch disparado | — | — | Contexto extraordinario en la ventana de 24 h. |
+| Modo `diagnostic` con causa `(b)` o `(e)` | — | — | Playbook restrictivo o edge negativo (§F5.bis.4). |
+
+**2) Llamada LLM #1 (sólo si ningún guardrail cortocircuita)** — prompt `supervisor_eval` con `json_mode=True`:
+
+```jsonc
+{
+  "ratify": true,                                       // true|false
+  "reason": "Mercado en RANGE estable; WR 58% vs. 60% baseline (Δ=2%); 0 cambios de régimen.",
+  "suggested_change_summary": null                       // string si ratify=false; opcional
+}
+```
+
+**3) Persistencia en `decisions.output`** según veredicto:
+
+```jsonc
+// Caso ratify
+{
+  "ratified": true,
+  "ratify_reason": "...",
+  "force_regen_reason": null,
+  "mode": "normal",
+  "config_suggestions": { ... },
+  "config_applied": [ ... ],
+  "config_rejected": [ ... ]
+}
+
+// Caso regenerate
+{
+  "ratified": false,
+  "ratify_reason": null,
+  "force_regen_reason": "playbook_age_days=8 >= max_playbook_age_days=7",  // null si vino del LLM
+  "playbook": "# Playbook v13 — ...",
+  "mode": "normal",
+  "config_suggestions": { ... },
+  "config_applied": [ ... ],
+  "config_rejected": [ ... ]
+}
+```
+
+**4) Eventos WebSocket** — diferenciados (ver `04-api-contracts.md §3.x`):
+- `ratify` → `supervisor_ran` con `{ratified: true, ratify_reason, ts}`.
+- `regenerate` → `playbook_updated` (preexistente) + `supervisor_ran` con `{ratified: false}`.
 
 ---
 
@@ -464,6 +521,7 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | RSI filter | `rsi_overbought_1h`. |
 | Fórmula de confianza | `conf_base_*`, `peso_timeframe_*`, `peso_regime_*`, `adj_*`, `factor_conf_*`, `factor_regime_non_trending`. |
 | Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
+| Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
 
 Comportamiento:
 

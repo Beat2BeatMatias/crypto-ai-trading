@@ -427,6 +427,42 @@ class Indicators(Base):
 
 ---
 
+## P-17 — Cortocircuito determinístico + LLM corto para decisiones binarias
+
+**Categoría**: LLM / Cost & Safety
+
+**Evidencia**: `trading-engine/agents/supervisor.py::_evaluate_ratification` (fase de ratificación del playbook, `01-functional-spec.md §F5.bis.5`); `trading-engine/agents/supervisor.py::_apply_config_suggestions` (rechazo previo de claves fuera de `_SAFE_BOUNDS` antes de aplicar).
+
+```python
+async def _evaluate_ratification(self, metrics, active_playbook, cfg) -> dict:
+    forced = self._force_regenerate_reason(metrics, active_playbook, cfg)
+    if forced:
+        return {"ratify": False, "ratify_reason": None, "force_regen_reason": forced}
+
+    resp = await self.llm.call(
+        provider=self.provider,
+        system_prompt=self.prompt_manager.load_system_prompt("supervisor_eval"),
+        user_prompt=self.prompt_manager.render_user_prompt("supervisor_eval", ctx, strict=False),
+        fallbacks=self.fallbacks,
+        json_mode=True,
+    )
+    parsed = _parse_json_strict(resp.text)
+    return {
+        "ratify": bool(parsed.get("ratify", False)),
+        "ratify_reason": parsed.get("reason", ""),
+        "force_regen_reason": None,
+    }
+```
+
+**Cuándo usar**: para cualquier decisión binaria del LLM que pueda resolverse offline en muchos casos (mantener vs. cambiar, aceptar vs. rechazar, ratificar vs. regenerar). El cortocircuito determinístico **acota el riesgo** (forzar acción ante señales objetivas) y **reduce costo de tokens** cuando no hay nada nuevo que analizar. Requisitos:
+
+1. Reglas explícitas, configurables y testeables (`max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`).
+2. Llamada LLM corta con JSON estructurado (`json_mode=True`) y parseo defensivo.
+3. Persistencia del veredicto **con motivo**: distinguir si fue por cortocircuito determinístico (`force_regen_reason`) o por opinión del LLM (`ratify_reason`).
+4. Audit trail asegurado aunque no haya cambios materiales (1 fila en `decisions` por ejecución).
+
+---
+
 ## Anti-patrones identificados (a evitar)
 
 Lista corta de patrones presentes en el código que **no deben replicarse** y conviene corregir cuando se toque el área:
