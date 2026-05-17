@@ -15,6 +15,16 @@ logger = structlog.get_logger()
 
 
 @dataclass(frozen=True)
+class DepthLevel:
+    """BTC and USDT volume available up to price_pct% from mid."""
+    price_pct: float
+    bid_btc: float
+    bid_usdt: float
+    ask_btc: float
+    ask_usdt: float
+
+
+@dataclass(frozen=True)
 class OrderBookSnapshot:
     spread: float
     spread_pct: float
@@ -29,6 +39,13 @@ class OrderBookSnapshot:
     ask_wall_distance_pct: float
     top_bid: float
     top_ask: float
+    # Profundidad a distintos niveles de distancia del mid-price
+    depth_01pct: DepthLevel | None
+    depth_025pct: DepthLevel | None
+    depth_05pct: DepthLevel | None
+    depth_1pct: DepthLevel | None
+    # Estimación de impacto de un trade del tamaño configurado
+    mid_impact_pct: float | None  # % que se movería el mid con un trade de `trade_size_usdt`
 
 
 class OrderBookCollector:
@@ -75,8 +92,15 @@ class OrderBookCollector:
                 backoff = min(2 * (2 ** min(consecutive_errors - 1, 4)), 60)
                 await asyncio.sleep(backoff)
 
-    def snapshot(self, levels: int = 10) -> OrderBookSnapshot | None:
-        """Return derived metrics from the latest book, or None if no book yet."""
+    def snapshot(self, levels: int = 20,
+                trade_size_usdt: float = 0.0) -> OrderBookSnapshot | None:
+        """Return derived metrics from the latest book, or None if no book yet.
+
+        Args:
+            levels: number of price levels to consume from the raw book.
+            trade_size_usdt: hypothetical trade size in USDT used to estimate
+                mid-price impact. Pass 0 to skip the impact estimate.
+        """
         if self._book is None:
             return None
         bids = self._book.get("bids", [])[:levels]
@@ -97,6 +121,37 @@ class OrderBookCollector:
         bid_wall = max(bids, key=lambda lvl: float(lvl[1]))
         ask_wall = max(asks, key=lambda lvl: float(lvl[1]))
 
+        # Depth at 0.1 / 0.25 / 0.5 / 1.0 % from mid
+        depth_thresholds = [0.001, 0.0025, 0.005, 0.010]
+        depth_levels: list[DepthLevel | None] = []
+        for thr in depth_thresholds:
+            bid_lim = mid * (1 - thr)
+            ask_lim = mid * (1 + thr)
+            b_btc = sum(float(lvl[1]) for lvl in bids if float(lvl[0]) >= bid_lim)
+            a_btc = sum(float(lvl[1]) for lvl in asks if float(lvl[0]) <= ask_lim)
+            depth_levels.append(DepthLevel(
+                price_pct=thr * 100,
+                bid_btc=b_btc,
+                bid_usdt=b_btc * mid,
+                ask_btc=a_btc,
+                ask_usdt=a_btc * mid,
+            ))
+
+        # Mid-price impact estimate for a market buy of trade_size_usdt
+        mid_impact_pct: float | None = None
+        if trade_size_usdt > 0 and mid > 0:
+            remaining = trade_size_usdt
+            last_price = top_ask
+            for lvl in asks:
+                price, qty = float(lvl[0]), float(lvl[1])
+                cost = price * qty
+                if remaining <= cost:
+                    last_price = price
+                    break
+                remaining -= cost
+                last_price = price
+            mid_impact_pct = (last_price - mid) / mid * 100
+
         return OrderBookSnapshot(
             spread=spread,
             spread_pct=spread_pct,
@@ -111,4 +166,9 @@ class OrderBookCollector:
             ask_wall_distance_pct=(float(ask_wall[0]) - top_ask) / top_ask * 100,
             top_bid=top_bid,
             top_ask=top_ask,
+            depth_01pct=depth_levels[0],
+            depth_025pct=depth_levels[1],
+            depth_05pct=depth_levels[2],
+            depth_1pct=depth_levels[3],
+            mid_impact_pct=mid_impact_pct,
         )

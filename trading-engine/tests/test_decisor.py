@@ -252,7 +252,7 @@ _DEFAULT_DECIDE_KWARGS = dict(
 
 @pytest.mark.asyncio
 async def test_valid_llm_response_persists_decision_with_action_buy(session: AsyncSession):
-    # GIVEN a Decisor with a mock LLM returning a valid BUY JSON
+    # GIVEN a Decisor con two_pass_enabled=False para aislar el comportamiento base
     llm = _make_llm_client(_VALID_LLM_RESPONSE)
     pm = _make_prompt_manager()
     decisor = Decisor(
@@ -262,6 +262,7 @@ async def test_valid_llm_response_persists_decision_with_action_buy(session: Asy
         prompt_manager=pm,
         provider=LLMProvider.GEMINI_FLASH,
         fallbacks=[],
+        two_pass_enabled=False,
     )
 
     # WHEN deciding
@@ -279,8 +280,10 @@ async def test_valid_llm_response_persists_decision_with_action_buy(session: Asy
     assert row.rejected_reason is None
     assert row.executed is False
     assert row.model == LLMProvider.GEMINI_FLASH.value
+    # Con two_pass_enabled=False sólo hay una llamada al LLM
     assert row.tokens_in == 100
     assert row.tokens_out == 50
+    assert row.output.get("two_pass_triggered") is False
 
 
 @pytest.mark.asyncio
@@ -311,3 +314,61 @@ async def test_invalid_json_from_llm_persists_decision_with_action_hold(session:
     assert row.output["action"] == "HOLD"
     assert row.rejected_reason is not None
     assert "parse_error" in row.rejected_reason
+
+
+@pytest.mark.asyncio
+async def test_two_pass_triggered_when_coherence_warnings_on_c1_c2_c3(session: AsyncSession):
+    # GIVEN una respuesta LLM válida que va a generar warnings C2/C3 por el CoherenceChecker
+    # (la respuesta declara TRENDING_UP con confluencias que el contexto mínimo no puede confirmar)
+    llm = _make_llm_client(_VALID_LLM_RESPONSE)
+    pm = _make_prompt_manager()
+    decisor = Decisor(
+        session=session,
+        llm=llm,
+        symbol="BTC/USDT",
+        prompt_manager=pm,
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=True,
+    )
+
+    # WHEN deciding con two_pass_enabled=True
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN el output sigue siendo BUY (el two-pass mantiene la misma respuesta del mock)
+    assert result.action == DecisorAction.BUY
+
+    # AND la fila persistida refleja el two-pass
+    rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.output["two_pass_triggered"] is True
+    # Tokens = pass1 (100) + pass2 (100) = 200
+    assert row.tokens_in == 200
+    assert row.tokens_out == 100
+
+
+@pytest.mark.asyncio
+async def test_two_pass_disabled_uses_single_llm_call(session: AsyncSession):
+    # GIVEN two_pass_enabled=False
+    llm = _make_llm_client(_VALID_LLM_RESPONSE)
+    pm = _make_prompt_manager()
+    decisor = Decisor(
+        session=session,
+        llm=llm,
+        symbol="BTC/USDT",
+        prompt_manager=pm,
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=False,
+    )
+
+    # WHEN deciding
+    await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN sólo se hizo una llamada al LLM
+    assert llm.call.call_count == 1
+
+    rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
+    assert rows[0].output["two_pass_triggered"] is False
+    assert rows[0].tokens_in == 100

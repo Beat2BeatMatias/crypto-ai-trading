@@ -290,3 +290,82 @@ async def test_new_config_v2_keys_present_with_defaults(session: AsyncSession):
     assert ctx["subjective_adj_max"] == pytest.approx(0.10)
     assert ctx["expected_holding_max_min"] == 240
     assert ctx["confluence_weak_factor"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Bloque G — _format_last_decisions con warnings del CoherenceChecker
+# ---------------------------------------------------------------------------
+
+class _FakeDecision:
+    """Stub mínimo de Decision para testear _format_last_decisions."""
+    def __init__(self, action: str, confidence: float,
+                 warnings: list[dict] | None = None,
+                 two_pass: bool = False,
+                 close_reason: str | None = None):
+        self.ts = datetime(2026, 5, 17, 12, 0, 0, tzinfo=timezone.utc)
+        self.output = {
+            "action": action,
+            "confidence": confidence,
+            "coherence_warnings": warnings or [],
+            "two_pass_triggered": two_pass,
+        }
+        self.outcome = {"close_reason": close_reason} if close_reason else None
+
+
+def test_format_last_decisions_shows_warning_details():
+    # GIVEN una decisión pasada con 2 coherence warnings
+    decision = _FakeDecision(
+        action="BUY",
+        confidence=0.72,
+        warnings=[
+            {"rule_id": "C1", "message": "RSI(15m)=55, no oversold", "severity": "warning", "evidence": {}},
+            {"rule_id": "C3", "message": "TRENDING_UP sin ADX fuerte (ADX=14)", "severity": "warning", "evidence": {}},
+        ],
+        two_pass=True,
+    )
+
+    # WHEN formateando el bloque G
+    result = ContextBuilder._format_last_decisions([decision])
+
+    # THEN el detalle de cada warning aparece en el texto
+    assert "⚠" in result
+    assert "C1" in result
+    assert "RSI(15m)=55" in result
+    assert "C3" in result
+    assert "TRENDING_UP sin ADX" in result
+    assert "[two-pass]" in result
+
+
+def test_format_last_decisions_no_warnings_shows_no_warning_block():
+    # GIVEN una decisión pasada sin warnings
+    decision = _FakeDecision(action="HOLD", confidence=0.5)
+
+    # WHEN formateando el bloque G
+    result = ContextBuilder._format_last_decisions([decision])
+
+    # THEN no hay bloque de warnings en la salida
+    assert "⚠" not in result
+    assert "[two-pass]" not in result
+
+
+def test_format_last_decisions_limits_warnings_to_four():
+    # GIVEN una decisión con 6 warnings (más que el límite de 4)
+    warnings = [
+        {"rule_id": f"C{i}", "message": f"warning {i}", "severity": "warning", "evidence": {}}
+        for i in range(1, 7)
+    ]
+    decision = _FakeDecision(action="BUY", confidence=0.6, warnings=warnings)
+
+    # WHEN formateando
+    result = ContextBuilder._format_last_decisions([decision])
+
+    # THEN se muestran sólo 4 y aparece el mensaje "y 2 más"
+    assert "y 2 más" in result
+
+
+def test_format_last_decisions_empty_list_returns_no_prev_message():
+    # GIVEN lista vacía de decisiones
+    result = ContextBuilder._format_last_decisions([])
+
+    # THEN devuelve el mensaje de sin decisiones
+    assert "Sin decisiones previas" in result

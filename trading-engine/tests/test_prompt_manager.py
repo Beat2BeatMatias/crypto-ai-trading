@@ -134,57 +134,64 @@ def test_load_system_prompt_loads_decisor_file():
     assert "BTC/USDT" in prompt
     assert "REGLAS ABSOLUTAS" in prompt
     assert "OUTPUT" in prompt
-    assert "{playbook}" in prompt
+    # {playbook} se trasladó al user prompt (Bloque J), no al system prompt
+    assert "ETIQUETAS INTERPRETATIVAS" in prompt
 
 
 def test_render_user_prompt_with_strict_false_leaves_unknown_placeholders():
     # GIVEN a PromptManager without a session
     manager = PromptManager(None)
 
-    # WHEN rendering with only a subset of values and strict=False
+    # WHEN rendering with a subset of the new block-based keys and strict=False
+    # El user prompt ahora usa bloques (A-J); aquí sólo proveemos los keys de
+    # Bloque B + H + I para verificar que los valores conocidos se renderizan
+    # y los desconocidos se dejan como "{key}".
     values = {
         "timestamp_utc": "2025-01-01 12:00:00",
+        "mode": "PAPER_TRADING",
         "price": 95000.0,
         "pct_1h": 0.5,
         "pct_4h": 1.2,
         "pct_24h": -0.3,
-        "rsi_5m": 45.0,
-        "bb_pct_5m": 60.0,
-        "rsi_15m": 50.0,
-        "macd_15m": 10.0,
-        "sig_15m": 8.0,
-        "hist_15m": 2.0,
-        "rsi_1h": 55.0,
-        "macd_1h": 5.0,
-        "sig_1h": 4.0,
-        "ema20_1h": 94000.0,
-        "ema50_1h": 93000.0,
-        "ema200_1h": 90000.0,
-        "rsi_4h": 60.0,
-        "ema20_4h": 93500.0,
-        "ema50_4h": 92000.0,
-        "atr_1h": 500.0,
-        "atr_pct_1h": 0.53,
-        "spread": 1.5,
-        "spread_pct": 0.0016,
-        "imbalance": 0.3,
-        "imbalance_label": "BID_HEAVY",
-        "bid_wall_price": 94500.0,
-        "bid_wall_size": 5.0,
-        "ask_wall_price": 95500.0,
-        "ask_wall_size": 3.2,
-        "open_positions_count": 0,
-        "max_simultaneous_trades": 2,
-        "positions_block": "Sin posiciones abiertas.",
+        "atr_ref_tf": "15m",
+        "atr_ref": 500.0,
+        "atr_ref_pct": 0.53,
+        "atr_avg_7d": 480.0,
+        "atr_expanding": "False",
+        "volatility_label": "NORMAL",
+        "atr_ref_min": 350.0,
+        "atr_ref_max": 750.0,
+        "block_a_profile": "HIBRIDO",
+        "capital_total": 1000.0,
         "usdt_available": 1000.0,
         "btc_held": 0.0,
         "pnl_today_usd": 0.0,
         "pnl_today_pct": 0.0,
-        "daily_stop_pct": "2.0",
-        # intentionally omit last_decisions_block
+        "daily_stop_pct": 2.0,
+        "unrealized_pnl_usd": 0.0,
+        "current_drawdown_pct": 0.0,
+        "trades_today_count": 0,
+        "wins_today": 0,
+        "losses_today": 0,
+        "open_positions_count": 0,
+        "max_simultaneous_trades": 2,
+        "positions_block": "  Ninguna",
+        "max_position_pct": 0.1,
+        "min_position_size": 0.0001,
+        "min_rr_ratio": 1.3,
+        "sl_atr_multiplier": 0.5,
+        "sl_atr_max_multiplier": 1.5,
+        "roundtrip_fee_pct": 0.0,
+        "min_fees_to_tp_ratio": 3.0,
+        "min_confluences_buy": 2,
+        "cooldown_after_sell_min": 5,
+        # Omitir intencionalmente los bloques C/D/E/F/G/J para verificar strict=False
     }
 
-    # THEN the rendered prompt contains filled values and keeps missing placeholders
+    # THEN los valores presentes se renderizan y los bloques ausentes se dejan como {key}
     rendered = manager.render_user_prompt("decisor", values, strict=False)
     assert "95,000.00" in rendered
+    # Los bloques no provistos quedan como placeholders sin resolver
     assert "{last_decisions_block}" in rendered
+    assert "{block_c_text}" in rendered
+    assert "{playbook}" in rendered

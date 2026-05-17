@@ -1,36 +1,69 @@
-=== CICLO DE DECISION — {timestamp_utc} UTC ===
+=== CICLO DE DECISIÓN — {timestamp_utc} UTC | Modo: {mode} ===
 
-PRECIO BTC/USDT
-  Actual: ${price:,.2f}
-  Cambio: 1h {pct_1h:+.2f}% | 4h {pct_4h:+.2f}% | 24h {pct_24h:+.2f}%
+════════════════════════════════════════════
+BLOQUE B — MARKET SNAPSHOT
+════════════════════════════════════════════
+Precio BTC/USDT: ${price:,.2f}
+Cambio:  1h {pct_1h:+.2f}%  |  4h {pct_4h:+.2f}%  |  24h {pct_24h:+.2f}%
+ATR({atr_ref_tf}): ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)  |  avg 7d: ${atr_avg_7d:.0f}  |  expanding={atr_expanding}
+Volatilidad: {volatility_label}
+Rango SL válido (R4): ${atr_ref_min:.0f}–${atr_ref_max:.0f} bajo el precio
 
-INDICADORES TECNICOS
-  5m:  RSI {rsi_5m:.0f} | BB% {bb_pct_5m:.0f}
-  15m: RSI {rsi_15m:.0f} | MACD {macd_15m:+.1f}/{sig_15m:+.1f} hist {hist_15m:+.1f}
-  1h:  RSI {rsi_1h:.0f} | MACD {macd_1h:+.1f}/{sig_1h:+.1f}
-       EMA20 {ema20_1h:,.0f} EMA50 {ema50_1h:,.0f} EMA200 {ema200_1h:,.0f}
-  4h:  RSI {rsi_4h:.0f} | EMA20 {ema20_4h:,.0f} EMA50 {ema50_4h:,.0f}
-  ATR({atr_timeframe}) [referencia SL/TP]: ${atr_ref:.0f} ({atr_ref_pct:.2f}%) | avg 7d: ${atr_avg_7d:.0f} | expanding={atr_expanding}
+════════════════════════════════════════════
+BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
+════════════════════════════════════════════
+(Orden de prioridad para perfil {block_a_profile})
 
-VOLUMEN ({atr_timeframe})
-  Vela actual: {volume_current:.3f} BTC | Promedio 20 velas: {volume_avg20:.3f} BTC | Ratio: {volume_ratio:.2f}x
+{block_c_text}
 
-ORDER BOOK
-  Spread: ${spread:.2f} ({spread_pct:.4f}%)
-  Imbalance: {imbalance:.2f} ({imbalance_label})
-  Bid wall: ${bid_wall_price:,.0f} ({bid_wall_size:.1f} BTC) | Distancia: {bid_wall_dist_pct:+.2f}%
-  Ask wall: ${ask_wall_price:,.0f} ({ask_wall_size:.1f} BTC) | Distancia: {ask_wall_dist_pct:+.2f}%
+════════════════════════════════════════════
+BLOQUE D — NIVELES CLAVE
+════════════════════════════════════════════
+{block_d_text}
 
-POSICIONES ABIERTAS: {open_positions_count} | LIMITE DEL SISTEMA: {max_simultaneous_trades}
+════════════════════════════════════════════
+BLOQUE E — ORDER BOOK DEPTH
+════════════════════════════════════════════
+{block_e_text}
+
+════════════════════════════════════════════
+BLOQUE F — ALINEACIÓN CROSS-TIMEFRAME
+════════════════════════════════════════════
+{block_f_text}
+
+════════════════════════════════════════════
+BLOQUE G — ÚLTIMAS DECISIONES
+════════════════════════════════════════════
+{last_decisions_block}
+
+════════════════════════════════════════════
+BLOQUE H — PORTFOLIO
+════════════════════════════════════════════
+Capital total: ${capital_total:,.2f} USDT  |  Disponible: ${usdt_available:,.2f}  |  BTC held: {btc_held:.6f}
+P&L hoy: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%)  |  Stop diario en: {daily_stop_pct:.1f}%
+P&L no realizado: ${unrealized_pnl_usd:+,.2f}
+Drawdown total: {current_drawdown_pct:+.2f}%
+Trades hoy: {trades_today_count} ({wins_today}W / {losses_today}L)
+Posiciones abiertas: {open_positions_count} / {max_simultaneous_trades}
 {positions_block}
 
-BALANCE
-  USDT: ${usdt_available:,.2f} | BTC: {btc_held:.6f}
+════════════════════════════════════════════
+BLOQUE I — CONFIG RIESGO (fuente de verdad de parámetros numéricos)
+════════════════════════════════════════════
+max_position_pct:         {max_position_pct}     (cap R1)
+min_position_size:        {min_position_size}   (piso de sizing)
+max_simultaneous_trades:  {max_simultaneous_trades}       (R8)
+daily_stop_pct:           {daily_stop_pct:.1f}%  (R9 — llevamos {pnl_today_pct:+.2f}% hoy)
+min_rr_ratio:             {min_rr_ratio}      (R5)
+sl_atr_range:             [{sl_atr_multiplier}×, {sl_atr_max_multiplier}×] ATR → ${atr_ref_min:.0f}–${atr_ref_max:.0f}  (R4)
+fees round-trip:          {roundtrip_fee_pct:.4f}%  (R10 — 0%=testnet)
+min_fees_to_tp_ratio:     {min_fees_to_tp_ratio}×
+min_confluences_buy:      {min_confluences_buy}
+cooldown_after_sell_min:  {cooldown_after_sell_min}
 
-P&L HOY: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%) | Stop en: {daily_stop_pct}%
-Drawdown actual: {current_drawdown_pct:+.2f}%
-
-ULTIMAS DECISIONES
-{last_decisions_block}
+════════════════════════════════════════════
+BLOQUE J — PLAYBOOK ACTIVO
+════════════════════════════════════════════
+{playbook}
 
 === Decide ahora con el JSON exacto. ===

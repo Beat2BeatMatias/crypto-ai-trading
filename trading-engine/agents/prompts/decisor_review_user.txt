@@ -1,0 +1,49 @@
+═══════════════════════════════════════════════════════════════
+AUTO-REVISIÓN — tu decisión de este ciclo tiene inconsistencias
+═══════════════════════════════════════════════════════════════
+
+Tu primera decisión fue:
+  action={review_action}
+  regime={review_regime}
+  confidence={review_confidence}
+  confluences={review_confluences}
+  position_size_pct={review_position_size_pct}
+  stop_loss={review_stop_loss}
+  take_profit={review_take_profit}
+  reasoning="{review_reasoning}"
+
+El CoherenceChecker detectó las siguientes inconsistencias entre tu
+output y los indicadores del ciclo actual:
+
+{review_warnings_block}
+
+═══════════════════════════════════════════════════════════════
+QUÉ HACER AHORA
+═══════════════════════════════════════════════════════════════
+Revisá cada inconsistencia con el contexto técnico completo que tenés
+disponible (bloques B–F del prompt anterior).
+
+Tenés DOS opciones:
+
+  OPCIÓN A — Corregir la decisión:
+    Si la inconsistencia refleja un error real (declaraste una confluencia
+    que los indicadores no confirman, o el régimen no coincide con la
+    evidencia), emití el JSON corregido.
+
+  OPCIÓN B — Mantener la decisión con justificación:
+    Si después de revisar los indicadores considerás que tu decisión
+    original era correcta a pesar de la inconsistencia detectada
+    (por ejemplo, el contexto completo justifica esa interpretación),
+    emití el mismo JSON con una explicación explícita en `reasoning`.
+    Agregá el tag [REVISADO-MANTENIDO] al inicio del reasoning y
+    explicá por qué la señal sigue siendo válida.
+
+    Ejemplo: "[REVISADO-MANTENIDO] C1 detectó RSI(15m)=38 pero la vela
+    de reversión con mecha larga inferior y Stoch <20 confirman el
+    setup — RSI en zona de transición, no requiere estar <30."
+
+IMPORTANTE: no justifiques la decisión solo para mantenerla. Si la
+inconsistencia es real, corregila. El objetivo es la precisión, no
+la consistencia con vos mismo.
+
+Output: el mismo JSON exacto especificado en el system prompt.

@@ -325,7 +325,7 @@ def test_r10_buy_rejected_when_tp_move_insufficient_vs_fees():
     verdict = gate.validate(decision=decision, **kwargs)
 
     assert verdict.passed is False
-    assert "R10" in verdict.reason
+    assert verdict.rule_id == "R10"
 
 
 def test_r10_buy_passes_when_tp_move_covers_fees():

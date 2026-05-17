@@ -1,11 +1,9 @@
 from __future__ import annotations
 import json
 import re
-import uuid
 from typing import Any
 import structlog
 from pydantic import ValidationError
-from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Decision
 from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
@@ -13,18 +11,22 @@ from agents.context_builder import ContextBuilder
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
 from collectors.orderbook_collector import OrderBookSnapshot
+from risk.coherence_checker import CoherenceChecker, CoherenceWarning
 
 logger = structlog.get_logger()
 
 _VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
 
+# Reglas de coherencia que disparan el two-pass.
+# C1/C2/C3 son inconsistencias factuales (el LLM declaró algo que los
+# indicadores no muestran) → vale la pena que el LLM lo revise.
+# C4/C5/C6 son meta-reglas (confianza, holding) → no se benefician
+# tanto de una segunda llamada.
+_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3"})
+
 
 def _filter_confluence_codes(confluences: list[str]) -> list[str]:
-    """Elimina códigos fuera del catálogo A–H y loguea lo que se descarta.
-
-    Garantía: el output siempre contiene solo códigos del catálogo aprobado.
-    Si el LLM infló el conteo con códigos inventados, solo quedan los legítimos.
-    """
+    """Elimina códigos fuera del catálogo A–H y loguea lo que se descarta."""
     valid = [c for c in confluences if c in _VALID_CONFLUENCE_CODES]
     invalid = [c for c in confluences if c not in _VALID_CONFLUENCE_CODES]
     if invalid:
@@ -41,7 +43,9 @@ class Decisor:
     def __init__(self, *, session: AsyncSession, llm: LLMClient, symbol: str,
                  prompt_manager: PromptManager | None = None,
                  provider: LLMProvider = LLMProvider.GROQ_LLAMA,
-                 fallbacks: list[LLMProvider] | None = None):
+                 fallbacks: list[LLMProvider] | None = None,
+                 coherence_strict_mode: bool = False,
+                 two_pass_enabled: bool = True):
         self.session = session
         self.llm = llm
         self.symbol = symbol
@@ -49,6 +53,8 @@ class Decisor:
         self.context_builder = ContextBuilder(session, symbol=symbol)
         self.provider = provider
         self.fallbacks = fallbacks or [LLMProvider.GEMINI_FLASH]
+        self.coherence_checker = CoherenceChecker(strict_mode=coherence_strict_mode)
+        self.two_pass_enabled = two_pass_enabled
 
     async def decide(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
                      btc_held: float, max_position_pct: float, max_simultaneous_trades: int,
@@ -58,6 +64,7 @@ class Decisor:
                      sl_atr_multiplier: float = 0.3,
                      calibration: dict | None = None,
                      current_drawdown_pct: float = 0.0) -> DecisorOutput:
+
         playbook = await self.prompt_manager.get_active_playbook()
         playbook_content = playbook.content if playbook else "# No playbook."
 
@@ -71,8 +78,7 @@ class Decisor:
             sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
             current_drawdown_pct=current_drawdown_pct,
         )
-        # Resolve any {config_variable} placeholders in the playbook using the full context,
-        # so config changes propagate automatically without editing the playbook manually.
+
         if ctx.get("playbook"):
             ctx["playbook"] = _safe_substitute(ctx["playbook"], ctx)
 
@@ -81,52 +87,196 @@ class Decisor:
         user_prompt = self.prompt_manager.render_user_prompt("decisor", ctx, strict=False)
 
         resp = None
+        resp_review = None
+        coherence_warnings: list[CoherenceWarning] = []
+        rejected_reason: str | None = None
+        two_pass_triggered = False
+
         try:
+            # ── PASS 1: decisión inicial ───────────────────────────────────
             resp = await self.llm.call(
                 provider=self.provider, system_prompt=system_prompt,
                 user_prompt=user_prompt, fallbacks=self.fallbacks,
             )
-            raw = resp.text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            parsed = json.loads(raw.strip())
-            validated = DecisorOutput.model_validate(parsed)
+            validated = _parse_llm_output(resp.text)
+
             clean_confluences = _filter_confluence_codes(validated.confluences)
             if len(clean_confluences) != len(validated.confluences):
                 validated = validated.model_copy(update={"confluences": clean_confluences})
-            validated = _apply_deterministic_overrides(validated, max_position_pct, calibration)
-            output_dict = validated.model_dump()
-            rejected_reason = None
+
+            coherence_warnings = self.coherence_checker.evaluate(validated, ctx)
+
+            # ── PASS 2: auto-revisión si hay inconsistencias factuales ─────
+            trigger_warnings = [
+                w for w in coherence_warnings
+                if w.rule_id in _TWO_PASS_TRIGGER_RULES
+            ]
+            if trigger_warnings and self.two_pass_enabled:
+                two_pass_triggered = True
+                logger.info(
+                    "decisor.two_pass_triggered",
+                    rules=[w.rule_id for w in trigger_warnings],
+                    action_pass1=validated.action,
+                    confidence_pass1=validated.confidence,
+                )
+                review_ctx = _build_review_ctx(validated, trigger_warnings)
+                review_template = self.prompt_manager.load_user_template("decisor_review")
+                review_prompt = review_template.format_map(_DefaultReviewDict(review_ctx))
+
+                try:
+                    resp_review = await self.llm.call(
+                        provider=self.provider,
+                        system_prompt=system_prompt,  # mismo system prompt
+                        user_prompt=review_prompt,
+                        fallbacks=self.fallbacks,
+                    )
+                    validated_review = _parse_llm_output(resp_review.text)
+                    clean_review = _filter_confluence_codes(validated_review.confluences)
+                    if len(clean_review) != len(validated_review.confluences):
+                        validated_review = validated_review.model_copy(
+                            update={"confluences": clean_review}
+                        )
+                    # Re-evaluar coherencia de la decisión revisada
+                    coherence_warnings_review = self.coherence_checker.evaluate(
+                        validated_review, ctx
+                    )
+                    remaining = [
+                        w for w in coherence_warnings_review
+                        if w.rule_id in _TWO_PASS_TRIGGER_RULES
+                    ]
+                    logger.info(
+                        "decisor.two_pass_result",
+                        action_pass1=validated.action,
+                        action_pass2=validated_review.action,
+                        confidence_pass1=validated.confidence,
+                        confidence_pass2=validated_review.confidence,
+                        warnings_pass1=[w.rule_id for w in trigger_warnings],
+                        warnings_pass2=[w.rule_id for w in remaining],
+                        inconsistencies_resolved=len(trigger_warnings) - len(remaining),
+                    )
+                    # La decisión revisada pasa a ser la decisión final.
+                    # Mantenemos los warnings de ambos pases en el output.
+                    validated = validated_review
+                    coherence_warnings = coherence_warnings_review
+                except Exception as e:
+                    # Si el second pass falla, continuamos con la decisión del pass 1.
+                    logger.warning("decisor.two_pass_error", error=str(e))
+
+            # ── strict_mode: warnings críticos → HOLD ─────────────────────
+            if self.coherence_checker.has_critical(coherence_warnings):
+                critical_ids = [w.rule_id for w in coherence_warnings if w.severity == "critical"]
+                logger.warning("decisor.coherence_strict_hold",
+                               rules=critical_ids,
+                               action=validated.action,
+                               confidence=validated.confidence)
+                validated = _hold_decision(
+                    f"[coherence_strict] reglas {critical_ids} → HOLD de seguridad."
+                )
+                rejected_reason = f"coherence_strict: {critical_ids}"
+
+            logger.info(
+                "decisor.llm_decision_accepted",
+                action=validated.action,
+                regime=validated.regime,
+                confidence=validated.confidence,
+                position_size_pct=validated.position_size_pct,
+                confluences=validated.confluences,
+                coherence_warnings=[w.rule_id for w in coherence_warnings],
+                two_pass=two_pass_triggered,
+            )
+
         except (json.JSONDecodeError, ValidationError) as e:
             logger.warning("decisor.parse_error", error=str(e))
             validated = _hold_decision("parse_error")
-            output_dict = validated.model_dump()
             rejected_reason = f"parse_error: {type(e).__name__}"
         except Exception as e:
             logger.error("decisor.llm_error", error=str(e))
             validated = _hold_decision("llm_error")
-            output_dict = validated.model_dump()
             rejected_reason = f"llm_error: {type(e).__name__}"
 
+        output_dict = validated.model_dump()
+        output_dict["coherence_warnings"] = [w.to_dict() for w in coherence_warnings]
+        output_dict["two_pass_triggered"] = two_pass_triggered
+
+        # Tokens totales = pass 1 + pass 2 (si hubo)
+        tokens_in = (resp.tokens_in if resp else 0) + (resp_review.tokens_in if resp_review else 0)
+        tokens_out = (resp.tokens_out if resp else 0) + (resp_review.tokens_out if resp_review else 0)
+        latency_ms = (resp.latency_ms if resp else 0) + (resp_review.latency_ms if resp_review else 0)
+        model = resp.provider if resp else self.provider.value
+
         self.session.add(Decision(
-            agent="decisor", model=resp.provider if resp else self.provider.value,
-            tokens_in=resp.tokens_in if resp else 0,
-            tokens_out=resp.tokens_out if resp else 0,
-            latency_ms=resp.latency_ms if resp else 0,
-            input={k: _serialize(v) for k, v in ctx.items()},
-            output=output_dict, executed=False, rejected_reason=rejected_reason,
+            agent="decisor",
+            model=model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+            input={k: _serialize(v) for k, v in ctx.items()
+                   if not isinstance(v, dict) or k == "block_f_cross_tf"},
+            output=output_dict,
+            executed=False,
+            rejected_reason=rejected_reason,
         ))
         await self.session.commit()
-        logger.info("decisor.decided", action=output_dict["action"],
-                    confidence=output_dict["confidence"],
-                    regime=output_dict["regime"],
-                    confluences=output_dict["confluences"],
-                    reasoning=output_dict["reasoning"],
-                    rejected=rejected_reason)
+
+        logger.info(
+            "decisor.decided",
+            action=output_dict["action"],
+            confidence=output_dict["confidence"],
+            regime=output_dict["regime"],
+            confluences=output_dict["confluences"],
+            coherence_warnings_count=len(coherence_warnings),
+            two_pass=two_pass_triggered,
+            rejected=rejected_reason,
+        )
         return validated
 
+
+# ---------------------------------------------------------------------------
+# Parsing del output LLM (reutilizado en pass 1 y pass 2)
+# ---------------------------------------------------------------------------
+
+def _parse_llm_output(text: str) -> DecisorOutput:
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    parsed = json.loads(raw.strip())
+    return DecisorOutput.model_validate(parsed)
+
+
+# ---------------------------------------------------------------------------
+# Two-pass helpers
+# ---------------------------------------------------------------------------
+
+def _build_review_ctx(decision: DecisorOutput,
+                      warnings: list[CoherenceWarning]) -> dict[str, Any]:
+    """Arma el contexto para el template de auto-revisión."""
+    warnings_lines = "\n".join(
+        f"  [{w.rule_id}] {w.message}" for w in warnings
+    )
+    return {
+        "review_action": decision.action,
+        "review_regime": decision.regime,
+        "review_confidence": f"{decision.confidence:.2f}",
+        "review_confluences": decision.confluences,
+        "review_position_size_pct": decision.position_size_pct,
+        "review_stop_loss": decision.stop_loss,
+        "review_take_profit": decision.take_profit,
+        "review_reasoning": (decision.reasoning or "")[:300],
+        "review_warnings_block": warnings_lines,
+    }
+
+
+class _DefaultReviewDict(dict):
+    """dict que devuelve '{key}' para claves faltantes en el template de revisión."""
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+# ---------------------------------------------------------------------------
+# Fallback de error
+# ---------------------------------------------------------------------------
 
 def _hold_decision(reason: str) -> DecisorOutput:
     return DecisorOutput(
@@ -137,93 +287,24 @@ def _hold_decision(reason: str) -> DecisorOutput:
     )
 
 
-_REGIME_THRESHOLD_KEY = {
-    MarketRegime.TRENDING_UP: "conf_threshold_trending_up",
-    MarketRegime.RANGE: "conf_threshold_range",
-    MarketRegime.HIGH_VOLATILITY: "conf_threshold_high_vol",
-}
-
-_REGIME_THRESHOLD_DEFAULT = {
-    MarketRegime.TRENDING_UP: 0.60,
-    MarketRegime.RANGE: 0.70,
-    MarketRegime.HIGH_VOLATILITY: 0.80,
-}
-
-# Piso absoluto de seguridad: ninguna configuración del Supervisor puede bajar
-# el umbral de override por debajo de este valor.
-_CONFIDENCE_FLOOR = 0.40
-
-
-def _apply_deterministic_overrides(validated: DecisorOutput, max_position_pct: float,
-                                   calibration: dict | None = None) -> DecisorOutput:
-    """Enforce per-regime confidence threshold and step-function position sizing.
-
-    Gate:   TRENDING_DOWN → HOLD siempre.
-            Otros regímenes → usa conf_threshold_<regime> del calibration dict
-            (ajustable por el Supervisor), con piso absoluto de _CONFIDENCE_FLOOR.
-    Sizing: confidence >= 0.70 → min(max_position_pct, 0.25)
-            confidence < 0.70  → 0.03 (tamaño reducido)
-
-    El LLM recibe los mismos umbrales en el prompt; este layer garantiza que
-    el runtime no pueda divergir aunque el LLM ignore las instrucciones.
-    """
-    if validated.action != DecisorAction.BUY:
-        return validated
-
-    # TRENDING_DOWN siempre bloqueado
-    if validated.regime == MarketRegime.TRENDING_DOWN:
-        logger.info("decisor.override_trending_down", confidence=validated.confidence)
-        return validated.model_copy(update={
-            "action": DecisorAction.HOLD,
-            "stop_loss": None, "take_profit": None, "position_size_pct": 0.0,
-            "reasoning": "[override] TRENDING_DOWN → BUY bloqueado.",
-        })
-
-    # Umbral por régimen desde calibration (con fallback al default y piso de seguridad)
-    cal = calibration or {}
-    key = _REGIME_THRESHOLD_KEY.get(validated.regime)
-    default = _REGIME_THRESHOLD_DEFAULT.get(validated.regime, 0.60)
-    threshold = max(_CONFIDENCE_FLOOR, float(cal.get(key, default)) if key else default)
-
-    if validated.confidence < threshold:
-        logger.info("decisor.override_below_threshold",
-                    regime=validated.regime.value,
-                    confidence=validated.confidence,
-                    threshold=threshold)
-        return validated.model_copy(update={
-            "action": DecisorAction.HOLD,
-            "stop_loss": None, "take_profit": None, "position_size_pct": 0.0,
-            "reasoning": (
-                f"[override] confidence {validated.confidence:.2f} < umbral "
-                f"{threshold:.2f} para {validated.regime.value} → HOLD forzado."
-            ),
-        })
-
-    # Sizing step-function (independiente del umbral de régimen)
-    full_size = min(max_position_pct, 0.25)
-    new_size = round(full_size if validated.confidence >= 0.70 else 0.03, 4)
-    new_size = max(0.01, new_size)
-    if abs(new_size - validated.position_size_pct) > 1e-6:
-        logger.info("decisor.override_size",
-                    original=validated.position_size_pct, new=new_size,
-                    confidence=validated.confidence, regime=validated.regime.value)
-        return validated.model_copy(update={"position_size_pct": new_size})
-    return validated
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _safe_substitute(template: str, ctx: dict) -> str:
     """Replace {identifier} and {identifier:format_spec} placeholders found in ctx.
 
     Leaves unresolvable patterns (key not in ctx, invalid spec) untouched.
-    Safe for templates that contain literal braces in JSON examples — those use
-    quoted keys like {"regime": ...} which don't match the identifier regex.
+    Safe for templates that contain literal braces in JSON examples.
     """
     def replace(match: re.Match) -> str:
         key = match.group(1)
-        fmt = match.group(2)  # e.g. ":.4f" or None
+        fmt = match.group(2)
         if key not in ctx:
             return match.group(0)
         value = ctx[key]
+        if isinstance(value, (dict, list)):
+            return str(value)
         if fmt:
             try:
                 return format(value, fmt.lstrip(":"))
