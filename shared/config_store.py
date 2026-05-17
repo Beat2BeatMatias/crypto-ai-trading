@@ -83,6 +83,10 @@ class ConfigKey(str, Enum):
     # Supervisor — fase de ratificación del playbook (01-functional-spec §F5.bis.5)
     MAX_PLAYBOOK_AGE_DAYS = "max_playbook_age_days"
     PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT = "playbook_force_regen_wr_delta_pct"
+    # Decisor LLM-centric (02-technical-spec §2.6)
+    MIN_POSITION_SIZE = "min_position_size"
+    COHERENCE_STRICT_MODE = "coherence_strict_mode"
+    TWO_PASS_ENABLED = "two_pass_enabled"
 
 
 @dataclass(frozen=True)
@@ -205,6 +209,18 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT: _Default(
         "15", "float",
         "Diferencia absoluta de win rate (puntos %) vs. baseline del playbook activo que fuerza regeneración. Rango 1–50.",
+    ),
+    ConfigKey.MIN_POSITION_SIZE: _Default(
+        "0.005", "float",
+        "Tamaño mínimo de posición en BTC para ejecutar un trade (piso de sizing). El LLM no puede proponer menos.",
+    ),
+    ConfigKey.COHERENCE_STRICT_MODE: _Default(
+        "false", "bool",
+        "Si true, warnings críticos de CoherenceChecker (C1/C2/C3) bloquean la decisión forzando HOLD. Default false (warnings sólo informativos).",
+    ),
+    ConfigKey.TWO_PASS_ENABLED: _Default(
+        "true", "bool",
+        "Si true, cuando el CoherenceChecker detecta warnings en C1/C2/C3 se hace una segunda llamada al LLM para auto-revisión.",
     ),
 }
 

@@ -246,6 +246,8 @@ async def run() -> None:
                 "factor_regime_non_trending": await store.get_typed(ConfigKey.FACTOR_REGIME_NON_TRENDING),
                 "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
             }
+            coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
+            two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
 
             collector = PriceCollector(exchange, s, symbol=settings.symbol)
             try:
@@ -315,7 +317,9 @@ async def run() -> None:
                 daily_pnl_frac, total_drawdown_frac = 0.0, 0.0
 
             decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
-                              provider=decisor_provider, fallbacks=fallbacks)
+                              provider=decisor_provider, fallbacks=fallbacks,
+                              coherence_strict_mode=coherence_strict,
+                              two_pass_enabled=two_pass)
             ob_snap = orderbook.snapshot(levels=10)
             try:
                 decision = await decisor.decide(

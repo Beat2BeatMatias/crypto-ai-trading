@@ -1,11 +1,13 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.3 — 2026-05-17.
+> Versión: 1.4 — 2026-05-17.
 >
-> Cambios v1.3: §2.7.2 actualiza la frecuencia de escritura en `playbook_versions` (no obligatoria por ciclo); nueva §2.7.4 documenta la fase de ratificación con guardrails determinísticos (`max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`). Compatibilidad con `decisions.output` extendida.
+> Cambios v1.4: Rediseño LLM-centric del Decisor. Se eliminan overrides deterministas (TRENDING_DOWN, confidence-floor, sizing escalón). Se agregan CoherenceChecker (§2.6.bis.5), two-pass (§2.6.bis.6), etiquetas interpretativas (`labelers.py`, §2.6.bis.7). Se actualiza §2.6.bis (capas de defensa ahora son 5+1 sin Capa 3) y §2.6.bis.3 (garantías invariantes revisadas). Nuevas claves de config (§6): `min_position_size`, `coherence_strict_mode`, `two_pass_enabled`. Nueva API (§3): `GET /api/decisions/stats`. Indicadores extendidos (§2.2).
 >
-> Cambios v1.2: se agregó §2.6.bis (Modelo de autonomía y capas de defensa) y §2.7 (Aprendizaje del Supervisor: detalles técnicos). Sin cambios en contratos de API ni en modelo de datos.
+> Cambios v1.3: §2.7.2 actualiza la frecuencia de escritura en `playbook_versions`; nueva §2.7.4 documenta guardrails determinísticos del Supervisor.
+>
+> Cambios v1.2: se agregó §2.6.bis y §2.7.
 
 ---
 
@@ -223,18 +225,18 @@ El campo `reasoning` (max 1000 chars, truncado silenciosamente a 997 + `"..."`) 
 - La sección `[NIVELES]` se omite en HOLD/SELL para evitar ruido visual.
 - El límite de 1000 chars es suficiente para todos los casos documentados; el truncado es silencioso.
 
-### 2.6.bis Modelo de autonomía y capas de defensa
+### 2.6.bis Modelo de autonomía y capas de defensa (v1.4 — LLM-centric)
 
-Esta sección complementa lo expuesto en `01-functional-spec.md §F2.bis` con la vista técnica: dónde vive cada capa, qué función la implementa, y cuál es la salida observable.
+Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica del nuevo modelo: sin overrides deterministas de `action` ni `sizing`; el LLM tiene autonomía total, auditada por el CoherenceChecker y protegida por el Risk Gate.
 
-#### 2.6.bis.1 Cinco capas en línea
+#### 2.6.bis.1 Cinco capas en línea (v1.4)
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│ Capa 1: LLM Decisor                                        │
+│ Capa 1: LLM Decisor — Pass 1                               │
 │   • prompts/decisor_system.txt + prompts/decisor_user.txt  │
-│   • Catálogo cerrado A–H, jerarquía R1–R10 → sistema       │
-│     → playbook → confluencias                              │
+│   • Contexto en bloques A–K (ContextBuilder)               │
+│   • Etiquetas interpretativas del labelers.py              │
 │   • Output: JSON estricto                                  │
 └──────────────────┬─────────────────────────────────────────┘
                    ▼ json.loads + DecisorOutput.model_validate
@@ -245,16 +247,19 @@ Esta sección complementa lo expuesto en `01-functional-spec.md §F2.bis` con la
 └──────────────────┬─────────────────────────────────────────┘
                    ▼
 ┌────────────────────────────────────────────────────────────┐
-│ Capa 3: Override determinístico                            │
-│   • decisor.py:_apply_deterministic_overrides              │
-│   • TRENDING_DOWN ∨ confidence < 0.60 → HOLD               │
-│   • Sizing escalonado por confidence                       │
+│ Capa 3: CoherenceChecker + two-pass (NUEVO, auditoría)     │
+│   • risk/coherence_checker.py:CoherenceChecker.evaluate    │
+│   • Reglas C1–C6: consistencia lógica declaración vs datos │
+│   • Warnings → pass2 (LLM se auto-corrige): si C1/C2/C3   │
+│   • strict_mode: C1/C2/C3 → _hold_decision("coherence")   │
+│   • Persiste coherence_warnings en decisions.output        │
 └──────────────────┬─────────────────────────────────────────┘
                    ▼  persist Decision (executed=false)
 ┌────────────────────────────────────────────────────────────┐
 │ Capa 4: Risk Gate                                          │
 │   • risk/risk_gate.py:RiskGate.validate                    │
 │   • R1–R10 + drawdown total + kill_switch                  │
+│   • Cada rechazo lleva rule_id ("R1"..."R10")              │
 │   • Falla → UPDATE Decision.rejected_reason → return       │
 └──────────────────┬─────────────────────────────────────────┘
                    ▼
@@ -268,34 +273,87 @@ Esta sección complementa lo expuesto en `01-functional-spec.md §F2.bis` con la
 ┌────────────────────────────────────────────────────────────┐
 │ Capa 6: Operador (humano)                                  │
 │   • Kill switch, rollback de playbook, cambio de modo      │
+│   • coherence_strict_mode (config key) — control de rigor  │
 └────────────────────────────────────────────────────────────┘
 ```
 
-> Las capas 1–5 son automáticas y siempre activas; la capa 6 es discrecional. El operador puede saltearlas todas con un `POST /api/kill-switch` (que en realidad agrega una restricción extra a la capa 4, no la elude).
+> **Nota v1.4**: la antigua Capa 3 (`_apply_deterministic_overrides`) fue eliminada. El nuevo CoherenceChecker (Capa 3) es auditor, no reescritor — salvo en `strict_mode`. El Risk Gate (Capa 4) es la **única** barrera hard-blocking sobre la `action`.
 
 #### 2.6.bis.2 Mapa código ↔ capa de defensa
 
 | Capa | Archivo / función | Tipo de control | Salida observable |
 |------|-------------------|-----------------|-------------------|
-| 1 | `agents/prompts/decisor_system.txt` | Prompt engineering (instrucciones, jerarquía R1–R10, fórmula confidence). | Determina sesgo y formato del JSON; no es enforcement. |
-| 1 | `agents/decisor.py:_validate_confluence_codes` | Logging de códigos inválidos en `confluences`. | Warning `decisor.invalid_confluence_codes`. |
-| 2 | `shared/schemas.py:DecisorOutput` (Pydantic) | Validación estructural (tipos, enums, bounds de `confidence_adjustment`). | Excepción → `_hold_decision("parse_error")`. |
-| 3 | `agents/decisor.py:_apply_deterministic_overrides` | Reescritura de `action`, `position_size_pct`, `stop_loss`, `take_profit`. | Log `decisor.override_below_threshold` o `decisor.override_size`. |
-| 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange. | `Decision.rejected_reason` populado, `executed=false`. |
-| 5 | `risk/circuit_breaker.py:CircuitBreaker` | Pausa global del engine. | Config key `engine_paused=true` + `engine_pause_reason`. |
-| 6 | `web/api/control.py` (kill switch, mode change) | Intervención humana. | `config_history` con `changed_by="user"`. |
+| 1a | `agents/prompts/decisor_system.txt` | Prompt engineering (jerarquía, guía sizing, etiquetas interpretativas). | Determina sesgo y formato del JSON; no es enforcement. |
+| 1b | `agents/context_builder.py:build` | Construcción bloques A–K con indicadores enriquecidos y labelers. | Contexto inyectado en el user prompt. |
+| 1c | `agents/decisor.py:_filter_confluence_codes` | Filtra códigos fuera de catálogo A–H (silencioso). | Log `decisor.invalid_confluence_codes_filtered`. |
+| 2 | `shared/schemas.py:DecisorOutput` (Pydantic) | Validación estructural (tipos, enums, bounds). | Excepción → `_hold_decision("parse_error")`. |
+| 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría de consistencia C1–C6. | `coherence_warnings` en output; warning en log `coherence.warnings_detected`. |
+| 3b | `agents/decisor.py:_build_review_ctx` + pass 2 | Two-pass auto-revisión si hay C1/C2/C3. | Log `decisor.two_pass_triggered` + `decisor.two_pass_result`. |
+| 3c | `agents/labelers.py` | Etiquetas interpretativas pre-calculadas. | Sugerencias en contexto; el LLM puede discrepar. |
+| 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange (R1–R10). | `Decision.rejected_reason` = `"risk_gate: R{n}"`, `rule_id` estructurado. |
+| 5 | `risk/circuit_breaker.py:CircuitBreaker` | Pausa global del engine. | `engine_paused=true` + `engine_pause_reason`. |
+| 6 | `web/api/control.py` + `COHERENCE_STRICT_MODE` | Intervención humana + control de rigor vía config. | `config_history`, `changed_by="user"/"operator"`. |
 
-#### 2.6.bis.3 Garantías invariantes (testeables)
+#### 2.6.bis.3 Garantías invariantes (v1.4)
 
-El conjunto de capas garantiza, para toda decisión persistida en `decisions`:
+El conjunto de capas garantiza para toda decisión en `decisions`:
 
-1. **Sin BUY en TRENDING_DOWN ejecutado**: `output.action == "BUY"` ∧ `output.regime == "TRENDING_DOWN"` ⇒ `executed == false`.
-2. **Sin BUY con confidence < 0.60 ejecutado**: la combinación queda como HOLD tras override (`output.action == "HOLD"`).
-3. **Sin BUY ejecutado con kill switch activo**: `kill_switch=true` ∧ `action=="BUY"` ⇒ `rejected_reason like 'kill_switch%'`.
-4. **Sin BUY ejecutado violando R1**: para toda decisión BUY ejecutada, `output.position_size_pct <= max_position_pct` al momento de la ejecución.
-5. **Sin BUY ejecutado violando R4**: SL distance ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`.
+1. **Sin BUY ejecutado con kill switch activo**: `kill_switch=true` ∧ `action=="BUY"` ⇒ `rejected_reason` contiene `kill_switch`.
+2. **Sin BUY ejecutado violando R1**: para toda decisión BUY ejecutada, `output.position_size_pct <= max_position_pct`.
+3. **Sin BUY ejecutado violando R4**: SL distance ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`.
+4. **Sin BUY ejecutado violando R5**: R:R ≥ `min_rr_ratio`.
+5. **Coherence warnings siempre persistidos**: `decisions.output.coherence_warnings` contiene la lista (puede ser vacía) de inconsistencias detectadas en ese ciclo.
+6. **Two-pass auditado**: `decisions.output.two_pass_triggered` refleja si se realizó una segunda llamada LLM.
 
-> Estas invariantes son el contrato técnico de la autonomía del Decisor y deben cubrirse con tests en `trading-engine/tests/test_decisor.py` y `test_circuit_breaker.py`.
+> **Eliminadas de v1.3**: garantías 1 (BUY en TRENDING_DOWN ejecutado) y 2 (BUY con confidence <0.60) — el LLM ahora puede ejecutar esas acciones si el Risk Gate lo aprueba.
+
+#### 2.6.bis.4 Contexto enriquecido — Bloques A–K
+
+El `ContextBuilder` arma el input del LLM en bloques semánticos organizados:
+
+| Bloque | Contenido | Clave en `ctx` |
+|--------|-----------|----------------|
+| A | Perfil operativo (SCALPING/HÍBRIDO/DAY_TRADING), holding range, TF priority order | `block_a_*` |
+| B | Market snapshot (precio, cambios%, ATR, volatility_label) | `atr_ref`, `price`, `pct_*` |
+| C | Indicadores por TF ordenados por prioridad del perfil, con etiquetas labelers | `block_c_text` |
+| D | Niveles clave (EMAs, VWAP, pivots, walls, highs/lows) | `block_d_text` |
+| E | Order book enriquecido (depth 4 bandas, mid-impact, imbalance) | `block_e_text` |
+| F | Alineación cross-timeframe | `block_f_text` |
+| G | Últimas 3 decisiones **con detalle de coherence_warnings** de cada ciclo | `last_decisions_block` |
+| H | Estado del portfolio (capital, P&L, drawdown, posiciones) | `capital_total`, `pnl_*` |
+| I | Config de riesgo compacta (todos los parámetros numéricos) | `max_position_pct`, `min_rr_ratio`, ... |
+| J | Playbook activo (markdown) | `playbook` |
+
+#### 2.6.bis.5 CoherenceChecker — reglas C1–C6
+
+Ver `trading-engine/risk/coherence_checker.py`. Implementado con el dataclass `CoherenceWarning`:
+
+```python
+@dataclass
+class CoherenceWarning:
+    rule_id: str      # "C1"..."C6"
+    message: str
+    severity: str     # "warning" | "critical" (en strict_mode)
+    evidence: dict    # valores numéricos que evidencian la inconsistencia
+```
+
+Las reglas factuales (C1/C2/C3) disparan **two-pass** cuando `TWO_PASS_ENABLED=true`.
+
+#### 2.6.bis.6 Two-pass — flujo técnico
+
+```
+Pass 1: LLM (system + user) → DecisorOutput → CoherenceChecker
+  ↓ si hay C1/C2/C3 y TWO_PASS_ENABLED=true
+Pass 2: LLM (mismo system + decisor_review_user.txt con warnings inyectados)
+  → DecisorOutput (final) → CoherenceChecker (re-evaluación)
+  → merged warnings + two_pass_triggered=True
+```
+
+Costo: 2× latencia y tokens en el worst case. El segundo pass usa el mismo provider y cascade de fallbacks. Si el segundo pass falla, se usa la decisión del primer pass.
+
+#### 2.6.bis.7 Labelers — etiquetas interpretativas
+
+`agents/labelers.py` pre-calcula etiquetas a partir de valores numéricos antes de armar el prompt. Son **sugerencias de interpretación estándar** — el LLM las ve junto al valor numérico y puede discrepar con justificación. El system prompt lo aclara explícitamente en la sección "ETIQUETAS INTERPRETATIVAS — SUGERENCIAS, NO ÓRDENES".
 
 ### 2.7 Aprendizaje del Supervisor: detalles técnicos
 
@@ -422,6 +480,8 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 | POST | `/api/mode` | `{ok, mode}` | Cambia entre PAPER_TRADING/LIVE. Para LIVE requiere `confirmation == "CONFIRMO TRADING REAL"`. |
 | POST | `/api/supervisor/run` | `{ok, queued:true}` | Setea `supervisor_run_now=true`; el engine lo consume en el próximo tick. |
 | GET | `/api/stats/daily` | `DailyStatsOut` | Métricas del día desde 00:00 UTC. |
+| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | **(v1.4)** Rechazos por `rule_id` (R1–R10), warnings C1–C6, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
+| GET | `/api/supervisor/runs` | `SupervisorRunOut[]` | Historial de ratificaciones/regeneraciones del Supervisor. |
 | GET | `/api/config/suggestions` | `{ generated_at, suggestions, summary, ... } \| null` | Última sugerencia del Supervisor (`Decision.output.config_suggestions`). |
 
 ### 3.3 WebSocket `/ws`

@@ -83,6 +83,36 @@ async def health(request: Request) -> dict:
                   AND agent = 'decisor'
             """))).first()
 
+            # Risk gate — tasa de rechazo y breakdown por regla (últimas 24h)
+            rg_rows = (await s.execute(select(Decision).where(
+                Decision.ts >= datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=24),
+                Decision.agent == "decisor",
+            ))).scalars().all()
+
+            from collections import Counter as _Counter
+            import re as _re
+            rg_by_rule: _Counter[str] = _Counter()
+            coh_by_rule: _Counter[str] = _Counter()
+            decisions_with_warnings = 0
+            two_pass_count = 0
+            for _d in rg_rows:
+                _out = _d.output or {}
+                _reason = _d.rejected_reason or ""
+                if _reason.startswith("risk_gate:") or _reason.startswith("R"):
+                    _rid = _reason.split(":")[0]
+                    rg_by_rule[_rid] += 1
+                _warnings = _out.get("coherence_warnings", [])
+                if _warnings:
+                    decisions_with_warnings += 1
+                for _w in _warnings:
+                    coh_by_rule[_w.get("rule_id", "?")] += 1
+                if _out.get("two_pass_triggered"):
+                    two_pass_count += 1
+
+            _dec_total = len(rg_rows)
+            _rg_total = sum(rg_by_rule.values())
+            _coh_total = sum(coh_by_rule.values())
+
             # LLM latency percentiles (last 24h, decisor only)
             latency_row = (await s.execute(text("""
                 SELECT
@@ -171,6 +201,18 @@ async def health(request: Request) -> dict:
                 "win_rate": float(pb_row.win_rate) if pb_row and pb_row.win_rate else None,
             },
             "recent_rejections_1h": int(rejected_row.cnt) if rejected_row else 0,
+            "risk_gate": {
+                "rejection_rate_24h": round(_rg_total / _dec_total, 4) if _dec_total else 0.0,
+                "total_rejections_24h": _rg_total,
+                "by_rule_24h": dict(rg_by_rule),
+            },
+            "coherence": {
+                "warning_rate_24h": round(decisions_with_warnings / _dec_total, 4) if _dec_total else 0.0,
+                "total_warnings_24h": _coh_total,
+                "decisions_with_warnings_24h": decisions_with_warnings,
+                "two_pass_triggered_24h": two_pass_count,
+                "by_rule_24h": dict(coh_by_rule),
+            },
             "postgres": {
                 "table_counts": {
                     "decisions": int(table_counts_rows.decisions) if table_counts_rows else None,
@@ -193,6 +235,8 @@ async def health(request: Request) -> dict:
             "llm": None,
             "playbook": None,
             "recent_rejections_1h": None,
+            "risk_gate": None,
+            "coherence": None,
             "postgres": {"table_counts": None, "db_size": None, "db_bytes": None},
         }
 

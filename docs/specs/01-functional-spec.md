@@ -1,9 +1,9 @@
 # Especificación Funcional — Crypto AI Trading
 
 > Audiencia: Product, Risk, Trading, Stakeholders.
-> Versión: 1.2 — 2026-05-17.
+> Versión: 1.3 — 2026-05-17.
 >
-> Cambios v1.2: se agregó §F2.bis (Autonomía del Decisor: LLM vs. sistema), §F5.bis (Aprendizaje: alcance y límites), AC-11 y AC-12. Sin cambios en reglas de negocio existentes.
+> Cambios v1.3: Rediseño LLM-centric del Decisor. El LLM decide `action` y `position_size_pct` con autonomía total (se eliminan los overrides deterministas de TRENDING_DOWN, confidence-floor y sizing). Se agrega CoherenceChecker (§F2.bis.5) y two-pass (§F2.bis.6). Se enriquecen indicadores en §F1. Se actualiza §F2.bis, §6.3, §6.5, §F6, AC-02 y AC-11. El Risk Gate (R1–R10) permanece como única barrera hard-blocking.
 
 ---
 
@@ -68,80 +68,111 @@ Persona responsable del bot. Sus tareas diarias son:
 ### F1. Recolección de datos de mercado
 
 - Captura OHLCV de Binance vía CCXT para los timeframes **1m, 5m, 15m, 1h, 4h** (~250 velas cada uno).
-- Mantiene en memoria un snapshot de **order book** (top 20 niveles vía CCXT WS) y deriva spread, imbalance, walls.
-- Calcula indicadores técnicos por timeframe: RSI (Wilder), MACD(12/26/9), EMA 20/50/200, Bollinger Bands (20, 2σ), ATR con *winsorización* de TR (cap a 3× mediana móvil) para neutralizar velas anómalas del testnet.
+- Mantiene en memoria un snapshot de **order book enriquecido**: top 20 niveles vía CCXT WS, spread, imbalance, walls, y profundidad acumulada en cuatro bandas (±0.1%, ±0.25%, ±0.5%, ±1%) con estimación de impacto en el precio medio.
+- Calcula **indicadores técnicos por timeframe** (conjunto extendido v1.3):
+  - **Tendencia/momentum**: RSI (Wilder), MACD(12/26/9), EMA 9/20/50/200, ADX(14) con +DI/−DI, Stochastic(14,3,3).
+  - **Volatilidad/bandas**: Bollinger Bands (20, 2σ), ATR con *winsorización* de TR (cap a 3× mediana móvil), percentil ATR 30 días.
+  - **Precio**: VWAP intradiario con reset UTC y bandas ±1σ/±2σ, estructura de precio (HH/HL/LH/LL, últimas 20 velas), ratios mecha/cuerpo (últimas 3 velas).
+  - **Volumen**: OBV (slope 20), delta de volumen aproximado (Lee-Ready), ratio volumen vs. media 20.
+  - **Niveles**: Pivot Points clásicos diarios (PP, R1/R2/R3, S1/S2/S3).
+- Genera **etiquetas interpretativas** (`labelers.py`) junto a cada valor numérico: `rsi_label`, `macd_label`, `trend_label`, `stoch_label`, `vwap_label`, `structure_label`. Son sugerencias de interpretación estándar; el LLM puede discrepar si el contexto completo lo justifica.
 
 ### F2. Toma de decisiones (Decisor)
 
-- Cada `decisor_interval_min` minutos arma un **contexto** unificado con:
-  - Modo, capital, balance USDT/BTC.
-  - Fees actuales (maker/taker/round-trip).
-  - Indicadores de los 5 timeframes.
-  - Snapshot de order book (top 10).
-  - Últimas 3 decisiones del Decisor.
-  - Posiciones abiertas.
-  - **Playbook activo**.
-- Llama al LLM Decisor con *system prompt* + *user prompt* renderizados con el contexto.
+- Cada `decisor_interval_min` minutos arma un **contexto estructurado en bloques** (A–K) que incluye:
+  - **A**: Perfil operativo (SCALPING / HÍBRIDO / DAY_TRADING) derivado de `decisor_interval_min` y `atr_timeframe`.
+  - **B**: Market Snapshot (precio, cambios %, ATR con expansión/contracción, rango SL válido).
+  - **C**: Indicadores por timeframe en orden de prioridad según perfil, con etiquetas interpretativas.
+  - **D**: Niveles clave (EMAs 1h/4h, VWAP, Pivot Points, highs/lows 24h, walls).
+  - **E**: Order book enriquecido (depth a 4 bandas, estimación de impacto, imbalance).
+  - **F**: Alineación cross-timeframe (resumen de consenso/divergencia entre TFs).
+  - **G**: Últimas 3 decisiones con detalle de `coherence_warnings` del ciclo anterior (para que el LLM aprenda de sus inconsistencias pasadas).
+  - **H**: Estado del portfolio (capital, P&L, drawdown, posiciones abiertas).
+  - **I**: Config de riesgo compacta (todos los parámetros numéricos en una vista).
+  - **J**: Playbook activo.
+- Llama al LLM Decisor con *system prompt* + *user prompt* renderizados con el contexto enriquecido.
 - Espera **JSON estricto** validado por Pydantic (`DecisorOutput`).
-- Aplica **overrides deterministas** post-LLM:
-  - `TRENDING_DOWN` o `confidence < 0.60` → forzar `HOLD`.
-  - Sizing por umbral: `confidence ≥ 0.70` → `max_position_pct`; `0.60–0.69` → 0.03.
-- Persiste **toda** la decisión (input + output + métricas LLM) en la tabla `decisions`.
-- El campo `reasoning` (max 1000 chars) usa un **formato estructurado de 5 secciones** diseñado para que el operador sin experiencia técnica entienda la decisión. Ver formato completo en `02-technical-spec.md § 2.6`. Ejemplo:
+- **Sin overrides deterministas**: el LLM tiene autonomía total sobre `action` y `position_size_pct`. El sistema no sobrescribe su decisión (salvo el Risk Gate R1–R10 y el CoherenceChecker en `strict_mode`).
+- Persiste **toda** la decisión (input + output + `coherence_warnings` + `two_pass_triggered`) en la tabla `decisions`.
+- El campo `reasoning` (max 1000 chars) usa un **formato estructurado de 5 secciones**. Ejemplo:
 
   ```
   [DECISIÓN]: Esperar (HOLD) — no hay señales suficientes para una entrada segura.
   [MERCADO]: Lateral (RANGE) — precio sin dirección clara entre soportes y resistencias.
   [SEÑALES]: 2 detectadas: (A) RSI 15m saliendo de sobreventa; (H) toque de soporte.
-  [CONFIANZA]: 56% — insuficiente (mínimo 60%). Bot espera más confirmaciones.
+  [CONFIANZA]: 56% — estructura alcista pero ADX bajo, confirmar tendencia.
+  [NIVELES]: SL: $83,200 | TP: $85,000 | R:R: 1.8×
   ```
 
 ### F2.bis. Autonomía del Decisor (qué decide el LLM vs. qué decide el sistema)
 
-El Decisor **propone**; el sistema **dispone**. La autonomía del LLM está acotada por capas determinísticas que **no se pueden eludir** desde el prompt. Esta sección hace explícito qué campos del output son libres y cuáles son sobrescritos.
+El Decisor es **LLM-centric**: el LLM toma todas las decisiones de trading con autonomía total. Las únicas capas que pueden modificar o bloquear su output son el **Risk Gate** (reglas de riesgo absolutas R1–R10, §F3) y el **CoherenceChecker** en modo `strict` (§F2.bis.5).
 
 #### F2.bis.1 Reparto de responsabilidades
 
 | Campo del output | Decide | Margen real | Capa que lo puede pisar |
 |------------------|--------|-------------|-------------------------|
-| `regime` | LLM | Libre dentro del enum `TRENDING_UP / TRENDING_DOWN / RANGE / HIGH_VOLATILITY`. | Pydantic (validación de enum). |
-| `confluences` | LLM | Subset del catálogo cerrado A–H (mínimo 2 para BUY). Códigos fuera del catálogo loguean warning y no cuentan. | Validador `_validate_confluence_codes` en `decisor.py`. |
-| `action` | LLM | Libre `BUY / SELL / HOLD`, **pero** TRENDING_DOWN → HOLD forzado; SELL solo valida con posición abierta. | Override determinístico + Risk Gate R6/R7. |
-| `confidence_base` y `confidence` | LLM | Calculados con fórmula determinística de 7 pasos descrita en el system prompt. | El código **no** recalcula la fórmula, pero **fuerza HOLD** si `confidence < 0.60`. |
-| `confidence_adjustment` | LLM | Bounded a `[-0.10, +0.10]`, justificación obligatoria en `reasoning`. | Pydantic (cap absoluto). |
-| `stop_loss` / `take_profit` | LLM | Libre dentro de bandas: SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`, R:R ≥ `min_rr_ratio`. | Risk Gate R2/R3/R4/R5. |
-| `position_size_pct` | **Sistema** | Reescrito por override según `confidence`: ≥ 0.70 → `min(max_position_pct, 0.25)`; 0.60–0.69 → `0.03`; piso `0.01`. | `_apply_deterministic_overrides`. |
-| `expected_holding_min` | LLM | Libre `≥ 1`. Debe ser coherente con el perfil operativo derivado de `decisor_interval_min` y `atr_timeframe`. | Solo logging. |
-| `reasoning` | LLM | Libre dentro del formato de 5 secciones (`[DECISIÓN] [MERCADO] [SEÑALES] [CONFIANZA] [NIVELES]`). | Truncado silencioso a 1000 chars. |
+| `regime` | LLM | Libre dentro del enum `TRENDING_UP / TRENDING_DOWN / RANGE / HIGH_VOLATILITY / NEUTRAL`. | Pydantic (validación de enum). |
+| `confluences` | LLM | Subset del catálogo cerrado A–H (mínimo 2 para BUY). Códigos fuera del catálogo son filtrados silenciosamente. | `_filter_confluence_codes` en `decisor.py`. |
+| `action` | **LLM** | Libre `BUY / SELL / HOLD` sin overrides deterministas. SELL requiere posición abierta (R6/R7). | Risk Gate R6/R7. CoherenceChecker en strict_mode. |
+| `confidence_base` y `confidence` | LLM | El LLM calcula y declara su propia confianza. El sistema no fuerza HOLD por umbral. | Solo el Risk Gate (R1–R10) puede bloquear la acción. |
+| `confidence_adjustment` | LLM | Bounded a `[-0.10, +0.10]`. Justificación obligatoria. | Pydantic (cap absoluto). |
+| `stop_loss` / `take_profit` | LLM | Libre dentro de bandas: SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`, R:R ≥ `min_rr_ratio`. | Risk Gate R2/R3/R4/R5/R10. |
+| `position_size_pct` | **LLM** | Libre entre `[min_position_size, max_position_pct]`. El LLM debe justificar su elección en `reasoning`. | Risk Gate R1 (cap a `max_position_pct`). |
+| `expected_holding_min` | LLM | Libre `≥ 1`. Debe ser coherente con el perfil operativo (Bloque A). CoherenceChecker C6. | Solo CoherenceChecker (warning). |
+| `reasoning` | LLM | Libre dentro del formato de 5 secciones. Truncado silencioso a 1000 chars. | — |
 
 #### F2.bis.2 Lo que el LLM **no** puede hacer, por construcción
 
-1. **No puede operar contra TRENDING_DOWN**: cualquier BUY en bajista es reescrito a HOLD en `_apply_deterministic_overrides`.
-2. **No puede operar con `confidence < 0.60`**: mismo override, sin excepciones por régimen.
-3. **No puede elegir su tamaño de posición**: el sizing es una función escalón del sistema sobre `confidence`. Aunque el LLM emita `position_size_pct=0.18`, queda `0.03` o `max_position_pct`.
-4. **No puede inventar confluencias nuevas**: el catálogo A–H está hardcoded en el system prompt; el Supervisor tiene regla explícita de no introducir códigos nuevos en el playbook.
-5. **No puede violar R1–R10**: aunque produzca SL inválido, R:R bajo, o pida BUY con `kill_switch=true`, el Risk Gate lo bloquea y persiste `rejected_reason`.
-6. **No puede shortear**: spot-only; SELL solo cierra una posición LONG existente (R6/R7).
+1. **No puede violar R1–R10**: aunque produzca SL inválido, R:R bajo, size excesivo, o pida BUY con `kill_switch=true`, el Risk Gate lo bloquea y persiste `rejected_reason`. Esta es la **única barrera hard-blocking** sobre la `action`.
+2. **No puede inventar confluencias nuevas**: el catálogo A–H está cerrado en el system prompt; códigos desconocidos son silenciosamente descartados.
+3. **No puede shortear**: spot-only; SELL solo cierra una posición LONG existente (R6/R7).
+4. **No puede forzar un `position_size_pct > max_position_pct`**: el Risk Gate (R1) bloquea el trade si excede el límite.
 
-#### F2.bis.3 Lo que el LLM **sí** decide con autonomía real
+#### F2.bis.3 Lo que el LLM **sí** decide con autonomía real (v1.3)
 
-- **Clasificar el régimen** del mercado a partir de los indicadores del ciclo.
+- **Clasificar el régimen** del mercado y actuar contra él si ve confluencias suficientes (e.g., BUY en TRENDING_DOWN con confirmación multi-TF).
 - **Elegir qué confluencias A–H** declarar activas (mínimo 2 para BUY).
-- **Ubicar SL y TP exactos** dentro de las bandas ATR y del rango R:R configurado, priorizando soportes/resistencias técnicos y walls del order book.
+- **Decidir la `action`** BUY/SELL/HOLD sin override de confidence-floor ni de régimen.
+- **Elegir `position_size_pct`** dentro de `[min_position_size, max_position_pct]` según su lectura de riesgo/oportunidad.
+- **Ubicar SL y TP exactos** dentro de las bandas ATR y del rango R:R configurado, priorizando soportes/resistencias y walls del order book.
 - **Asignar `confidence_adjustment` ∈ [-0.10, +0.10]** con justificación.
 - **Decidir SELL anticipado** sobre una posición abierta cuando se invalida la tesis original.
-- **Estimar `expected_holding_min`** acorde al perfil operativo.
 
 #### F2.bis.4 Jerarquía declarada de decisión
 
 Reproducida en el system prompt del Decisor (orden de precedencia descendente):
 
 1. **Reglas absolutas R1–R10** (Risk Gate — no negociables).
-2. **Parámetros del sistema** (umbrales, multiplicadores, factores numéricos).
-3. **Playbook activo** (guía cualitativa, no reemplaza parámetros).
-4. **Confluencias técnicas** del ciclo actual.
+2. **Parámetros de riesgo** (umbrales, multiplicadores, factores numéricos — contexto informativo para el LLM).
+3. **Playbook activo** (guía cualitativa táctica y de aprendizaje histórico).
+4. **Confluencias técnicas** del ciclo actual (evidencia del mercado en este momento).
 
-> Regla de consistencia: si el playbook contradice un parámetro del sistema, **prevalece el sistema** y el LLM debe loguear `[DRIFT CONFIG]` en `reasoning`. El Supervisor, al detectar drift, debe eliminar el valor inconsistente del nuevo playbook (`[SYNC]`).
+#### F2.bis.5 CoherenceChecker — detección de inconsistencias del LLM
+
+Componente post-LLM que verifica la coherencia lógica entre lo que el LLM **declara** (régimen, confluencias, reasoning) y lo que los **indicadores muestran** en ese ciclo. Ejecuta 6 reglas:
+
+| Regla | Verifica |
+|-------|----------|
+| C1 | RSI no está en zona de sobreventa cuando el LLM declara confluencia A (RSI_OVERSOLD_BOUNCE). |
+| C2 | MACD no cruza al alza cuando el LLM declara confluencia B (MACD_BULLISH_CROSS). |
+| C3 | ADX bajo o EMAs no alineadas cuando el LLM declara TRENDING_UP. |
+| C4 | Confianza alta (≥0.85) con menos de 2 confluencias declaradas. |
+| C5 | BUY con confianza baja (<0.60) sin justificación explícita en reasoning. |
+| C6 | `expected_holding_min` fuera del rango del perfil operativo derivado (Bloque A). |
+
+Por defecto, los warnings son **solo informativos**: se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del **próximo ciclo** para que el LLM aprenda de sus propias inconsistencias. No bloquean la decisión.
+
+Con `COHERENCE_STRICT_MODE=true` (configurable), los warnings de C1/C2/C3 se vuelven **críticos** y fuerzan HOLD.
+
+#### F2.bis.6 Two-pass — auto-revisión dentro del ciclo
+
+Si el CoherenceChecker detecta warnings de C1, C2 o C3 (inconsistencias factuales), el Decisor realiza una **segunda llamada al LLM** en el mismo ciclo. El LLM recibe su propia decisión + los warnings y puede:
+
+- **Corregir** su decisión si reconoce el error.
+- **Mantenerla con justificación** explícita (`[REVISADO-MANTENIDO]` en reasoning), explicando por qué la inconsistencia detectada no invalida su análisis.
+
+El resultado del segundo pass es la decisión final. El campo `two_pass_triggered` en el output queda registrado para auditoría. Controlable vía `TWO_PASS_ENABLED` (default: `true`).
 
 ### F3. Validación de riesgo (Risk Gate)
 
@@ -238,6 +269,7 @@ Persistencia según el veredicto:
 | Listar decisiones | `GET /api/decisions` | Operador |
 | Ver posiciones abiertas | `GET /api/positions` | Operador |
 | Stats del día | `GET /api/stats/daily` | Operador |
+| Stats del decisor (v1.3) — rechazos por rule_id, warnings C1–C6, histogramas confidence/sizing | `GET /api/decisions/stats?window=24` | Operador |
 | Playbook activo / historial / activar versión / editar contenido | `GET /api/playbook/...`, `POST /api/playbook/{v}/activate`, `PATCH /api/playbook/{v}/content` | Operador |
 | Configuración (60+ parámetros tipados) | `GET /api/config`, `PUT /api/config/{key}` | Operador |
 | Kill Switch | `POST /api/kill-switch` | Operador |
@@ -385,14 +417,13 @@ Tres rutas, todas convergen en `Trade.status = "closed"`:
 
 ### 6.3 Confianza y sizing
 
-- Umbrales por régimen para permitir BUY:
-  - `conf_threshold_trending_up` = 0.60
-  - `conf_threshold_range` = 0.70
-  - `conf_threshold_high_vol` = 0.80
-- Sizing determinístico (post-override del Decisor):
-  - `confidence ≥ 0.70` → `position_size_pct = max_position_pct`.
-  - `confidence 0.60–0.69` → `position_size_pct = 0.03` (reducido).
-  - `confidence < 0.60` → `HOLD` forzado.
+- El LLM declara su propia `confidence` (0.0–1.0). El sistema **no** fuerza HOLD por umbral de confianza ni sobrescribe el sizing.
+- Los umbrales `conf_threshold_*` se mantienen en config como **referencia para el LLM** (inyectados en el prompt), pero el LLM puede desviarse con justificación explícita en `reasoning`.
+- El LLM elige `position_size_pct` ∈ `[min_position_size, max_position_pct]`. Si elige más de `max_position_pct`, el Risk Gate R1 bloquea el trade.
+- El **sizing guiado** en el system prompt (no obligatorio) sugiere:
+  - Alta confianza (≥0.80) + régimen favorable → hacia `max_position_pct`.
+  - Confianza media (0.60–0.79) o régimen neutro → 50–75% de `max_position_pct`.
+  - Confianza baja (<0.60) o múltiples warnings de coherencia → abstenerse o tamaño mínimo.
 
 ### 6.4 Confluencias técnicas (catálogo cerrado A–H)
 
@@ -412,12 +443,15 @@ Tres rutas, todas convergen en `Trade.status = "closed"`:
 
 ### 6.5 Régimen de mercado
 
-| Régimen | Acción esperada | Factor en fórmula de confidence |
-|---------|----------------|--------------------------------|
-| TRENDING_UP | BUY permitido con 2+ confluencias. | 1.0 |
-| RANGE | BUY solo cerca de soporte. | 0.85 |
-| HIGH_VOLATILITY | SL amplio cerca de `sl_atr_max_multiplier`×ATR. | 0.75 |
-| TRENDING_DOWN | **BUY bloqueado**. Solo HOLD o SELL para cerrar. | 0.0 → HOLD |
+| Régimen | Guía para el LLM | Observación |
+|---------|-----------------|-------------|
+| TRENDING_UP | BUY preferido con 2+ confluencias y buen R:R. | Régimen más favorable. |
+| RANGE | BUY solo cerca de soporte sólido con confirmación de volumen. | Mayor exigencia de confluencias. |
+| HIGH_VOLATILITY | SL amplio (hacia `sl_atr_max_multiplier`×ATR); sizing conservador. | Riesgo de fakeout. |
+| TRENDING_DOWN | BUY **desaconsejado**; el LLM puede aun así ejecutarlo si hay confluencias multi-TF muy fuertes y lo justifica explícitamente. HOLD/SELL preferido. | Sin override; el LLM es responsable de la decisión. |
+| NEUTRAL | Sin sesgo direccional claro; priorizar HOLD. | — |
+
+> Nota: TRENDING_DOWN ya no fuerza HOLD automáticamente. El LLM puede operar contra el régimen declarando las confluencias que respaldan su tesis (e.g., divergencia alcista, soporte estructural fuerte). El CoherenceChecker C3 auditará la coherencia de esa decisión.
 
 ### 6.6 Reglas de absoluta seguridad
 
@@ -446,7 +480,7 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | Id | Criterio |
 |----|----------|
 | AC-01 | El Decisor produce 1 decisión por ciclo; siempre persistida en `decisions` (incluso con error). |
-| AC-02 | Una decisión BUY con `confidence < 0.60` o régimen `TRENDING_DOWN` es **siempre** sobreescrita a HOLD por el override determinístico. |
+| AC-02 | El Decisor **no aplica overrides deterministas de action ni sizing**. Una decisión BUY con `confidence < 0.60` o régimen `TRENDING_DOWN` es válida y se envía al Risk Gate. Si el LLM declara una inconsistencia (e.g., TRENDING_UP sin ADX fuerte), el CoherenceChecker emite warning C3. En `coherence_strict_mode=true`, warnings C1/C2/C3 fuerzan HOLD. |
 | AC-03 | Toda decisión BUY que cruce el Risk Gate ejecuta una market order + bracket SL/TP. |
 | AC-04 | Toda decisión rechazada queda con `executed=false` y `rejected_reason` poblado. |
 | AC-05 | El Supervisor evalúa cada 24 h (`ratify | regenerate`, §F5.bis.5). Si decide `regenerate`, genera una nueva `PlaybookVersion` con `active=true` y desactiva las anteriores. Si decide `ratify`, **no** inserta nueva versión y persiste una `Decision` con `output.ratified=true`. |
@@ -455,7 +489,9 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | AC-08 | Cambiar de modo a `LIVE` sin la frase exacta de confirmación responde HTTP 400. |
 | AC-09 | Toda escritura en `config` queda registrada en `config_history` con `changed_by`. |
 | AC-10 | El operador puede activar una versión anterior del playbook con un click (rollback). |
-| AC-11 | Un BUY del LLM con `position_size_pct > max_position_pct` queda **reescrito** (no rechazado) por el override determinístico al valor escalonado correspondiente y el Risk Gate lo aprueba. |
+| AC-11 | Un BUY del LLM con `position_size_pct > max_position_pct` es **rechazado** por el Risk Gate (R1) con `rejected_reason="risk_gate: R1"`. No hay reescritura silenciosa; el LLM debe aprender del rechazo vía el Bloque G del ciclo siguiente. |
+| AC-15 | `GET /api/decisions/stats?window=24` retorna rechazos desglosados por `rule_id` (R1–R10), warnings del CoherenceChecker por regla (C1–C6), histogramas de distribución de `confidence` y `position_size_pct`, y tasa de `two_pass_triggered`. |
+| AC-16 | `GET /api/health` incluye los bloques `risk_gate` (rejection_rate_24h, by_rule) y `coherence` (warning_rate_24h, by_rule, two_pass_triggered) para monitoreo del rollout. |
 | AC-12 | El Supervisor en modo `diagnostic` (con `closed_trades < min_trades`) puede ratificar el playbook activo. Cuando regenera, el nuevo `PlaybookVersion` conserva la estructura obligatoria de secciones y **no** introduce confluencias fuera del catálogo A–H ni valores de parámetros del sistema. |
 | AC-13 | El Supervisor fuerza la regeneración del playbook (sin consultar al LLM en la fase 1) cuando se cumple alguno de los guardrails determinísticos: `days_since_active >= max_playbook_age_days`, `abs(wr_24h − wr_baseline) > playbook_force_regen_wr_delta_pct`, cambio de régimen estructural, o kill switch activado en el período. `force_regen_reason` queda registrado en la `Decision`. |
 | AC-14 | Cada ejecución del Supervisor (ratifique o regenere) inserta exactamente **una** fila en `decisions` con `agent="supervisor"`. El operador puede auditar la actividad vía `GET /api/decisions?agent=supervisor` aunque no haya nuevas versiones de playbook. |

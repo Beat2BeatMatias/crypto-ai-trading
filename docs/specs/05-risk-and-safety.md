@@ -1,10 +1,12 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.2 — 2026-05-17.
+> Versión: 1.3 — 2026-05-17.
 >
-> Cambios v1.1: se agregó §1.bis (Autonomía del LLM: garantías del modelo de defensa) con referencias cruzadas a `01-functional-spec.md §F2.bis` y `02-technical-spec.md §2.6.bis`. Se ampliaron en §12 dos riesgos conocidos (override con umbral plano vs. `conf_threshold_*`, y validación de confluencias inválidas como warning solamente).
-> Cambios v1.2: R4 y R5 actualizados con thresholds reales operativos (SL 0.3–1.5×ATR, R:R 1.3). §12 ítem `daily_pnl_pct/total_drawdown_pct` marcado como ✅ RESUELTO. Nota al pie de §2 actualizada.
+> Cambios v1.3: Actualización LLM-centric. Se elimina la Capa 2 (override determinístico). Se agrega CoherenceChecker como Capa 2 nueva (auditoría de inconsistencias del LLM). Se actualiza §1 (modelo de defensa), §1.bis (garantías — GA-1 y GA-2 revisadas), §1.bis.4 (nueva sección CoherenceChecker). El Risk Gate (Capa 3) pasa a ser la **única** barrera hard-blocking sobre la `action`.
+>
+> Cambios v1.2: R4/R5 con thresholds reales; §12 ítem daily_pnl marcado ✅ RESUELTO.
+> Cambios v1.1: §1.bis agregado.
 
 Este documento centraliza las reglas absolutas, controles deterministas, circuit breakers y gates de pasaje entre paper trading y LIVE. Su único propósito es asegurar que **ninguna decisión de un LLM pueda exceder los límites de riesgo configurados**.
 
@@ -14,23 +16,28 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 1: LLM (system prompt + playbook + reglas R1-R10) │
-│  - Instrucciones explícitas para respetar parámetros    │
-│  - Catálogo cerrado de confluencias                      │
-│  - Cálculo determinístico de confidence (7 pasos)        │
+│ Capa 1: LLM Decisor (LLM-centric v1.3)                 │
+│  - Contexto en bloques A–K con indicadores enriquecidos │
+│  - Catálogo cerrado A–H, etiquetas interpretativas      │
+│  - Autonomía total sobre action y position_size_pct     │
+│  - Output: JSON estricto validado por Pydantic          │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼  JSON validado por Pydantic
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 2: Override determinístico (Decisor)               │
-│  - TRENDING_DOWN o confidence<0.60 → HOLD forzado       │
-│  - Sizing por escalones (≥0.70=max | 0.60-0.69=0.03)    │
+│ Capa 2: CoherenceChecker (NUEVO — auditoría)            │
+│  - Reglas C1–C6: consistencia declaración vs. datos     │
+│  - C1/C2/C3 → two-pass (LLM se auto-corrige)           │
+│  - strict_mode: C1/C2/C3 → HOLD (configurable)         │
+│  - NO bloquea por defecto; persiste warnings para       │
+│    retroalimentación al LLM en el ciclo siguiente       │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 3: Risk Gate (reglas R1-R10)                       │
+│ Capa 3: Risk Gate (reglas R1-R10) — ÚNICA BARRERA HARD  │
 │  - Bloqueo absoluto antes de emitir orden al exchange   │
+│  - Cada rechazo lleva rule_id estructurado (R1...R10)   │
 │  - Persiste rejected_reason en la decisión              │
 └─────────────────────────────────────────────────────────┘
                           │
@@ -47,6 +54,7 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
 │  - Kill Switch (1 click)                                │
 │  - Rollback de playbook                                 │
 │  - Cambio manual de modo (frase literal)                │
+│  - coherence_strict_mode (activar rigor de auditoría)   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -58,43 +66,65 @@ Esta sección formaliza qué garantías de seguridad ofrece el modelo de defensa
 
 ### 1.bis.1 Principio rector
 
-> **El LLM Decisor propone una decisión estructurada; el sistema valida, reescribe si es necesario y ejecuta sólo si pasa el Risk Gate.** Ninguna salida del LLM puede provocar una acción que viole R1–R10 ni los guardrails del Supervisor (`_SAFE_BOUNDS`).
+> **El LLM Decisor toma decisiones con autonomía total sobre `action` y `position_size_pct`. El CoherenceChecker audita la coherencia lógica. El Risk Gate (R1–R10) es la única barrera hard-blocking.** Ninguna salida del LLM puede provocar una acción que viole R1–R10 ni los guardrails del Supervisor (`_SAFE_BOUNDS`).
 
-### 1.bis.2 Garantías invariantes (contrato de Risk)
+### 1.bis.2 Garantías invariantes (contrato de Risk — v1.3)
 
 Para cualquier ciclo del Decisor, el sistema garantiza que toda decisión con `executed=true` cumple simultáneamente:
 
-| ID | Garantía | Capa que la enforce |
-|----|----------|---------------------|
-| GA-1 | `output.action != "BUY"` ó `output.regime != "TRENDING_DOWN"`. | Capa 3 (override) — fuerza HOLD. |
-| GA-2 | `output.action != "BUY"` ó `output.confidence >= 0.60`. | Capa 3 (override) — fuerza HOLD. |
-| GA-3 | `output.action != "BUY"` ó `output.position_size_pct <= max_position_pct + 1e-9`. | Capa 3 (cap) + Capa 4 R1. |
-| GA-4 | `output.action != "BUY"` ó SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`. | Capa 4 R4. |
-| GA-5 | `output.action != "BUY"` ó R:R ≥ `min_rr_ratio`. | Capa 4 R5. |
-| GA-6 | `output.action != "SELL"` ó hay posición LONG abierta. | Capa 4 R6. |
-| GA-7 | `output.action != "BUY"` con `kill_switch=true`. | Capa 4 (kill switch check). |
-| GA-8 | Si `daily_pnl_pct <= daily_stop_pct` → cero BUYs ejecutados ese día. | Capa 4 R9 (**pendiente de instrumentar con datos reales** — ver §12). |
+| ID | Garantía | Capa que la enforce | Estado v1.3 |
+|----|----------|---------------------|-------------|
+| GA-1 | Si `executed=true` y `action=="BUY"`, el LLM puede haber declarado cualquier régimen (incl. TRENDING_DOWN). | Risk Gate R1–R10 — no hay bloqueo por régimen. | **REVISADA** — ya no se garantiza que TRENDING_DOWN → BUY bloqueado. |
+| GA-2 | Si `executed=true` y `action=="BUY"`, el LLM puede tener cualquier `confidence`. | Risk Gate R1–R10 — no hay bloqueo por confidence-floor. | **REVISADA** — ya no se garantiza confidence ≥ 0.60. |
+| GA-3 | `output.action != "BUY"` ó `output.position_size_pct <= max_position_pct`. | Capa 3 Risk Gate R1. | Sin cambios. |
+| GA-4 | `output.action != "BUY"` ó SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`. | Capa 3 Risk Gate R4. | Sin cambios. |
+| GA-5 | `output.action != "BUY"` ó R:R ≥ `min_rr_ratio`. | Capa 3 Risk Gate R5. | Sin cambios. |
+| GA-6 | `output.action != "SELL"` ó hay posición LONG abierta. | Capa 3 Risk Gate R6. | Sin cambios. |
+| GA-7 | `output.action != "BUY"` con `kill_switch=true`. | Capa 3 Risk Gate (kill switch check). | Sin cambios. |
+| GA-8 | Si `daily_pnl_pct <= daily_stop_pct` → cero BUYs ejecutados ese día. | Capa 3 Risk Gate R9. | Sin cambios. |
+| GA-9 | `decisions.output.coherence_warnings` siempre presente (lista, puede ser vacía). | Capa 2 CoherenceChecker. | **NUEVA**. |
+| GA-10 | `decisions.output.two_pass_triggered` siempre presente (bool). | `decisor.py`. | **NUEVA**. |
 
-### 1.bis.3 Lo que el LLM no puede sobrescribir
+### 1.bis.3 Lo que el LLM no puede sobrescribir (v1.3)
 
 | Parámetro | Quien lo controla | Mecanismo de protección |
 |-----------|-------------------|------------------------|
 | `daily_stop_pct` | Operador / config manual | Excluido de `_SAFE_BOUNDS`. El Supervisor solo puede **sugerirlo** en el reporte. |
 | `max_drawdown_pct` | Operador / config manual | Excluido de `_SAFE_BOUNDS`. |
-| `position_size_pct` (ejecutado) | Sistema | Override determinístico reescribe el output del LLM. |
+| `position_size_pct` ejecutado > `max_position_pct` | Risk Gate R1 | Bloquea la orden; LLM debe proponer valores dentro del rango. A diferencia de v1.2, **no hay reescritura silenciosa**: el trade queda bloqueado y el LLM aprende del rechazo. |
 | Bracket SL/TP (post-orden) | Sistema (Binance) | Una vez emitido, el bracket se ejecuta server-side; el LLM no puede modificarlo en ciclos siguientes. |
 | Catálogo de confluencias A–H | Sistema (prompt + Supervisor system prompt) | El playbook no puede introducir códigos nuevos; el Supervisor tiene regla explícita. |
 
-### 1.bis.4 Trazabilidad de la autonomía
+### 1.bis.4 CoherenceChecker — detección de inconsistencias del LLM
+
+El `CoherenceChecker` (`trading-engine/risk/coherence_checker.py`) es la Capa 2 del nuevo modelo. Su propósito es **detectar y auditar** cuando el LLM declara algo que los indicadores numéricos no respaldan.
+
+| Regla | Condición de warning |
+|-------|----------------------|
+| C1 | El LLM declara confluencia A (RSI_OVERSOLD_BOUNCE) pero RSI(15m) y RSI(1h) no están en zona de sobreventa (<35). |
+| C2 | El LLM declara confluencia B (MACD_BULLISH_CROSS) pero el MACD no cruzó al alza en el ciclo actual. |
+| C3 | El LLM declara régimen TRENDING_UP pero ADX < 20 y las EMAs no están alineadas. |
+| C4 | El LLM declara confianza ≥ 0.85 pero tiene menos de 2 confluencias activas. |
+| C5 | El LLM emite BUY con confianza < 0.60 sin justificación explícita en `reasoning`. |
+| C6 | `expected_holding_min` está fuera del rango típico del perfil operativo derivado. |
+
+**Comportamiento por defecto (non-blocking)**: los warnings se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del ciclo siguiente. El LLM aprende de sus inconsistencias pasadas sin ser interrumpido.
+
+**Con `COHERENCE_STRICT_MODE=true`**: warnings de C1/C2/C3 (inconsistencias factuales) se vuelven críticos y fuerzan HOLD de seguridad, como si el Risk Gate hubiera rechazado la decisión.
+
+**Two-pass**: si hay C1/C2/C3 y `TWO_PASS_ENABLED=true`, se realiza una segunda llamada al LLM en el mismo ciclo para auto-corrección antes de llegar al Risk Gate.
+
+### 1.bis.5 Trazabilidad de la autonomía (v1.3)
 
 Toda decisión queda en `decisions` con:
 
-- `agent="decisor"`, `model`, `tokens_in/out`, `latency_ms`.
-- `input`: snapshot completo del contexto inyectado al LLM (incluye playbook activo y últimas 3 decisiones).
-- `output`: JSON resultante (post-override).
-- `executed` + `rejected_reason` (si correspondiese).
+- `agent="decisor"`, `model`, `tokens_in/out` (acumulados de ambos passes si hay two-pass), `latency_ms`.
+- `input`: snapshot completo del contexto en bloques A–K inyectado al LLM.
+- `output`: JSON resultante + `coherence_warnings` (lista C1–C6) + `two_pass_triggered` (bool).
+- `executed` + `rejected_reason` (si correspondiere).
+- `rule_id` en el rejected_reason (Risk Gate): `"R1"`... `"R10"` para identificar la regla exacta.
 
-Cualquier divergencia entre lo que el LLM emitió y lo que el sistema ejecutó queda reflejada en los logs `decisor.override_below_threshold` y `decisor.override_size`. El operador puede auditar la frecuencia con la que el LLM intenta superar los umbrales revisando `decisions.output.reasoning` y los warnings del engine.
+El operador puede auditar la calidad del LLM via `GET /api/decisions/stats?window=24` que desglosa rechazos por `rule_id` y warnings por regla de coherencia.
 
 ---
 
