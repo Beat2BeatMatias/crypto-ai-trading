@@ -3,11 +3,14 @@ import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
 import type { Position, Decision, DailyStats, Balance } from "../types";
+import ReasoningBlock from "../components/ReasoningBlock";
 
 interface EngineHealth {
   ok: boolean;
   detail: string;
   last_decision_age_min: number | null;
+  decisor_interval_min: number | null;
+  next_execution_in_min: number | null;
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
@@ -50,6 +53,27 @@ function EngineStatusPill({ health }: { health: EngineHealth | null }) {
   );
 }
 
+function useCountdown(engineHealth: EngineHealth | null): number | null {
+  const [secsLeft, setSecsLeft] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (engineHealth?.next_execution_in_min == null) {
+      setSecsLeft(null);
+      return;
+    }
+    setSecsLeft(engineHealth.next_execution_in_min * 60);
+    const timer = setInterval(() => {
+      setSecsLeft(prev => {
+        if (prev == null || prev <= 0) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [engineHealth?.next_execution_in_min, engineHealth?.last_decision_age_min]);
+
+  return secsLeft;
+}
+
 export function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
@@ -58,6 +82,7 @@ export function Dashboard() {
   const [ticker, setTicker] = useState<{ symbol: string; price: number | null } | null>(null);
   const [engineHealth, setEngineHealth] = useState<EngineHealth | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
+  const countdownSecs = useCountdown(engineHealth);
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
 
@@ -201,10 +226,28 @@ export function Dashboard() {
                   Confianza: <span className="text-white">{((out?.confidence ?? 0) * 100).toFixed(0)}%</span>
                   {out?.regime && <span className="ml-3 text-zinc-500">{out.regime}</span>}
                 </div>
-                <p className="text-sm text-zinc-300 leading-relaxed">{out?.reasoning ?? ""}</p>
+                {out?.reasoning && <ReasoningBlock reasoning={out.reasoning} compact />}
                 <div className="mt-3 text-xs text-zinc-600">
                   {new Date(lastDecision.ts).toLocaleString("es-AR")}
                 </div>
+                {countdownSecs != null && (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2">
+                    <span className="text-xs text-zinc-500">Próxima ejecución</span>
+                    <span className={`ml-auto font-mono text-sm font-semibold ${
+                      countdownSecs === 0
+                        ? "text-emerald-400 animate-pulse"
+                        : countdownSecs <= 60
+                        ? "text-amber-400"
+                        : "text-zinc-300"
+                    }`}>
+                      {countdownSecs === 0
+                        ? "ejecutando..."
+                        : countdownSecs < 60
+                        ? `${countdownSecs}s`
+                        : `${Math.floor(countdownSecs / 60)}m ${countdownSecs % 60}s`}
+                    </span>
+                  </div>
+                )}
               </div>
             )
           }

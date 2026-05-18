@@ -62,6 +62,7 @@ function AlertBanner({ color, icon, title, detail }: {
 
 export function Health() {
   const [data, setData] = useState<HealthData | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   const refresh = () => fetch("/api/health").then(r => r.json()).then(setData).catch(() => {});
   useEffect(() => {
@@ -69,6 +70,17 @@ export function Health() {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   }, []);
+
+  const handleCircuitBreakerReset = async () => {
+    if (!window.confirm("¿Confirmas el reset del Circuit Breaker? El motor retomará operaciones.")) return;
+    setResetting(true);
+    try {
+      await fetch("/api/circuit-breaker/reset", { method: "POST" });
+      await refresh();
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const cbTriggered = data?.circuit_breaker?.triggered === true;
   const killActive = data?.kill_switch === true;
@@ -78,12 +90,22 @@ export function Health() {
 
       {/* Banners de alerta — circuit breaker y kill switch */}
       {cbTriggered && (
-        <AlertBanner
-          color="red"
-          icon="🔴"
-          title="Circuit Breaker activado — motor pausado"
-          detail={data?.circuit_breaker?.reason ?? undefined}
-        />
+        <div className="flex items-start gap-3 rounded-lg border p-4 bg-red-950 border-red-700">
+          <span className="text-xl">🔴</span>
+          <div className="flex-1">
+            <p className="font-semibold text-red-300">Circuit Breaker activado — motor pausado</p>
+            {data?.circuit_breaker?.reason && (
+              <p className="text-sm mt-0.5 text-red-400">{data.circuit_breaker.reason}</p>
+            )}
+          </div>
+          <button
+            onClick={handleCircuitBreakerReset}
+            disabled={resetting}
+            className="shrink-0 rounded px-3 py-1.5 text-sm font-semibold bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+          >
+            {resetting ? "Reseteando…" : "Resetear"}
+          </button>
+        </div>
       )}
       {killActive && (
         <AlertBanner
@@ -125,6 +147,15 @@ export function Health() {
               <span className={cbTriggered ? "text-red-300 font-semibold" : "text-zinc-400"}>
                 {cbTriggered ? "PAUSADO" : "operativo"}
               </span>
+              {cbTriggered && (
+                <button
+                  onClick={handleCircuitBreakerReset}
+                  disabled={resetting}
+                  className="ml-2 rounded px-2 py-0.5 text-xs font-semibold bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {resetting ? "…" : "Resetear"}
+                </button>
+              )}
             </span>
           </div>
         </div>

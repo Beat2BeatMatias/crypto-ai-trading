@@ -28,6 +28,16 @@ async def health(request: Request) -> dict:
                 engine_detail = "sin decisiones aún"
                 last_decision_age_min = None
 
+            # Decisor interval from config
+            interval_row = (await s.execute(
+                text("SELECT value FROM config WHERE key = 'decisor_interval_min'")
+            )).first()
+            decisor_interval_min = int(float(interval_row.value)) if interval_row else 10
+            if last_decision_age_min is not None:
+                next_execution_in_min = max(0, decisor_interval_min - last_decision_age_min)
+            else:
+                next_execution_in_min = None
+
             # Binance: last OHLCV age
             row = (await s.execute(
                 text("SELECT time FROM ohlcv WHERE timeframe = '1m' ORDER BY time DESC LIMIT 1")
@@ -173,6 +183,8 @@ async def health(request: Request) -> dict:
                 "ok": engine_ok,
                 "detail": engine_detail,
                 "last_decision_age_min": last_decision_age_min,
+                "decisor_interval_min": decisor_interval_min,
+                "next_execution_in_min": next_execution_in_min,
             },
             "binance": {
                 "ok": binance_ok,
@@ -231,7 +243,7 @@ async def health(request: Request) -> dict:
             "ok": False, "db": str(e),
             "kill_switch": None,
             "circuit_breaker": {"triggered": None, "reason": None},
-            "engine": {"ok": False, "detail": "error de DB", "last_decision_age_min": None},
+            "engine": {"ok": False, "detail": "error de DB", "last_decision_age_min": None, "decisor_interval_min": None, "next_execution_in_min": None},
             "binance": {"ok": False, "detail": "error de DB", "ws": {"ok": False, "detail": "error de DB"}},
             "llm": None,
             "playbook": None,

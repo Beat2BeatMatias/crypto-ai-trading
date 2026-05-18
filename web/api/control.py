@@ -55,6 +55,23 @@ async def run_supervisor_now(session: Annotated[AsyncSession, Depends(_session)]
     return {"ok": True, "queued": True}
 
 
+@router.post("/circuit-breaker/reset")
+async def reset_circuit_breaker(session: Annotated[AsyncSession, Depends(_session)]):
+    """Resetea manualmente el circuit breaker.
+
+    Solo aplicable a pausas financieras (daily_stop / drawdown) que requieren
+    intervención explícita del operador. Las pausas operativas (LLM / exchange)
+    se auto-resetean tras el cooldown.
+    """
+    store = ConfigStore(session)
+    try:
+        await store.set(ConfigKey.ENGINE_PAUSED, "false", changed_by="user")
+        await store.set(ConfigKey.ENGINE_PAUSE_REASON, "", changed_by="user")
+    except KeyError:
+        raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
+    return {"ok": True, "circuit_breaker": "reset"}
+
+
 @router.post("/drawdown/reset")
 async def reset_drawdown_peak(session: Annotated[AsyncSession, Depends(_session)]):
     """Establece el ancla de drawdown en el momento actual.
