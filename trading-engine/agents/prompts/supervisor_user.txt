@@ -29,6 +29,19 @@ CIERRE DE TRADES:
 RECHAZOS DEL RISK GATE (por regla):
 {rejection_breakdown_block}
 
+AUDITORÍA LLM-CENTRIC (v1.3 — Decisor autónomo):
+  Sizing promedio de BUYs: {avg_position_size_pct:.4f} | Confidence promedio BUYs: {avg_buy_confidence:.3f}
+  Two-pass gatillados: {two_pass_triggered_count} (auto-correcciones del LLM en el período)
+  Decisiones con coherence warnings: {decisions_with_warnings} / {total_decisions}
+  Warnings por regla (CoherenceChecker C1-C6):
+{coherence_breakdown_block}
+
+  GUÍA: C1/C2/C3 son inconsistencias factuales (alucinaciones técnicas) — si la tasa supera el 10%,
+  evalúa si el playbook está empujando al LLM hacia afirmaciones que los datos no respaldan
+  (ej: declarar confluencias ausentes, citar régimen incorrecto, hablar de tendencia contraria a la real).
+  C4/C5/C6 son derivas operacionales (cooldown ignorado, confluencias insuficientes, holding fuera de rango)
+  — pueden indicar que el playbook flexibiliza demasiado o que las guías de config quedaron obsoletas.
+
 MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%)
   Rango 24h: ${low_24h:,.0f} - ${high_24h:,.0f}

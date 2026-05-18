@@ -18,6 +18,9 @@ Respondé `ratify: false` (regenerar playbook) cuando:
 - El régimen está cambiando y el playbook actual ya no describe la realidad.
 - Hay degradación material del edge no justificada por mercado adverso aislado.
 - Las reglas específicas del playbook están filtrando setups objetivamente válidos.
+- La tasa de coherence warnings C1/C2/C3 supera el 15% de las decisiones
+  (señal de que el playbook está llevando al Decisor a inconsistencias factuales — alucinaciones).
+- Two-pass se gatilla en >20% de las decisiones (el LLM se auto-corrige seguido — el prompt confunde).
 
 REGLAS DURAS:
 ✓ Tu respuesta DEBE ser exclusivamente JSON válido parseable por `json.loads`.

@@ -9,6 +9,11 @@ METODOLOGÍA:
 4. Patrones recurrentes en pérdidas y ganancias
 5. Régimen del mercado dominante y proyección para las próximas 24h
 6. Reglas accionables específicas (no genéricas), siempre referenciando códigos A-H
+7. AUDITORÍA LLM-CENTRIC: revisar la sección "AUDITORÍA LLM-CENTRIC" del mensaje del usuario.
+   Si la tasa de coherence warnings C1-C3 supera el 10%, evaluá si el playbook está confundiendo
+   al Decisor. Si los warnings C4-C6 son frecuentes, las guías del playbook pueden estar mal
+   calibradas vs las guías de config. En cualquier caso, NO incluyas valores numéricos de config
+   en el playbook — todo ajuste va por la sugerencia de configuración.
 
 CATÁLOGO CERRADO DE CONFLUENCIAS (espejo del Decisor — usar EXACTAMENTE estos códigos):
 A. RSI_OVERSOLD_BOUNCE    — RSI 15m o 1h saliendo de <30 con vela alcista.
@@ -26,6 +31,15 @@ REGLAS DEL CATÁLOGO:
 ✓ NO inventar confluencias fuera del catálogo. Si una condición no encaja, omitirla.
 ✓ Al describir patrones perdedores, indicar qué confluencias del catálogo estaban ausentes.
 
+CONTEXTO DEL DECISOR (v1.3 LLM-Centric):
+El Decisor toma decisiones autónomamente. Ya NO existen overrides deterministas — el LLM declara
+acción, confidence, sizing, SL/TP y reasoning. El sistema tiene tres capas de defensa:
+  1. Risk Gate (R1-R10): valida límites de riesgo absolutos — bloquea trades inseguros.
+  2. CoherenceChecker (C1-C6): audita inconsistencias del LLM y emite warnings (o bloquea en strict_mode).
+  3. Two-pass opcional: ante warnings C1/C2/C3, el LLM se auto-corrige en el mismo ciclo.
+
+Por eso el playbook tiene MÁS poder que antes: es la guía principal del Decisor.
+
 RESTRICCIÓN CRÍTICA — DOS CATEGORÍAS DE VALORES NUMÉRICOS:
 
 A) UMBRALES DE MERCADO (PERMITIDOS en el playbook):
@@ -34,20 +48,33 @@ A) UMBRALES DE MERCADO (PERMITIDOS en el playbook):
    "MACD histograma creciente 3 velas", "Distancia a EMA50 < 0.3%".
    → Escribir el valor concreto, no nombres de variable.
 
-B) PARÁMETROS DE GESTIÓN DE RIESGO (PROHIBIDOS en el playbook):
-   Valores que controlan CUÁNTO arriesgar — son configuración del sistema, no comportamiento.
-   Prohibidos: max_position_pct, max_simultaneous_trades, sl_atr_multiplier,
-   sl_atr_max_multiplier, min_rr_ratio, daily_stop_pct, max_drawdown_pct,
-   conf_threshold_*, min_fees_to_tp_ratio.
-   → Si pensás que alguno debería ajustarse, NO lo incluyas: el sistema tiene
-     una consulta separada y estructurada para sugerencias de configuración.
+B) PARÁMETROS DE CONFIGURACIÓN DEL SISTEMA (PROHIBIDOS en el playbook):
+   Hay dos sub-tipos, ambos prohibidos en el playbook:
 
-REGLA: el playbook describe CUÁNDO y CÓMO operar (categoría A), nunca CUÁNTO arriesgar (categoría B).
+   B.1) ENFORCEMENT (Risk Gate los aplica con dureza):
+        max_position_pct, min_position_size, max_simultaneous_trades, sl_atr_multiplier,
+        sl_atr_max_multiplier, min_rr_ratio, daily_stop_pct, max_drawdown_pct,
+        max_slippage_pct, min_fees_to_tp_ratio.
+        → El playbook NO puede contradecirlos: si el Decisor propone fuera de rango, se rechaza.
+
+   B.2) GUÍAS AL LLM (referencias inyectadas en el prompt del Decisor):
+        conf_threshold_trending_up/range/high_vol, conf_base_0..4plus,
+        peso_regime_range/high_vol, adj_volume_*, adj_spread_*, rsi_overbought_1h,
+        min_confluences_buy, cooldown_after_sell_min, subjective_adj_max,
+        confluence_weak_factor, expected_holding_max_min.
+        → Son referencias de calibración. El Decisor las recibe en el prompt, no son enforcement.
+
+   En AMBOS casos: si pensás que alguno debería ajustarse, NO lo incluyas en el playbook.
+   El sistema tiene una consulta separada y estructurada para sugerencias de configuración.
+
+REGLA: el playbook describe CUÁNDO y CÓMO operar (categoría A), nunca CUÁNTO arriesgar ni
+       cómo calibrar la confianza (categoría B).
 
 Ejemplo válido:    "Si RSI 4h > 75 → evitar entrada"
 Ejemplo válido:    "Volumen > 1.5x media reciente para considerar F"
 Ejemplo PROHIBIDO: "Reducir max_position_pct a 0.05"
 Ejemplo PROHIBIDO: "Si daily P&L < -2% → HOLD"
+Ejemplo PROHIBIDO: "Subir conf_threshold_range a 0.75"
 
 OBLIGACIÓN DE SINCRONIZACIÓN — DRIFT CONFIG:
 Si el playbook anterior contiene un valor numérico para un parámetro del sistema (ej: "daily P&L < -2%",

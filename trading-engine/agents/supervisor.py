@@ -68,6 +68,16 @@ def _parse_json_strict(text: str) -> dict:
 _CONFIG_SUGGESTION_PROMPT = """Eres un analista cuantitativo de risk management. Basándote en las métricas
 de trading del período, sugiere los valores óptimos para los parámetros de configuración del sistema.
 
+CONTEXTO ARQUITECTÓNICO (v1.3 LLM-Centric):
+El Decisor es un LLM autónomo. Los parámetros sugeridos abajo tienen DOS roles distintos:
+  • ENFORCEMENT (Risk Gate los aplica): sl_atr_multiplier, sl_atr_max_multiplier, min_rr_ratio,
+    max_position_pct, min_fees_to_tp_ratio. Cambiarlos restringe o relaja qué trades pueden ejecutarse.
+  • GUÍAS AL LLM (referencias inyectadas en el prompt): conf_threshold_*, rsi_overbought_1h,
+    min_confluences_buy, cooldown_after_sell_min. Cambiarlos modifica cómo el LLM razona, pero
+    el LLM tiene autonomía para desviarse con justificación.
+Ajustá los ENFORCEMENT cuando haya pérdidas concretas (SL/TP desbalanceados, trades zombie).
+Ajustá las GUÍAS cuando el LLM esté tomando decisiones sistemáticamente sub-óptimas.
+
 MÉTRICAS DEL PERÍODO:
 - Trades cerrados: {closed_trades}
 - Win rate: {win_rate}%
@@ -80,6 +90,20 @@ MÉTRICAS DEL PERÍODO:
 - Decisiones HOLD: {hold_count} ({hold_pct:.1f}%)
 - BUYs bloqueados por Risk Gate: {rejected_count}
 - SL tocados: {sl_hits} | TP alcanzados: {tp_hits}
+
+AUDITORÍA LLM-CENTRIC:
+- Sizing promedio BUYs: {avg_position_size_pct:.4f} (vs max_position_pct={max_position_pct})
+- Confidence promedio BUYs: {avg_buy_confidence:.3f}
+- Coherence warnings totales: {coherence_warnings_total} en {decisions_with_warnings}/{total_decisions} decisiones
+- Two-pass auto-correcciones: {two_pass_triggered_count}
+
+INTERPRETACIÓN DE LA AUDITORÍA:
+- Si avg_buy_confidence está SIEMPRE por encima de conf_threshold_range pero el WR es bajo →
+  los thresholds están desalineados con la realidad; subirlos sin riesgo de cortar trades válidos.
+- Si avg_position_size_pct es muy bajo respecto a max_position_pct y el WR es alto →
+  el LLM es conservador con sizing; revisar conf_base_* para que escale más en alta confianza.
+- Si coherence_warnings >15% de las decisiones → revisar conf_threshold_* y min_confluences_buy;
+  el LLM está chocando con guías demasiado restrictivas o contradictorias con el playbook.
 
 CONFIGURACIÓN ACTUAL:
 - atr_timeframe: {atr_timeframe}
@@ -359,6 +383,10 @@ class Supervisor:
                 "rejection_breakdown_block": self._format_rejection_breakdown(
                     metrics.get("rejection_breakdown") or {}
                 ),
+                "coherence_breakdown_block": self._format_coherence_breakdown(
+                    metrics.get("coherence_by_rule") or {},
+                    int(metrics.get("total_decisions") or 0),
+                ),
             }
             system_prompt = self.prompt_manager.load_system_prompt("supervisor_eval")
             user_prompt = self.prompt_manager.render_user_prompt(
@@ -496,6 +524,10 @@ class Supervisor:
             ),
             "rejection_breakdown_block": self._format_rejection_breakdown(
                 metrics.get("rejection_breakdown") or {}
+            ),
+            "coherence_breakdown_block": self._format_coherence_breakdown(
+                metrics.get("coherence_by_rule") or {},
+                int(metrics.get("total_decisions") or 0),
             ),
             "kill_switch_status": "ACTIVO ⚠️" if op_ctx["kill_switch"] else "inactivo",
             "config_changes_block": self._format_config_changes(op_ctx["config_changes"]),
@@ -648,6 +680,23 @@ class Supervisor:
         if not breakdown:
             return "  Sin rechazos en el período"
         return "\n".join(f"  {k}: {v}" for k, v in sorted(breakdown.items()))
+
+    @staticmethod
+    def _format_coherence_breakdown(breakdown: dict, total_decisions: int) -> str:
+        """Render coherence warnings (C1-C6) for the audit block in the supervisor prompt.
+
+        Rules C1-C3 are factual inconsistencies — high counts signal that the playbook
+        is leading the LLM into hallucinations. C4-C6 are operational drifts (cooldown,
+        confluences, holding).
+        """
+        if not breakdown:
+            return "  Sin warnings en el período (LLM coherente)"
+        lines = []
+        rate_total = (sum(breakdown.values()) / total_decisions * 100) if total_decisions else 0.0
+        for rid, cnt in sorted(breakdown.items()):
+            lines.append(f"  {rid}: {cnt} ({cnt / total_decisions * 100:.1f}% de decisiones)" if total_decisions else f"  {rid}: {cnt}")
+        lines.append(f"  TOTAL: {sum(breakdown.values())} warnings ({rate_total:.1f}% rate)")
+        return "\n".join(lines)
 
     @staticmethod
     def _format_config_changes(changes: list) -> str:
@@ -812,6 +861,12 @@ class Supervisor:
             rejected_count=metrics["rejected_count"],
             sl_hits=metrics.get("sl_hits", 0),
             tp_hits=metrics.get("tp_hits", 0),
+            avg_position_size_pct=metrics.get("avg_position_size_pct", 0.0),
+            avg_buy_confidence=metrics.get("avg_buy_confidence", 0.0),
+            coherence_warnings_total=metrics.get("coherence_warnings_total", 0),
+            decisions_with_warnings=metrics.get("decisions_with_warnings", 0),
+            total_decisions=metrics.get("total_decisions", 0),
+            two_pass_triggered_count=metrics.get("two_pass_triggered_count", 0),
             atr_timeframe=current_config.get("atr_timeframe", "15m"),
             sl_atr_multiplier=current_config.get("sl_atr_multiplier", 0.3),
             sl_atr_max_multiplier=current_config.get("sl_atr_max_multiplier", 1.5),
@@ -916,6 +971,45 @@ class Supervisor:
                 prefix = d.rejected_reason.split(":")[0].strip().split(" ")[0]
                 rejection_breakdown[prefix] = rejection_breakdown.get(prefix, 0) + 1
 
+        # -- LLM-centric (v1.3): coherence warnings, two-pass, sizing --
+        coherence_by_rule: dict[str, int] = {}
+        decisions_with_warnings = 0
+        two_pass_count = 0
+        position_sizes: list[float] = []
+        buy_confidences: list[float] = []
+        for d in decisions:
+            out = d.output or {}
+            warnings = out.get("coherence_warnings") or []
+            if warnings:
+                decisions_with_warnings += 1
+                for w in warnings:
+                    rid = (w.get("rule_id") if isinstance(w, dict) else None) or "?"
+                    coherence_by_rule[rid] = coherence_by_rule.get(rid, 0) + 1
+            if out.get("two_pass_triggered"):
+                two_pass_count += 1
+            if out.get("action") == "BUY":
+                try:
+                    pz = float(out.get("position_size_pct") or 0.0)
+                    if pz > 0:
+                        position_sizes.append(pz)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    cf = float(out.get("confidence") or 0.0)
+                    if cf > 0:
+                        buy_confidences.append(cf)
+                except (TypeError, ValueError):
+                    pass
+        coherence_warnings_total = sum(coherence_by_rule.values())
+        avg_position_size_pct = (
+            round(sum(position_sizes) / len(position_sizes), 4)
+            if position_sizes else 0.0
+        )
+        avg_buy_confidence = (
+            round(sum(buy_confidences) / len(buy_confidences), 3)
+            if buy_confidences else 0.0
+        )
+
         # -- A2: Max drawdown real y Sharpe del período --
         sorted_closed = sorted(trades, key=lambda t: t.ts_close or t.ts_open)
         running_pnl = 0.0
@@ -975,4 +1069,11 @@ class Supervisor:
             "rejection_breakdown": rejection_breakdown,
             "max_dd_usdt": round(max_dd_usdt, 2),
             "sharpe_period": sharpe_period,
+            # LLM-centric (v1.3) — auditoría del Decisor autónomo
+            "coherence_warnings_total": coherence_warnings_total,
+            "coherence_by_rule": coherence_by_rule,
+            "decisions_with_warnings": decisions_with_warnings,
+            "two_pass_triggered_count": two_pass_count,
+            "avg_position_size_pct": avg_position_size_pct,
+            "avg_buy_confidence": avg_buy_confidence,
         }

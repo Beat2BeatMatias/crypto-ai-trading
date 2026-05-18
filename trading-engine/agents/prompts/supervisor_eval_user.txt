@@ -13,6 +13,10 @@ DISTRIBUCIÓN POR RÉGIMEN:
 RECHAZOS DEL RISK GATE (por regla):
 {rejection_breakdown_block}
 
+COHERENCE WARNINGS (CoherenceChecker C1-C6):
+{coherence_breakdown_block}
+  Two-pass gatillados: {two_pass_triggered_count} | Decisiones con warnings: {decisions_with_warnings}
+
 MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%) | ATR(1h): ${atr_avg:,.0f} ({atr_pct:.2f}%, {vol_label})
   Régimen dominante actual: {dominant_regime}
