@@ -1,19 +1,35 @@
 import React from "react";
 
-// Tags conocidos del formato de reasoning del LLM
+// Tags conocidos del formato de reasoning del LLM.
+// Las claves están normalizadas (sin tildes, sin espacios) para hacer lookup
+// independiente de cómo el LLM escriba el tag exacto.
 const TAG_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-  "REVISADO-MANTENIDO": { label: "Revisado · Mantenido",  color: "#facc15", bg: "#451a03", icon: "↩" },
+  "REVISADO-MANTENIDO":  { label: "Revisado · Mantenido", color: "#facc15", bg: "#451a03", icon: "↩" },
   "DATOS_INSUFICIENTES": { label: "Datos insuficientes",  color: "#f97316", bg: "#431407", icon: "⚠" },
   "DECISION":            { label: "Decisión",             color: "#e2e8f0", bg: "#1e293b", icon: "▶" },
-  "MERCADO":             { label: "Mercado",               color: "#38bdf8", bg: "#082f49", icon: "📈" },
-  "SENALES":             { label: "Señales",               color: "#34d399", bg: "#052e16", icon: "⚡" },
-  "CONFIANZA":           { label: "Confianza",             color: "#a78bfa", bg: "#2e1065", icon: "%" },
-  "NIVELES":             { label: "Niveles SL/TP",         color: "#fb923c", bg: "#431407", icon: "⚖" },
-  "CONTRA_REGIMEN":      { label: "Contra régimen",        color: "#f87171", bg: "#450a0a", icon: "⚠" },
-  "BAJA_CONFIANZA":      { label: "Baja confianza",        color: "#fbbf24", bg: "#451a03", icon: "⚠" },
-  "SIZING":              { label: "Sizing",                color: "#94a3b8", bg: "#1e293b", icon: "⚖" },
-  "DRIFT_CONFIG":        { label: "Drift config",          color: "#f472b6", bg: "#4a044e", icon: "⚙" },
+  "MERCADO":             { label: "Mercado",              color: "#38bdf8", bg: "#082f49", icon: "📈" },
+  "SENALES":             { label: "Señales",              color: "#34d399", bg: "#052e16", icon: "⚡" },
+  "CONFIANZA":           { label: "Confianza",            color: "#a78bfa", bg: "#2e1065", icon: "%" },
+  "NIVELES":             { label: "Niveles SL/TP",        color: "#fb923c", bg: "#431407", icon: "⚖" },
+  "CONTRA_REGIMEN":      { label: "Contra régimen",       color: "#f87171", bg: "#450a0a", icon: "⚠" },
+  "BAJA_CONFIANZA":      { label: "Baja confianza",       color: "#fbbf24", bg: "#451a03", icon: "⚠" },
+  "SIZING":              { label: "Sizing",               color: "#94a3b8", bg: "#1e293b", icon: "⚖" },
+  "DRIFT_CONFIG":        { label: "Drift config",         color: "#f472b6", bg: "#4a044e", icon: "⚙" },
 };
+
+/**
+ * Normaliza el texto de un tag para hacer lookup en TAG_CONFIG.
+ * - Elimina tildes/diacríticos (Ó→O, Ñ→N, É→E, etc.)
+ * - Convierte a mayúsculas
+ * - Reemplaza espacios por guion bajo
+ */
+function normalizeTag(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")   // quita diacríticos
+    .toUpperCase()
+    .replace(/\s+/g, "_");
+}
 
 interface Section {
   tag: string;
@@ -21,13 +37,14 @@ interface Section {
 }
 
 function parseReasoning(raw: string): Section[] {
-  // Detecta todos los [TAG] con su contenido hasta el próximo [TAG] o fin de string
-  const pattern = /\[([A-Z_\-]+)\]\s*(.*?)(?=\[[A-Z_\-]+\]|$)/gs;
+  // Captura [TAG] donde TAG puede contener letras (incl. tildes/Ñ), guiones, guiones bajos y espacios.
+  // El lookahead detecta el próximo [TAG] para delimitar el contenido de cada sección.
+  const pattern = /\[([\p{L}\p{M}0-9 _\-]+)\]\s*(.*?)(?=\[[\p{L}\p{M}0-9 _\-]+\]|$)/gsu;
   const sections: Section[] = [];
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(raw)) !== null) {
-    const tag = match[1].trim();
+    const tag = normalizeTag(match[1].trim());
     const content = match[2].trim();
     if (content) {
       sections.push({ tag, content });
