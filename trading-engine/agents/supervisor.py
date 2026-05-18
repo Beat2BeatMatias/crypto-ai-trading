@@ -17,27 +17,42 @@ from shared.config_store import ConfigKey, ConfigStore
 
 logger = structlog.get_logger()
 
-# Safe ranges for auto-applying supervisor suggestions.
+# Safe ranges for auto-applying supervisor suggestions (numeric keys).
 # Values outside these bounds are rejected to guard against LLM hallucinations.
 # daily_stop_pct and max_drawdown_pct are intentionally excluded — too critical for auto-apply.
+#
+# v1.3 LLM-Centric review:
+#  - `min_confluences_buy` removed: ahora es solo una guía en el prompt del Decisor que el LLM
+#    puede ignorar; auto-ajustarlo es ruido.
+#  - `rsi_overbought_1h` removed: el LLM ve el RSI completo en contexto y razona sobre él;
+#    cambiar el threshold es cosmético, no modifica comportamiento real.
 _SAFE_BOUNDS: dict[str, tuple] = {
-    # Ola 1 original
+    # ENFORCEMENT (Risk Gate los aplica)
     "sl_atr_multiplier":           (0.1, 0.8),
+    "sl_atr_max_multiplier":       (0.5, 3.0),
     "min_rr_ratio":                (1.0, 3.0),
-    "decisor_interval_min":        (5, 60),
     "max_position_pct":            (0.01, 0.20),
+    "min_fees_to_tp_ratio":        (1.5, 6.0),
+    # OPERACIONAL
+    "decisor_interval_min":        (5, 60),
+    # GUÍAS LLM con impacto medible (CoherenceChecker o anclaje fuerte del prompt)
+    "expected_holding_max_min":    (30, 1440),  # auditado por C6
+    "cooldown_after_sell_min":     (0, 120),    # norma dura en el system prompt
     "conf_threshold_trending_up":  (0.40, 0.85),
     "conf_threshold_range":        (0.50, 0.90),
     "conf_threshold_high_vol":     (0.60, 0.95),
-    # Ola 2 additions
-    "sl_atr_max_multiplier":       (0.5, 3.0),
-    "min_confluences_buy":         (1, 4),
-    "min_fees_to_tp_ratio":        (1.5, 6.0),
-    "cooldown_after_sell_min":     (0, 120),
-    "rsi_overbought_1h":           (60, 85),
-    "expected_holding_max_min":    (30, 1440),
 }
 _VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
+
+# Boolean toggles que el Supervisor puede activar/desactivar.
+# Aplicados sólo cuando la sugerencia es claramente "true" o "false".
+# Razón de incorporación (v1.3 LLM-Centric):
+#  - coherence_strict_mode: si C1/C2/C3 son persistentes, conviene activar para bloquear hallucinations.
+#  - two_pass_enabled: si gatilla mucho sin mejorar outcomes, conviene desactivar para ahorrar tokens.
+_SAFE_TOGGLES: set[str] = {
+    "coherence_strict_mode",
+    "two_pass_enabled",
+}
 
 # Cross-parameter invariants: value_of[a] must be <= value_of[b] after applying suggestions.
 # If a suggestion would violate an invariant, it is rejected with an explicit reason.
@@ -112,53 +127,63 @@ CONFIGURACIÓN ACTUAL:
 - min_rr_ratio: {min_rr_ratio}
 - decisor_interval_min: {decisor_interval_min}
 - max_position_pct: {max_position_pct}
+- min_fees_to_tp_ratio: {min_fees_to_tp_ratio}
+- expected_holding_max_min: {expected_holding_max_min}
+- cooldown_after_sell_min: {cooldown_after_sell_min}
 - conf_threshold_trending_up: {conf_threshold_trending_up}
 - conf_threshold_range: {conf_threshold_range}
 - conf_threshold_high_vol: {conf_threshold_high_vol}
-- min_confluences_buy: {min_confluences_buy}
-- min_fees_to_tp_ratio: {min_fees_to_tp_ratio}
-- cooldown_after_sell_min: {cooldown_after_sell_min}
-- rsi_overbought_1h: {rsi_overbought_1h}
-- expected_holding_max_min: {expected_holding_max_min}
+- coherence_strict_mode: {coherence_strict_mode}
+- two_pass_enabled: {two_pass_enabled}
 
-OPCIONES VÁLIDAS:
-- atr_timeframe: "5m" | "15m" | "1h"
-- sl_atr_multiplier: 0.1 a 0.8 (cuanto menor, más trades pero más riesgo; debe ser < sl_atr_max_multiplier)
-- sl_atr_max_multiplier: 0.5 a 3.0 (siempre mayor que sl_atr_multiplier)
-- min_rr_ratio: 1.0 a 3.0
-- decisor_interval_min: 5 a 60
-- max_position_pct: 0.01 a 0.20
-- conf_threshold_trending_up: 0.40 a 0.85 (umbral de confianza para BUY en tendencia alcista; debe ser <= conf_threshold_range)
-- conf_threshold_range: 0.50 a 0.90 (umbral para BUY en rango; debe ser <= conf_threshold_high_vol)
-- conf_threshold_high_vol: 0.60 a 0.95 (umbral para BUY en alta volatilidad; el más exigente)
-- min_confluences_buy: 1 a 4 (confluencias mínimas A-H para autorizar BUY; subir si demasiados trades perdedores)
-- min_fees_to_tp_ratio: 1.5 a 6.0 (el TP debe ser este múltiplo del costo de fees; subir si SL/TP desbalanceado)
-- cooldown_after_sell_min: 0 a 120 (minutos de espera tras SELL antes de nuevo BUY; subir si hay overtrading)
-- rsi_overbought_1h: 60 a 85 (RSI 1h máximo para señales alcistas; bajar en mercado sobrecomprado)
-- expected_holding_max_min: 30 a 1440 (tiempo máximo esperado en posición en minutos; ajustar al perfil operativo)
+OPCIONES VÁLIDAS (con criterio LLM-Centric):
+
+ENFORCEMENT — Risk Gate los aplica con dureza:
+- atr_timeframe: "5m" | "15m" | "1h" — granularidad del ATR de referencia.
+- sl_atr_multiplier: 0.1 a 0.8 (cuanto menor, SL más cerca; debe ser < sl_atr_max_multiplier).
+  Criterio: bajar si los SL llegan tarde y dejan grandes pérdidas; subir si te sacan con ruido.
+- sl_atr_max_multiplier: 0.5 a 3.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
+- min_rr_ratio: 1.0 a 3.0 — subir si avg_loss > avg_win con persistencia.
+- max_position_pct: 0.01 a 0.20 — subir SOLO si WR>60% y PF>1.5 sostenidos. Bajar ante drawdown.
+- min_fees_to_tp_ratio: 1.5 a 6.0 — subir si los TPs apenas pasan fees (rentabilidad marginal).
+- decisor_interval_min: 5 a 60 — bajar en alta volatilidad, subir en mercado lateral.
+
+GUÍAS LLM (sólo recalibrar si hay desalineación medible):
+- expected_holding_max_min: 30 a 1440 — auditado por CoherenceChecker C6.
+  Criterio: ajustar al avg_holding_min observado +50% si el LLM está siendo coherente.
+- cooldown_after_sell_min: 0 a 120 — norma dura del system prompt.
+  Criterio: subir si hay overtrading evidente (BUYs inmediatos post-SELL con pérdidas).
+- conf_threshold_trending_up: 0.40 a 0.85 — debe ser <= conf_threshold_range.
+- conf_threshold_range: 0.50 a 0.90 — debe ser <= conf_threshold_high_vol.
+- conf_threshold_high_vol: 0.60 a 0.95.
+  Criterio para los conf_threshold_*: ajustar SÓLO si avg_buy_confidence está sistemáticamente
+  desalineado con el outcome (ej: avg_buy_confidence=0.75 pero WR=35% → subir thresholds).
+  Si avg_buy_confidence es razonablemente predictivo de WR, no tocar.
+
+TOGGLES BOOLEANOS (decisión binaria con criterio claro):
+- coherence_strict_mode: true | false.
+  Activar (true) si coherence_warnings_total / total_decisions > 0.25 sostenido
+    Y al menos la mitad de warnings son C1/C2/C3 (inconsistencias factuales).
+  Desactivar (false) si la tasa es < 0.02 por dos ciclos consecutivos (overhead innecesario).
+  No cambiar si no hay señal clara en ninguna dirección.
+- two_pass_enabled: true | false.
+  Desactivar (false) si two_pass_triggered_count es alto (>30% de decisiones) pero el outcome
+    promedio post-correction no mejora (waste de tokens).
+  Activar (true) si está apagado y hay warnings C1/C2/C3 frecuentes (recuperás auto-corrección).
+  En la duda: dejar activado (default true) — es barato comparado con un trade malo.
 
 INVARIANTES OBLIGATORIAS (el sistema rechazará sugerencias que las violen):
 - sl_atr_multiplier DEBE ser <= sl_atr_max_multiplier
 - min_rr_ratio DEBE ser <= default_rr_ratio (actualmente {default_rr_ratio})
 - conf_threshold_trending_up <= conf_threshold_range <= conf_threshold_high_vol
 
+REGLA GENERAL: si una key no requiere ajuste, omitila del array `suggestions`. NO incluyas
+sugerencias que repiten el valor actual ni "ajustes" sin razón concreta basada en métricas.
+
 Responde ÚNICAMENTE con JSON válido, sin texto extra:
 {{
   "suggestions": [
-    {{"key": "atr_timeframe", "current": "{atr_timeframe}", "suggested": "valor", "reason": "explicación breve en español"}},
-    {{"key": "sl_atr_multiplier", "current": "{sl_atr_multiplier}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "sl_atr_max_multiplier", "current": "{sl_atr_max_multiplier}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "min_rr_ratio", "current": "{min_rr_ratio}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "decisor_interval_min", "current": "{decisor_interval_min}", "suggested": 0, "reason": "explicación breve en español"}},
-    {{"key": "max_position_pct", "current": "{max_position_pct}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "conf_threshold_trending_up", "current": "{conf_threshold_trending_up}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "conf_threshold_range", "current": "{conf_threshold_range}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "conf_threshold_high_vol", "current": "{conf_threshold_high_vol}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "min_confluences_buy", "current": "{min_confluences_buy}", "suggested": 0, "reason": "explicación breve en español"}},
-    {{"key": "min_fees_to_tp_ratio", "current": "{min_fees_to_tp_ratio}", "suggested": 0.0, "reason": "explicación breve en español"}},
-    {{"key": "cooldown_after_sell_min", "current": "{cooldown_after_sell_min}", "suggested": 0, "reason": "explicación breve en español"}},
-    {{"key": "rsi_overbought_1h", "current": "{rsi_overbought_1h}", "suggested": 0, "reason": "explicación breve en español"}},
-    {{"key": "expected_holding_max_min", "current": "{expected_holding_max_min}", "suggested": 0, "reason": "explicación breve en español"}}
+    {{"key": "nombre_key", "current": "valor_actual", "suggested": "valor_propuesto", "reason": "explicación breve en español basada en métricas concretas"}}
   ],
   "summary": "resumen en 1-2 oraciones del estado del sistema y el principal ajuste recomendado"
 }}"""
@@ -437,6 +462,25 @@ class Supervisor:
         }
 
     @staticmethod
+    def _normalize_bool(value) -> bool | None:
+        """Convert LLM-suggested boolean to canonical bool, or None if not recognizable.
+
+        Accepts: True/False, "true"/"false" (case insensitive), 1/0, "1"/"0".
+        Rejects everything else to guard against ambiguous LLM outputs.
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("true", "1"):
+                return True
+            if v in ("false", "0"):
+                return False
+        return None
+
+    @staticmethod
     def _dominant_regime(regime_distribution: dict) -> str | None:
         """Return the regime with the most decisions; None if no signal."""
         totals = {
@@ -584,6 +628,16 @@ class Supervisor:
                 await store.set(ConfigKey(key), str(suggested), changed_by="supervisor")
                 applied.append(s)
                 logger.info("supervisor.config_applied", key=key, old=current, new=suggested, reason=reason)
+
+            elif key in _SAFE_TOGGLES:
+                normalized = self._normalize_bool(suggested)
+                if normalized is None:
+                    rejected.append({**s, "reject_reason": f"valor '{suggested}' no es booleano válido (true/false)"})
+                    continue
+                working[key] = normalized
+                await store.set(ConfigKey(key), "true" if normalized else "false", changed_by="supervisor")
+                applied.append(s)
+                logger.info("supervisor.config_toggle_applied", key=key, old=current, new=normalized, reason=reason)
 
             elif key in _SAFE_BOUNDS:
                 lo, hi = _SAFE_BOUNDS[key]
@@ -874,14 +928,14 @@ class Supervisor:
             default_rr_ratio=current_config.get("default_rr_ratio", 2.0),
             decisor_interval_min=current_config.get("decisor_interval_min", 10),
             max_position_pct=current_config.get("max_position_pct", 0.05),
+            min_fees_to_tp_ratio=current_config.get("min_fees_to_tp_ratio", 3.0),
+            expected_holding_max_min=current_config.get("expected_holding_max_min", 240),
+            cooldown_after_sell_min=current_config.get("cooldown_after_sell_min", 15),
             conf_threshold_trending_up=current_config.get("conf_threshold_trending_up", 0.60),
             conf_threshold_range=current_config.get("conf_threshold_range", 0.70),
             conf_threshold_high_vol=current_config.get("conf_threshold_high_vol", 0.80),
-            min_confluences_buy=current_config.get("min_confluences_buy", 2),
-            min_fees_to_tp_ratio=current_config.get("min_fees_to_tp_ratio", 3.0),
-            cooldown_after_sell_min=current_config.get("cooldown_after_sell_min", 15),
-            rsi_overbought_1h=current_config.get("rsi_overbought_1h", 70),
-            expected_holding_max_min=current_config.get("expected_holding_max_min", 240),
+            coherence_strict_mode=current_config.get("coherence_strict_mode", False),
+            two_pass_enabled=current_config.get("two_pass_enabled", True),
         )
         resp = await self.llm.call(
             provider=self.provider, system_prompt="", user_prompt=prompt,

@@ -18,6 +18,7 @@ import { type LinePoint } from "./indicators";
 import { api } from "../../api/client";
 import { useWebSocket, type WSEvent } from "../../hooks/useWebSocket";
 import type { Candle, Timeframe, Trade } from "../../types";
+import ReasoningBlock from "../ReasoningBlock";
 import { TIMEFRAMES, bucketStart, timeframeFromConfigMinutes, timeframeSeconds } from "./timeframe";
 import { bollingerBands, ema } from "./indicators";
 
@@ -320,12 +321,15 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
         candleSeriesRef.current?.update(prevLive);
         lastCandleRef.current = prevLive;
       } else if (prevTime === apiTime) {
-        // Mismo bucket: fusionar — el high/low live puede superar al de la DB
+        // Mismo bucket: respetar los valores OHLCV reales de la API como base
+        // y solo actualizar close con el último precio live.
+        // No acumular high/low del prevLive porque puede haber quedado
+        // distorsionado por tickers previos fuera de rango.
         const merged: CandlestickData = {
           time: lastFromApi.time,
           open: lastFromApi.open,
-          high: Math.max(lastFromApi.high, prevLive.high),
-          low: Math.min(lastFromApi.low, prevLive.low),
+          high: lastFromApi.high,
+          low: lastFromApi.low,
           close: prevLive.close,
         };
         candleSeriesRef.current?.update(merged);
@@ -521,11 +525,18 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
           api.ohlcv(timeframe, 400).then(setCandles).catch(() => {});
         }
       } else {
+        // Limitar extensión de bigotes: solo mover high/low si el precio
+        // está dentro de un 5% del rango actual. Precios fuera de ese rango
+        // indican un ticker espurio (testnet, retraso de red, etc.).
+        const WICK_TOLERANCE = 0.05;
+        const withinRange =
+          data.price >= current.low * (1 - WICK_TOLERANCE) &&
+          data.price <= current.high * (1 + WICK_TOLERANCE);
         const updated: CandlestickData = {
           time: current.time,
           open: current.open,
-          high: Math.max(current.high, data.price),
-          low: Math.min(current.low, data.price),
+          high: withinRange ? Math.max(current.high, data.price) : current.high,
+          low: withinRange ? Math.min(current.low, data.price) : current.low,
           close: data.price,
         };
         series.update(updated);
@@ -766,9 +777,7 @@ function DecisionPanel({ decisions, onClose }: DecisionPanelProps) {
 
               {/* Reasoning */}
               {reasoning && (
-                <p className="leading-relaxed" style={{ color: "#c9d1d9", fontStyle: "italic" }}>
-                  "{reasoning}"
-                </p>
+                <ReasoningBlock reasoning={reasoning} compact />
               )}
 
               {/* Metadata del modelo */}

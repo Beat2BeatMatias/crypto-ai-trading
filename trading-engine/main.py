@@ -425,15 +425,25 @@ async def run() -> None:
             sup_provider = LLMProvider(await store.get(ConfigKey.SUPERVISOR_PROVIDER))
             sup_fallbacks = _parse_providers(await store.get(ConfigKey.SUPERVISOR_FALLBACK_PROVIDERS))
             current_config = {
+                # ENFORCEMENT (Risk Gate los aplica)
                 "atr_timeframe": await store.get(ConfigKey.ATR_TIMEFRAME),
                 "sl_atr_multiplier": await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER),
+                "sl_atr_max_multiplier": await store.get_typed(ConfigKey.SL_ATR_MAX_MULTIPLIER),
                 "min_rr_ratio": await store.get_typed(ConfigKey.MIN_RR_RATIO),
-                "decisor_interval_min": await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN),
+                "default_rr_ratio": await store.get_typed(ConfigKey.DEFAULT_RR_RATIO),
                 "max_position_pct": await store.get_typed(ConfigKey.MAX_POSITION_PCT),
+                "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
+                # OPERACIONAL
+                "decisor_interval_min": await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN),
+                # GUÍAS LLM auto-ajustables
+                "expected_holding_max_min": await store.get_typed(ConfigKey.EXPECTED_HOLDING_MAX_MIN),
+                "cooldown_after_sell_min": await store.get_typed(ConfigKey.COOLDOWN_AFTER_SELL_MIN),
                 "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
                 "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
                 "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
-                "expected_holding_max_min": await store.get_typed(ConfigKey.EXPECTED_HOLDING_MAX_MIN),
+                # TOGGLES LLM-centric v1.3
+                "coherence_strict_mode": await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE),
+                "two_pass_enabled": await store.get_typed(ConfigKey.TWO_PASS_ENABLED),
             }
             sup = Supervisor(session=s, llm=llm, symbol=settings.symbol,
                              provider=sup_provider, fallbacks=sup_fallbacks)

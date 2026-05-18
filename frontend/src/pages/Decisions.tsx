@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Decision } from "../types";
+import ReasoningBlock from "../components/ReasoningBlock";
 
 function explainRejection(reason: string): string {
   if (reason.startsWith("stop_loss must be"))
@@ -230,7 +231,11 @@ export function Decisions() {
             </div>
 
             {/* Razonamiento del LLM */}
-            <p className="text-sm text-zinc-300 mb-4 leading-relaxed">{out(selected).reasoning ?? ""}</p>
+            {out(selected).reasoning && (
+              <div className="mb-4">
+                <ReasoningBlock reasoning={out(selected).reasoning!} />
+              </div>
+            )}
 
             {/* Confluencias */}
             {(out(selected).confluences ?? []).length > 0 && (

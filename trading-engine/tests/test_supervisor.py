@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from shared.db.models import Decision, Trade, PlaybookVersion, ConfigHistory
+from shared.db.models import Decision, Trade, PlaybookVersion, ConfigHistory, ConfigEntry
 from agents.supervisor import Supervisor
 from agents.llm_client import LLMResponse
 
@@ -566,6 +566,136 @@ async def test_ratify_verdict_includes_age_and_baseline_in_decision(session):
     out = sup_decision.output
     assert out["playbook_age_days"] == 3
     assert out["playbook_win_rate_baseline"] == 95.5
+
+
+# ---------------------------------------------------------------------------
+# Config suggestions — v1.3 LLM-Centric (toggles + removed legacy keys)
+# ---------------------------------------------------------------------------
+
+async def test_apply_suggestions_accepts_coherence_strict_mode_toggle(session, fake_llm):
+    # GIVEN a Supervisor and a current config with strict_mode off (entry seeded)
+    session.add(ConfigEntry(key="coherence_strict_mode", value="false",
+                            value_type="bool", description="test"))
+    await session.commit()
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"coherence_strict_mode": False}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "coherence_strict_mode", "current": "false", "suggested": "true",
+             "reason": "Tasa C1/C2/C3 > 25% en últimos ciclos."},
+        ],
+        "summary": "Activar strict_mode por hallucinations recurrentes.",
+    }
+
+    # WHEN we apply the suggestions
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN the toggle is applied and the config_entry persisted
+    assert len(applied) == 1
+    assert applied[0]["key"] == "coherence_strict_mode"
+    assert len(rejected) == 0
+
+    entry = (await session.execute(
+        select(ConfigHistory).where(ConfigHistory.key == "coherence_strict_mode")
+    )).scalar_one()
+    assert entry.new_value == "true"
+    assert entry.changed_by == "supervisor"
+
+
+async def test_apply_suggestions_accepts_two_pass_disable(session, fake_llm):
+    # GIVEN a Supervisor with two_pass currently enabled (entry seeded)
+    session.add(ConfigEntry(key="two_pass_enabled", value="true",
+                            value_type="bool", description="test"))
+    await session.commit()
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"two_pass_enabled": True}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "two_pass_enabled", "current": "true", "suggested": False,
+             "reason": "Auto-correcciones frecuentes sin mejora en outcome."},
+        ],
+        "summary": "",
+    }
+
+    # WHEN we apply the suggestions
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN the toggle is disabled and persisted
+    assert len(applied) == 1
+    assert len(rejected) == 0
+    entry = (await session.execute(
+        select(ConfigHistory).where(ConfigHistory.key == "two_pass_enabled")
+    )).scalar_one()
+    assert entry.new_value == "false"
+
+
+async def test_apply_suggestions_rejects_invalid_bool_for_toggle(session, fake_llm):
+    # GIVEN a Supervisor and an invalid bool suggestion
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"coherence_strict_mode": False}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "coherence_strict_mode", "current": "false", "suggested": "maybe",
+             "reason": "value ambiguous"},
+        ],
+        "summary": "",
+    }
+
+    # WHEN we apply
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN the suggestion is rejected and nothing is persisted
+    assert len(applied) == 0
+    assert len(rejected) == 1
+    assert "booleano" in rejected[0]["reject_reason"]
+    persisted = (await session.execute(
+        select(ConfigHistory).where(ConfigHistory.key == "coherence_strict_mode")
+    )).scalars().all()
+    assert len(persisted) == 0
+
+
+async def test_apply_suggestions_rejects_removed_legacy_keys(session, fake_llm):
+    # GIVEN a Supervisor and suggestions for keys no longer auto-adjustable
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"min_confluences_buy": 2, "rsi_overbought_1h": 70}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "min_confluences_buy", "current": 2, "suggested": 3,
+             "reason": "Demasiados trades perdedores."},
+            {"key": "rsi_overbought_1h", "current": 70, "suggested": 75,
+             "reason": "Mercado sobrecomprado."},
+        ],
+        "summary": "",
+    }
+
+    # WHEN we apply
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN both suggestions are rejected with the "no elegible" reason
+    assert len(applied) == 0
+    assert len(rejected) == 2
+    for r in rejected:
+        assert "no elegible" in r["reject_reason"]
+
+
+def test_normalize_bool_accepts_canonical_forms():
+    from agents.supervisor import Supervisor
+    assert Supervisor._normalize_bool(True) is True
+    assert Supervisor._normalize_bool(False) is False
+    assert Supervisor._normalize_bool("true") is True
+    assert Supervisor._normalize_bool("FALSE") is False
+    assert Supervisor._normalize_bool("1") is True
+    assert Supervisor._normalize_bool("0") is False
+    assert Supervisor._normalize_bool(1) is True
+    assert Supervisor._normalize_bool(0) is False
+    assert Supervisor._normalize_bool("yes") is None
+    assert Supervisor._normalize_bool("maybe") is None
+    assert Supervisor._normalize_bool(None) is None
+    assert Supervisor._normalize_bool(2) is None
 
 
 async def test_supervisor_force_regen_when_regime_changes(session):

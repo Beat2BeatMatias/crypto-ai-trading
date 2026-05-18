@@ -186,7 +186,12 @@ class Decisor:
             )
 
         except (json.JSONDecodeError, ValidationError) as e:
-            logger.warning("decisor.parse_error", error=str(e))
+            raw_text = resp.text if resp else None
+            logger.warning(
+                "decisor.parse_error",
+                error=str(e),
+                raw_llm_text=raw_text,
+            )
             validated = _hold_decision("parse_error")
             rejected_reason = f"parse_error: {type(e).__name__}"
         except Exception as e:
