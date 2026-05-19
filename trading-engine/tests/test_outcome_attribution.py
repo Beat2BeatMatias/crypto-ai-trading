@@ -117,6 +117,49 @@ def test_classify_hold_as_missed_when_mfe_exceeds_target_and_no_sl_hit():
     assert result.matured is True
 
 
+def test_classify_hold_as_good_when_mae_exceeds_sl_before_mfe():
+    """AC OA-03: el precio cae a -0.4% (mae < -SL_dist) ANTES de subir a +0.5%.
+    El SL hubiera pegado primero → GOOD_HOLD, no MISSED.
+    """
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0, "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3,
+        },
+        output={"action": "HOLD"},
+        ts=t0,
+    )
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.6, close=99.7),
+        _candle(t0 + timedelta(minutes=5), high=100.5, low=99.9, close=100.4),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "GOOD_HOLD"
+
+
+def test_classify_hold_as_good_when_mfe_below_tp_target():
+    """Subió pero sin alcanzar el TP_target → GOOD_HOLD (no era oportunidad real)."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "HOLD"},
+        ts=t0,
+    )
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.3, low=99.95, close=100.2),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "GOOD_HOLD"
+
+
 def _make_decision(*, input: dict, output: dict, ts=None, executed=False):
     """Helper for tests — minimal Decision-like object without DB."""
     from types import SimpleNamespace

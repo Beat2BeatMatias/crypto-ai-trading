@@ -133,8 +133,11 @@ def _classify(
         or (t_mfe is not None and t_mae is None)
     )
     if action == "HOLD":
+        if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
+            return "PENDING"
         if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
             return "MISSED_OPPORTUNITY"
+        return "GOOD_HOLD"
     return "PENDING"
 
 
