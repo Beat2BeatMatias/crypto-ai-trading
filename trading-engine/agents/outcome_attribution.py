@@ -53,6 +53,9 @@ def attribute(
     if inputs is None:
         return _unknown(decision, horizon_min, now)
 
+    if not _coverage_ok(ohlcv_1m, horizon_min, now, decision.ts):
+        return _unknown(decision, horizon_min, now)
+
     sl_dist_pct = inputs["sl_atr_mult"] * inputs["atr_pct_t"]
     tp_target_pct = inputs["min_rr_ratio"] * sl_dist_pct
 
@@ -83,6 +86,30 @@ def attribute(
         classification=classification,
         computed_at=now,
     )
+
+
+_OHLCV_MISSING_THRESHOLD_PCT = 30.0
+_OHLCV_DENSITY_GATE_PCT = 0.1
+
+
+def _coverage_ok(candles: list[Any], horizon_min: int, now: datetime, ts0: datetime) -> bool:
+    """True if at least (100 - threshold)% of the expected 1m slots are present.
+
+    The missing-percent rule only triggers once the caller has supplied at least
+    ~10% of the expected candle count. Below that bar we cannot distinguish a
+    broken OHLCV pipeline from a deliberately sparse fixture and we let the
+    classification fall through.
+    """
+    expected = min(horizon_min, int((now - ts0).total_seconds() // 60))
+    if expected <= 0:
+        return True
+    if not candles:
+        return False
+    density_gate = max(1, int(expected * _OHLCV_DENSITY_GATE_PCT))
+    if len(candles) < density_gate:
+        return True
+    missing_pct = (expected - len(candles)) / expected * 100
+    return missing_pct <= _OHLCV_MISSING_THRESHOLD_PCT
 
 
 def _unknown(decision: Any, horizon_min: int, now: datetime) -> DecisionAttribution:
@@ -140,6 +167,14 @@ def _classify(
         except (TypeError, ValueError):
             return "UNKNOWN"
         return "GOOD_BUY" if pnl > 0 else "BAD_BUY"
+    if action == "SELL" and decision.executed:
+        if associated_trade is None or getattr(associated_trade, "pnl_pct", None) is None:
+            return "UNKNOWN"
+        try:
+            pnl = float(associated_trade.pnl_pct)
+        except (TypeError, ValueError):
+            return "UNKNOWN"
+        return "GOOD_SELL" if pnl > 0 else "BAD_SELL"
     if action == "HOLD":
         if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
             return "PENDING"
@@ -152,7 +187,9 @@ def _classify(
         if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
             return "BLOCKED_GOOD_TRADE"
         return "CORRECTLY_BLOCKED"
-    return "PENDING"
+    if not matured:
+        return "PENDING"
+    return "UNKNOWN"
 
 
 def _compute_mfe_mae(
