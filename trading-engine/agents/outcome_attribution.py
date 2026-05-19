@@ -69,7 +69,7 @@ def attribute(
 
 
 def _extract_decision_inputs(decision: Any) -> dict[str, float] | None:
-    """Return {price_t, atr_pct_t, sl_atr_mult, min_rr} or None if any required key is missing."""
+    """Return {price_t, atr_pct_t, sl_atr_mult, min_rr_ratio} or None if any required key is missing."""
     inp = decision.input or {}
     try:
         price = float(inp["price"])
