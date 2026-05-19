@@ -43,6 +43,22 @@ _decisions_table = Table(
     Column("rejected_reason", String(200)),
 )
 
+_decision_outcomes_table = Table(
+    "decision_outcomes", _sqlite_metadata,
+    Column("decision_id", String(36), primary_key=True),
+    Column("horizon_min", Integer, nullable=False),
+    Column("matured", Boolean, nullable=False),
+    Column("forward_return_pct", Numeric(10, 5)),
+    Column("mfe_pct", Numeric(10, 5)),
+    Column("mae_pct", Numeric(10, 5)),
+    Column("time_to_mfe_min", Integer),
+    Column("time_to_mae_min", Integer),
+    Column("sl_dist_pct", Numeric(10, 5)),
+    Column("tp_target_pct", Numeric(10, 5)),
+    Column("classification", String(32), nullable=False),
+    Column("computed_at", DateTime, nullable=False),
+)
+
 _trades_table = Table(
     "trades", _sqlite_metadata,
     Column("id", String(36), primary_key=True),
