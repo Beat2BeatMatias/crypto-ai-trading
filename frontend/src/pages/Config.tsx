@@ -165,6 +165,24 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     description: "Expresión cron que define cuándo corre el supervisor automáticamente (UTC).",
     type: "text",
   },
+  outcome_attribution_interval_min: {
+    label: "Intervalo del job de outcomes",
+    description: "Cada cuántos minutos corre el job que clasifica decisiones pasadas (MFE/MAE). Valores más bajos actualizan los marcadores del chart más seguido pero añaden carga.",
+    type: "slider", min: 15, max: 240, step: 15, unit: "min",
+    format: v => String(v), parse: parseInt,
+  },
+  outcome_attribution_horizon_min: {
+    label: "Horizonte de evaluación contrafactual",
+    description: "Cuántos minutos hacia adelante se analizan las velas 1m después de cada decisión para calcular MFE/MAE. Debe ser mayor que el holding promedio esperado.",
+    type: "slider", min: 60, max: 1440, step: 30, unit: "min",
+    format: v => v >= 60 ? `${v / 60}h` : `${v}min`, parse: parseInt,
+  },
+  outcome_coverage_threshold_pct: {
+    label: "Umbral de cobertura OHLCV (máx. faltantes)",
+    description: "Si más de este % de velas 1m faltan en la ventana de evaluación, la decisión se clasifica como UNKNOWN en lugar de arriesgarse a una clasificación incorrecta.",
+    type: "slider", min: 5, max: 50, step: 5, unit: "%",
+    format: v => `${v}%`, parse: parseInt,
+  },
 
   // ── LLM-Centric (v1.3) ───────────────────────────────────────────────────
   min_position_size: {
@@ -408,6 +426,16 @@ const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] 
     title: "Scheduler",
     color: "zinc",
     keys: ["supervisor_cron"],
+  },
+  {
+    title: "Outcome Attribution",
+    color: "amber",
+    keys: [
+      "outcome_attribution_interval_min",
+      "outcome_attribution_horizon_min",
+      "outcome_coverage_threshold_pct",
+    ],
+    note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). Los cambios toman efecto en el próximo tick del job.",
   },
 ];
 

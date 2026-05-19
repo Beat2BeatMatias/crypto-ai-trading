@@ -75,6 +75,10 @@ class ConfigKey(str, Enum):
     MIN_POSITION_SIZE = "min_position_size"
     COHERENCE_STRICT_MODE = "coherence_strict_mode"
     TWO_PASS_ENABLED = "two_pass_enabled"
+    # Outcome Attribution job
+    OUTCOME_ATTRIBUTION_INTERVAL_MIN = "outcome_attribution_interval_min"
+    OUTCOME_ATTRIBUTION_HORIZON_MIN = "outcome_attribution_horizon_min"
+    OUTCOME_COVERAGE_THRESHOLD_PCT = "outcome_coverage_threshold_pct"
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,22 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.TWO_PASS_ENABLED: _Default(
         "true", "bool",
         "Si true, cuando el CoherenceChecker detecta warnings en C1/C2/C3 se hace una segunda llamada al LLM para auto-revisión.",
+    ),
+    ConfigKey.OUTCOME_ATTRIBUTION_INTERVAL_MIN: _Default(
+        "60", "int",
+        "Cada cuántos minutos corre el job de outcome attribution. Rango 15–240.",
+    ),
+    ConfigKey.OUTCOME_ATTRIBUTION_HORIZON_MIN: _Default(
+        "240", "int",
+        "Horizonte de evaluación contrafactual en minutos. "
+        "Define cuántas velas 1m se analizan después de cada decisión para calcular MFE/MAE. "
+        "Debe ser mayor que el holding promedio esperado. Rango 60–1440.",
+    ),
+    ConfigKey.OUTCOME_COVERAGE_THRESHOLD_PCT: _Default(
+        "30", "int",
+        "Porcentaje máximo de velas 1m faltantes en la ventana antes de clasificar como UNKNOWN. "
+        "Con 30 (default), si más del 30 % de las velas están ausentes la clasificación es UNKNOWN. "
+        "Rango 5–50.",
     ),
 }
 

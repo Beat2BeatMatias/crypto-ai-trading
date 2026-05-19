@@ -478,26 +478,33 @@ async def run() -> None:
     async def outcome_attribution_tick_wrapper() -> None:
         from agents.outcome_attribution_job import outcome_attribution_tick
         horizon_min = 240
+        coverage_threshold_pct = 30.0
         try:
             async with session_factory() as s:
                 store = ConfigStore(s)
-                horizon_min = int(await store.get_typed(ConfigKey.EXPECTED_HOLDING_MAX_MIN))
+                horizon_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_HORIZON_MIN))
+                coverage_threshold_pct = float(await store.get_typed(ConfigKey.OUTCOME_COVERAGE_THRESHOLD_PCT))
         except Exception as e:
             logger.warning("outcome_attribution.config_read_failed", error=str(e))
-        await outcome_attribution_tick(session_factory=session_factory, horizon_min=horizon_min)
+        await outcome_attribution_tick(
+            session_factory=session_factory,
+            horizon_min=horizon_min,
+            coverage_threshold_pct=coverage_threshold_pct,
+        )
 
     async with session_factory() as s:
         store = ConfigStore(s)
         interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
         cron = await store.get(ConfigKey.SUPERVISOR_CRON)
+        outcome_interval_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_INTERVAL_MIN))
 
     sched.add_decisor(decisor_tick, interval_min=interval_min)
     sched.add_supervisor(supervisor_tick, cron=cron)
     sched.add_fee_refresh(fees_tick, hours=24)
     sched.add_position_refresh(positions_tick, seconds=30)
     sched.add_order_tracker(order_tracker_tick, seconds=30)
-    sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=60)
-    logger.info("scheduler.outcome_attribution_registered", interval_min=60)
+    sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=outcome_interval_min)
+    logger.info("scheduler.outcome_attribution_registered", interval_min=outcome_interval_min)
     sched.start()
 
     stop_event = asyncio.Event()

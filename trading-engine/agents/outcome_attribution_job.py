@@ -94,6 +94,7 @@ async def outcome_attribution_tick(
     *,
     session_factory: Callable[[], "ContextManager[AsyncSession]"],
     horizon_min: int = 240,
+    coverage_threshold_pct: float = 30.0,
     now_fn: Callable[[], datetime] | None = None,
 ) -> None:
     """Tick called by the scheduler. Idempotent."""
@@ -118,6 +119,7 @@ async def outcome_attribution_tick(
             attr = attribute(
                 decision=d, ohlcv_1m=window, associated_trade=trade,
                 horizon_min=horizon_min, now=now,
+                coverage_threshold_pct=coverage_threshold_pct,
             )
             await _upsert_outcome(session, attr, dialect_name=_get_dialect_name(session))
             processed += 1

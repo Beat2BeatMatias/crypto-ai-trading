@@ -43,17 +43,21 @@ def attribute(
     associated_trade: Any | None,
     horizon_min: int,
     now: datetime,
+    coverage_threshold_pct: float = _OHLCV_MISSING_THRESHOLD_PCT,
 ) -> DecisionAttribution:
     """Classify a decisor decision against the OHLCV evolution after `decision.ts`.
 
     Pure: deterministic given the same inputs. Caller provides `now` (no `datetime.now()`).
     Returns `UNKNOWN` if essential inputs are missing in `decision.input`.
+
+    `coverage_threshold_pct` controls the maximum % of missing 1m candles before
+    classifying UNKNOWN (default 30.0). Configurable via OUTCOME_COVERAGE_THRESHOLD_PCT.
     """
     inputs = _extract_decision_inputs(decision)
     if inputs is None:
         return _unknown(decision, horizon_min, now)
 
-    if not _coverage_ok(ohlcv_1m, horizon_min, now, decision.ts):
+    if not _coverage_ok(ohlcv_1m, horizon_min, now, decision.ts, coverage_threshold_pct):
         return _unknown(decision, horizon_min, now)
 
     sl_dist_pct = inputs["sl_atr_mult"] * inputs["atr_pct_t"]
@@ -91,8 +95,14 @@ def attribute(
 _OHLCV_MISSING_THRESHOLD_PCT = 30.0
 
 
-def _coverage_ok(candles: list[Any], horizon_min: int, now: datetime, ts0: datetime) -> bool:
-    """True if at least (100 - threshold)% of the expected 1m slots are present.
+def _coverage_ok(
+    candles: list[Any],
+    horizon_min: int,
+    now: datetime,
+    ts0: datetime,
+    threshold_pct: float = _OHLCV_MISSING_THRESHOLD_PCT,
+) -> bool:
+    """True if at least (100 - threshold_pct)% of the expected 1m slots are present.
 
     `expected` is the smaller of `horizon_min` and elapsed minutes since `ts0`. If the
     window hasn't elapsed yet (e.g., immature PENDING), we expect proportionally fewer
@@ -103,7 +113,7 @@ def _coverage_ok(candles: list[Any], horizon_min: int, now: datetime, ts0: datet
     if expected <= 0:
         return True
     missing_pct = (expected - len(candles)) / expected * 100
-    return missing_pct <= _OHLCV_MISSING_THRESHOLD_PCT
+    return missing_pct <= threshold_pct
 
 
 def _unknown(decision: Any, horizon_min: int, now: datetime) -> DecisionAttribution:
