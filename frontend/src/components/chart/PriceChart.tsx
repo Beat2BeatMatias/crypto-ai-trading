@@ -475,29 +475,47 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
       });
     }
 
-    if (showOverlays.decisions) {
+    // Markers de outcomes (HOLDs missed + BLOCKED_GOOD_TRADE) — independiente del toggle Señales
+    if (showOverlays.outcomes) {
       decisions.forEach((d) => {
         const outcome = outcomeByDecisionId.get(d.id);
+        if (!outcome) return;
 
-        if (d.action === "HOLD" || !d.action) {
-          if (!showOverlays.outcomes) return;
-          if (outcome?.classification === "MISSED_OPPORTUNITY") {
-            const label = outcome.mfe_pct != null && outcome.mfe_pct >= 1
-              ? `miss +${outcome.mfe_pct.toFixed(1)}%`
-              : "";
-            out.push({
-              time: toUtc(d.ts),
-              position: "aboveBar",
-              color: COLORS.missedOpportunity,
-              shape: "circle",
-              size: 0.8,
-              text: label,
-            });
-          }
-          return;
+        if ((d.action === "HOLD" || !d.action) && outcome.classification === "MISSED_OPPORTUNITY") {
+          const label = outcome.mfe_pct != null && outcome.mfe_pct >= 1
+            ? `miss +${outcome.mfe_pct.toFixed(1)}%`
+            : "";
+          out.push({
+            time: toUtc(d.ts),
+            position: "aboveBar",
+            color: COLORS.missedOpportunity,
+            shape: "circle",
+            size: 0.8,
+            text: label,
+          });
         }
 
+        if (d.action === "BUY" && !d.executed && outcome.classification === "BLOCKED_GOOD_TRADE") {
+          out.push({
+            time: toUtc(d.ts),
+            position: "belowBar",
+            color: COLORS.blockedGood,
+            shape: "circle",
+            size: 0.7,
+            text: "",
+          });
+        }
+      });
+    }
+
+    // Markers de señales BUY/SELL — controlados por toggle Señales
+    if (showOverlays.decisions) {
+      decisions.forEach((d) => {
+        if (d.action === "HOLD" || !d.action) return;
+
+        const outcome = outcomeByDecisionId.get(d.id);
         const baseColor = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
+
         if (d.executed) {
           let color = baseColor;
           if (showOverlays.outcomes && outcome) {
@@ -512,26 +530,16 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
             size: 1,
             text: d.action,
           });
-        } else {
-          if (showOverlays.outcomes && outcome?.classification === "BLOCKED_GOOD_TRADE") {
-            out.push({
-              time: toUtc(d.ts),
-              position: "belowBar",
-              color: COLORS.blockedGood,
-              shape: "circle",
-              size: 0.7,
-              text: "",
-            });
-          } else {
-            out.push({
-              time: toUtc(d.ts),
-              position: d.action === "BUY" ? "belowBar" : "aboveBar",
-              color: `${baseColor}55`,
-              shape: "circle",
-              size: 0.3,
-              text: "",
-            });
-          }
+        } else if (!(showOverlays.outcomes && outcome?.classification === "BLOCKED_GOOD_TRADE")) {
+          // BUY bloqueado sin outcome accionable: punto translúcido
+          out.push({
+            time: toUtc(d.ts),
+            position: d.action === "BUY" ? "belowBar" : "aboveBar",
+            color: `${baseColor}55`,
+            shape: "circle",
+            size: 0.3,
+            text: "",
+          });
         }
       });
     }
