@@ -6,7 +6,7 @@ Tested in trading-engine/tests/test_outcome_attribution.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
@@ -51,21 +51,91 @@ def attribute(
     """
     inputs = _extract_decision_inputs(decision)
     if inputs is None:
-        return DecisionAttribution(
-            decision_id=decision.id,
-            horizon_min=horizon_min,
-            matured=False,
-            forward_return_pct=None,
-            mfe_pct=None,
-            mae_pct=None,
-            time_to_mfe_min=None,
-            time_to_mae_min=None,
-            sl_dist_pct=None,
-            tp_target_pct=None,
-            classification="UNKNOWN",
-            computed_at=now,
-        )
-    raise NotImplementedError("classification not yet implemented")
+        return _unknown(decision, horizon_min, now)
+
+    sl_dist_pct = inputs["sl_atr_mult"] * inputs["atr_pct_t"]
+    tp_target_pct = inputs["min_rr_ratio"] * sl_dist_pct
+
+    mfe, mae, t_mfe, t_mae = _compute_mfe_mae(
+        price_t=inputs["price_t"], candles=ohlcv_1m, ts0=decision.ts,
+    )
+
+    matured = now >= decision.ts + _minutes(horizon_min)
+    forward_return_pct = _forward_return(inputs["price_t"], ohlcv_1m, decision.ts, horizon_min)
+
+    classification = _classify(
+        decision=decision, mfe=mfe, mae=mae, t_mfe=t_mfe, t_mae=t_mae,
+        sl_dist_pct=sl_dist_pct, tp_target_pct=tp_target_pct,
+        matured=matured, associated_trade=associated_trade,
+    )
+
+    return DecisionAttribution(
+        decision_id=decision.id,
+        horizon_min=horizon_min,
+        matured=matured,
+        forward_return_pct=forward_return_pct,
+        mfe_pct=mfe,
+        mae_pct=mae,
+        time_to_mfe_min=t_mfe,
+        time_to_mae_min=t_mae,
+        sl_dist_pct=sl_dist_pct,
+        tp_target_pct=tp_target_pct,
+        classification=classification,
+        computed_at=now,
+    )
+
+
+def _unknown(decision: Any, horizon_min: int, now: datetime) -> DecisionAttribution:
+    return DecisionAttribution(
+        decision_id=decision.id,
+        horizon_min=horizon_min, matured=False,
+        forward_return_pct=None, mfe_pct=None, mae_pct=None,
+        time_to_mfe_min=None, time_to_mae_min=None,
+        sl_dist_pct=None, tp_target_pct=None,
+        classification="UNKNOWN", computed_at=now,
+    )
+
+
+def _minutes(n: int) -> timedelta:
+    return timedelta(minutes=n)
+
+
+def _forward_return(price_t: float, candles: list[Any], ts0: datetime, horizon_min: int) -> float | None:
+    if not candles:
+        return None
+    target_ts = ts0 + _minutes(horizon_min)
+    last = candles[-1]
+    for c in reversed(candles):
+        if c.time <= target_ts:
+            last = c
+            break
+    return (float(last.close) - price_t) / price_t * 100
+
+
+def _classify(
+    *,
+    decision: Any,
+    mfe: float | None,
+    mae: float | None,
+    t_mfe: int | None,
+    t_mae: int | None,
+    sl_dist_pct: float,
+    tp_target_pct: float,
+    matured: bool,
+    associated_trade: Any | None,
+) -> Classification:
+    action = (decision.output or {}).get("action")
+    if mfe is None or mae is None:
+        return "UNKNOWN"
+    mfe_hits_first = (
+        mae > -sl_dist_pct
+        or (t_mfe is not None and t_mae is not None and t_mfe < t_mae)
+        or (t_mfe is not None and t_mae is None)
+    )
+    if action == "HOLD":
+        if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
+            return "MISSED_OPPORTUNITY"
+    return "PENDING"
 
 
 def _compute_mfe_mae(

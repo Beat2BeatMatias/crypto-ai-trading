@@ -90,6 +90,33 @@ def test_compute_mfe_mae_drop_then_recover():
     assert t_mfe == 2
 
 
+def test_classify_hold_as_missed_when_mfe_exceeds_target_and_no_sl_hit():
+    """AC OA-02: price_t=100, atr_pct=1.0, sl_mult=0.3, rr=1.3 → SL_dist=0.3%, TP_target=0.39%.
+    MFE +0.5% > tp_target, MAE -0.05% > -SL_dist, MFE alcanzado primero → MISSED_OPPORTUNITY.
+    """
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0, "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3,
+        },
+        output={"action": "HOLD"},
+        ts=t0,
+    )
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.05, low=99.95, close=100.05),
+        _candle(t0 + timedelta(minutes=10), high=100.5, low=100.0, close=100.5),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "MISSED_OPPORTUNITY"
+    assert result.mfe_pct == pytest.approx(0.5, abs=1e-3)
+    assert result.tp_target_pct == pytest.approx(0.39, abs=1e-3)
+    assert result.matured is True
+
+
 def _make_decision(*, input: dict, output: dict, ts=None, executed=False):
     """Helper for tests — minimal Decision-like object without DB."""
     from types import SimpleNamespace
