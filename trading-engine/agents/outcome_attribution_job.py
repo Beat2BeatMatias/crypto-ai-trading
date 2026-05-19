@@ -55,13 +55,12 @@ async def _fetch_ohlcv_1m(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def _upsert_outcome(session: AsyncSession, attr) -> None:
+async def _upsert_outcome(session: AsyncSession, attr, *, dialect_name: str = "postgresql") -> None:
     """Dialect-agnostic UPSERT on (decision_id) PK.
 
     Postgres uses ON CONFLICT; SQLite (tests) uses delete + insert (simpler, transactional).
+    dialect_name is passed by the caller (outcome_attribution_tick knows the engine dialect).
     """
-    bind = session.get_bind()
-    dialect = bind.dialect.name if bind is not None else "postgresql"
     payload = dict(
         decision_id=attr.decision_id,
         horizon_min=attr.horizon_min,
@@ -76,7 +75,7 @@ async def _upsert_outcome(session: AsyncSession, attr) -> None:
         classification=attr.classification,
         computed_at=attr.computed_at,
     )
-    if dialect == "postgresql":
+    if dialect_name == "postgresql":
         stmt = pg_insert(DecisionOutcome).values(**payload)
         stmt = stmt.on_conflict_do_update(
             index_elements=["decision_id"],
@@ -120,7 +119,7 @@ async def outcome_attribution_tick(
                 decision=d, ohlcv_1m=window, associated_trade=trade,
                 horizon_min=horizon_min, now=now,
             )
-            await _upsert_outcome(session, attr)
+            await _upsert_outcome(session, attr, dialect_name=_get_dialect_name(session))
             processed += 1
         await session.commit()
         logger.info("outcome_attribution.job.completed", processed=processed)
@@ -128,6 +127,14 @@ async def outcome_attribution_tick(
 
 def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _get_dialect_name(session: AsyncSession) -> str:
+    """Return the SQL dialect name from the session's engine, or 'postgresql' as fallback."""
+    try:
+        return session.get_bind().dialect.name
+    except Exception:
+        return "postgresql"
 
 
 def _index_ohlcv_by_minute(rows: Iterable[Ohlcv]) -> dict[datetime, Ohlcv]:

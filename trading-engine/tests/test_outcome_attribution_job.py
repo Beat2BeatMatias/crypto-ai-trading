@@ -149,9 +149,9 @@ async def test_fetch_candidates_returns_decisions_in_window(session):
     await session.commit()
 
     candidates = await _fetch_candidates(session, now=now)
-    ids = {c.id for c in candidates}
-    assert fresh.id in ids
-    assert done.id not in ids
+    # should be exactly the fresh decision without any outcome
+    assert len(candidates) == 1
+    assert candidates[0].id == fresh.id
 
 
 async def test_upsert_outcome_inserts_then_updates(session):
