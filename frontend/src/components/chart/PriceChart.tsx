@@ -17,7 +17,7 @@ import { type LinePoint } from "./indicators";
 
 import { api } from "../../api/client";
 import { useWebSocket, type WSEvent } from "../../hooks/useWebSocket";
-import type { Candle, Timeframe, Trade } from "../../types";
+import type { Candle, Timeframe, Trade, DecisionOutcome } from "../../types";
 import ReasoningBlock from "../ReasoningBlock";
 import { TIMEFRAMES, bucketStart, timeframeFromConfigMinutes, timeframeSeconds } from "./timeframe";
 import { bollingerBands, ema } from "./indicators";
@@ -52,6 +52,8 @@ const COLORS = {
   decisionBuy: "#26a69a",
   decisionSell: "#ef5350",
   decisionHold: "#71717a",
+  missedOpportunity: "#f59e0b",
+  blockedGood: "#f59e0b80",
 };
 
 function toUtc(iso: string): UTCTimestamp {
@@ -116,7 +118,9 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
     bb: true,
     decisions: true,
     closedTrades: true,
+    outcomes: true,
   });
+  const [outcomes, setOutcomes] = useState<DecisionOutcome[]>([]);
   const [indicatorValues, setIndicatorValues] = useState<{
     ema20: number | null;
     ema50: number | null;
@@ -302,6 +306,13 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
   }, []);
 
   useEffect(() => {
+    const load = () => api.outcomes(24).then(setOutcomes).catch(() => {});
+    load();
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
     candlesRef.current = candles;
     const data = toCandlestickData(candles);
 
@@ -418,6 +429,9 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
 
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
     const out: SeriesMarker<Time>[] = [];
+    const outcomeByDecisionId = new Map(
+      outcomes.map((o) => [o.decision_id, o])
+    );
 
     // Posiciones abiertas: flecha visible con precio (son pocas, siempre con label)
     openTrades.forEach((t) => {
@@ -463,11 +477,33 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
 
     if (showOverlays.decisions) {
       decisions.forEach((d) => {
-        if (!d.action || d.action === "HOLD") return;
-        const color = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
+        const outcome = outcomeByDecisionId.get(d.id);
 
+        if (d.action === "HOLD" || !d.action) {
+          if (!showOverlays.outcomes) return;
+          if (outcome?.classification === "MISSED_OPPORTUNITY") {
+            const label = outcome.mfe_pct != null && outcome.mfe_pct >= 1
+              ? `miss +${outcome.mfe_pct.toFixed(1)}%`
+              : "";
+            out.push({
+              time: toUtc(d.ts),
+              position: "aboveBar",
+              color: COLORS.missedOpportunity,
+              shape: "circle",
+              size: 0.8,
+              text: label,
+            });
+          }
+          return;
+        }
+
+        const baseColor = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
         if (d.executed) {
-          // Decisiones ejecutadas: flecha mediana con label de acción
+          let color = baseColor;
+          if (showOverlays.outcomes && outcome) {
+            if (outcome.classification === "GOOD_BUY") color = COLORS.decisionBuy;
+            else if (outcome.classification === "BAD_BUY") color = COLORS.decisionSell;
+          }
           out.push({
             time: toUtc(d.ts),
             position: d.action === "BUY" ? "belowBar" : "aboveBar",
@@ -477,21 +513,31 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
             text: d.action,
           });
         } else {
-          // Decisiones bloqueadas: punto muy pequeño sin texto
-          out.push({
-            time: toUtc(d.ts),
-            position: d.action === "BUY" ? "belowBar" : "aboveBar",
-            color: `${color}55`,
-            shape: "circle",
-            size: 0.3,
-            text: "",
-          });
+          if (showOverlays.outcomes && outcome?.classification === "BLOCKED_GOOD_TRADE") {
+            out.push({
+              time: toUtc(d.ts),
+              position: "belowBar",
+              color: COLORS.blockedGood,
+              shape: "circle",
+              size: 0.7,
+              text: "",
+            });
+          } else {
+            out.push({
+              time: toUtc(d.ts),
+              position: d.action === "BUY" ? "belowBar" : "aboveBar",
+              color: `${baseColor}55`,
+              shape: "circle",
+              size: 0.3,
+              text: "",
+            });
+          }
         }
       });
     }
 
     return out.sort((a, b) => (a.time as number) - (b.time as number));
-  }, [openTrades, closedTrades, decisions, showOverlays.closedTrades, showOverlays.decisions]);
+  }, [openTrades, closedTrades, decisions, outcomes, showOverlays.closedTrades, showOverlays.decisions, showOverlays.outcomes]);
 
   useEffect(() => {
     markersPluginRef.current?.setMarkers(markers);
@@ -621,6 +667,11 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
               label="Señales"
               active={showOverlays.decisions}
               onClick={() => setShowOverlays((s) => ({ ...s, decisions: !s.decisions }))}
+            />
+            <Toggle
+              label="Outcomes"
+              active={showOverlays.outcomes}
+              onClick={() => setShowOverlays((s) => ({ ...s, outcomes: !s.outcomes }))}
             />
           </div>
         </div>
