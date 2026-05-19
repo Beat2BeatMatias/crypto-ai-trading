@@ -682,6 +682,34 @@ async def test_apply_suggestions_rejects_removed_legacy_keys(session, fake_llm):
         assert "no elegible" in r["reject_reason"]
 
 
+async def test_apply_suggestions_rejects_decisor_interval_min(session, fake_llm):
+    # GIVEN a Supervisor and a suggestion to modify decisor_interval_min
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"decisor_interval_min": 10}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "decisor_interval_min", "current": 10, "suggested": 5,
+             "reason": "Alta volatilidad detectada."},
+        ],
+        "summary": "",
+    }
+
+    # WHEN we apply
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN the suggestion is rejected — el Supervisor no puede modificar el intervalo de decisión
+    assert len(applied) == 0
+    assert len(rejected) == 1
+    assert "no elegible" in rejected[0]["reject_reason"]
+
+    # AND nothing is persisted in config_history
+    persisted = (await session.execute(
+        select(ConfigHistory).where(ConfigHistory.key == "decisor_interval_min")
+    )).scalars().all()
+    assert len(persisted) == 0
+
+
 def test_normalize_bool_accepts_canonical_forms():
     from agents.supervisor import Supervisor
     assert Supervisor._normalize_bool(True) is True

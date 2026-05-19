@@ -33,8 +33,6 @@ _SAFE_BOUNDS: dict[str, tuple] = {
     "min_rr_ratio":                (1.0, 3.0),
     "max_position_pct":            (0.01, 0.20),
     "min_fees_to_tp_ratio":        (1.5, 6.0),
-    # OPERACIONAL
-    "decisor_interval_min":        (5, 60),
     # GUÍAS LLM con impacto medible (CoherenceChecker o anclaje fuerte del prompt)
     "expected_holding_max_min":    (30, 1440),  # auditado por C6
     "cooldown_after_sell_min":     (0, 120),    # norma dura en el system prompt
@@ -146,7 +144,10 @@ ENFORCEMENT — Risk Gate los aplica con dureza:
 - min_rr_ratio: 1.0 a 3.0 — subir si avg_loss > avg_win con persistencia.
 - max_position_pct: 0.01 a 0.20 — subir SOLO si WR>60% y PF>1.5 sostenidos. Bajar ante drawdown.
 - min_fees_to_tp_ratio: 1.5 a 6.0 — subir si los TPs apenas pasan fees (rentabilidad marginal).
-- decisor_interval_min: 5 a 60 — bajar en alta volatilidad, subir en mercado lateral.
+
+PARÁMETROS DE SOLO LECTURA (informativo, NO sugerir cambios):
+- decisor_interval_min: se muestra como contexto operativo. El operador es el único que puede modificarlo.
+  NO incluir este parámetro en el array `suggestions`.
 
 GUÍAS LLM (sólo recalibrar si hay desalineación medible):
 - expected_holding_max_min: 30 a 1440 — auditado por CoherenceChecker C6.
