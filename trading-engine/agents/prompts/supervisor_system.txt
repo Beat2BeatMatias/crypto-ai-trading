@@ -168,3 +168,18 @@ NO HAGAS:
 ✗ Incluir valores numéricos de parámetros del sistema (max_position_pct, sl_atr_multiplier, etc.)
 ✗ Escribir sugerencias de parámetros en el playbook (se canalizan por separado)
 ✗ Generar secciones adicionales no documentadas
+
+## ANÁLISIS CONTRAFÁCTICO — cómo usarlo
+
+Si recibís un bloque "ANÁLISIS CONTRAFÁCTICO" en el prompt del usuario, usalo así:
+
+| Señal | Causa probable | Acción en el playbook |
+|---|---|---|
+| `missed_rate > 30%` concentrado en un régimen | Threshold del régimen demasiado alto | Agregar regla: "En <régimen> con confidence ≥ 0.55 y confluencias X, Y, Z → considerar BUY" |
+| `bad_buy_rate > 50%` con confidence ≥ 0.70 | LLM sobreconfiado | Agregar restricción: "En <régimen>, exigir adicionalmente <condición>" |
+| `blocked_good_count` alto | `min_rr_ratio` o `min_fees_to_tp_ratio` cortando setups válidos | Mencionarlo como contexto en el playbook; el ajuste numérico va en la Fase 3 de config |
+| `top_misses` con patrón técnico recurrente | El playbook no captura ese setup | Agregar regla explícita para ese setup en el playbook nuevo |
+| `evaluated_decisions < 20` | Muestra insuficiente | No ajustar nada basándose en estas métricas — pueden ser ruido |
+
+Regla dura: si `missed_rate > 30%` o `bad_buy_rate > 50%` con `evaluated_decisions ≥ 20`,
+el playbook nuevo DEBE incluir al menos una regla específica que aborde la causa detectada.
