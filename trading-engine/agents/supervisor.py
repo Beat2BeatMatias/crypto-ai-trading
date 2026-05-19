@@ -70,6 +70,14 @@ _RATIFY_DEFAULTS: dict[str, float] = {
 }
 
 
+def _safe_float(value) -> float | None:
+    """Convert a value to float, returning None if conversion fails."""
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_json_strict(text: str) -> dict:
     """Parse JSON tolerating optional ```json fences emitted by some LLM providers."""
     raw = text.strip()
@@ -1117,16 +1125,50 @@ class Supervisor:
         missed_rate = (missed_count / evaluated_decisions * 100) if evaluated_decisions > 0 else 0.0
         bad_buy_rate = (bad_buy_count / max(good_buy_count + bad_buy_count, 1) * 100)
 
+        decisions_by_id = {d.id: d for d in decisions}
         top_misses = sorted(
             [o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"],
             key=lambda o: float(o.mfe_pct or 0),
             reverse=True,
         )[:5]
-        top_misses_block = "\n".join([
-            f"  miss +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
-            f"(mae {float(o.mae_pct or 0):+.2f}%, sl_dist {float(o.sl_dist_pct or 0):.2f}%)"
-            for o in top_misses
-        ]) or "  (sin misses en el período)"
+        top_misses_lines = []
+        for o in top_misses:
+            d = decisions_by_id.get(o.decision_id)
+            inp = (d.input or {}) if d else {}
+            out = (d.output or {}) if d else {}
+            regime = out.get("regime") or inp.get("regime") or "?"
+            confidence = out.get("confidence") or "?"
+            confluences = out.get("confluences") or []
+            reasoning = (out.get("reasoning") or "")[:120]
+            rsi_15m = _safe_float(inp.get("rsi_15m") or inp.get("rsi"))
+            macd_hist = _safe_float(inp.get("hist_15m") or inp.get("hist"))
+            adx = _safe_float(inp.get("adx_15m") or inp.get("adx"))
+            vol_ratio = _safe_float(inp.get("volume_ratio"))
+            bb_pct = _safe_float(inp.get("bb_pct_15m") or inp.get("bb_pct_5m"))
+            cross_tf = (inp.get("block_f_cross_tf") or {}).get("alignment") or "?"
+            conf_str = f"{confidence:.2f}" if isinstance(confidence, float) else str(confidence)
+            indicators = (
+                f"RSI15m={rsi_15m:.0f}" if rsi_15m is not None else ""
+            ) + (
+                f" MACD_hist={macd_hist:+.1f}" if macd_hist is not None else ""
+            ) + (
+                f" ADX={adx:.0f}" if adx is not None else ""
+            ) + (
+                f" vol_ratio={vol_ratio:.1f}x" if vol_ratio is not None else ""
+            ) + (
+                f" BB%={bb_pct:.0f}" if bb_pct is not None else ""
+            ) + (
+                f" TF_align={cross_tf}" if cross_tf != "?" else ""
+            )
+            top_misses_lines.append(
+                f"  [{(d.ts.strftime('%H:%M') if d else '?')} UTC] "
+                f"miss +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
+                f"(mae {float(o.mae_pct or 0):+.2f}%) | "
+                f"régimen={regime} conf={conf_str} confluencias={confluences}\n"
+                f"    indicadores: {indicators.strip()}\n"
+                f"    reasoning: {reasoning}"
+            )
+        top_misses_block = "\n".join(top_misses_lines) or "  (sin misses en el período)"
 
         return {
             "total_decisions": len(decisions),
