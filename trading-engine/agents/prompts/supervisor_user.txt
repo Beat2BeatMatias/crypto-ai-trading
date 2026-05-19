@@ -42,6 +42,14 @@ AUDITORÍA LLM-CENTRIC (v1.3 — Decisor autónomo):
   C4/C5/C6 son derivas operacionales (cooldown ignorado, confluencias insuficientes, holding fuera de rango)
   — pueden indicar que el playbook flexibiliza demasiado o que las guías de config quedaron obsoletas.
 
+ANÁLISIS CONTRAFÁCTICO (últimas 24h, horizonte {expected_holding_max_min}min):
+  Decisiones evaluadas: {evaluated_decisions} / {total_decisions}
+  HOLDs missed: {missed_count} ({missed_rate:.1f}%) | BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%)
+  Bloqueados buenos: {blocked_good_count} | Bloqueados correctamente: {correctly_blocked_count}
+
+TOP MISSES (HOLDs que hubieran ganado):
+{top_misses_block}
+
 MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%)
   Rango 24h: ${low_24h:,.0f} - ${high_24h:,.0f}
