@@ -138,6 +138,12 @@ def _classify(
         if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
             return "MISSED_OPPORTUNITY"
         return "GOOD_HOLD"
+    if action == "BUY" and not decision.executed:
+        if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
+            return "PENDING"
+        if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
+            return "BLOCKED_GOOD_TRADE"
+        return "CORRECTLY_BLOCKED"
     return "PENDING"
 
 

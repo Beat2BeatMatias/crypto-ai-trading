@@ -160,6 +160,47 @@ def test_classify_hold_as_good_when_mfe_below_tp_target():
     assert result.classification == "GOOD_HOLD"
 
 
+def test_classify_buy_rejected_as_blocked_good_when_mfe_hits_first():
+    """AC OA-04: BUY rechazado, MFE llega al TP_target sin MAE cruzar SL → BLOCKED_GOOD_TRADE."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=False,
+    )
+    candles = [
+        _candle(t0 + timedelta(minutes=2), high=100.5, low=99.95, close=100.4),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "BLOCKED_GOOD_TRADE"
+
+
+def test_classify_buy_rejected_as_correctly_blocked_when_mae_hits_first():
+    """BUY rechazado y precio cae a -SL_dist antes de tocar TP_target → CORRECTLY_BLOCKED."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=False,
+    )
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.5, close=99.6),
+        _candle(t0 + timedelta(minutes=10), high=100.5, low=99.7, close=100.4),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "CORRECTLY_BLOCKED"
+
+
 def _make_decision(*, input: dict, output: dict, ts=None, executed=False):
     """Helper for tests — minimal Decision-like object without DB."""
     from types import SimpleNamespace
