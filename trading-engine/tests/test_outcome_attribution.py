@@ -201,6 +201,64 @@ def test_classify_buy_rejected_as_correctly_blocked_when_mae_hits_first():
     assert result.classification == "CORRECTLY_BLOCKED"
 
 
+def test_classify_executed_buy_with_positive_pnl_as_good_buy():
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=True,
+    )
+    trade = SimpleNamespace(pnl_pct=Decimal("1.2"))
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.95, close=100.05),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=trade,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "GOOD_BUY"
+
+
+def test_classify_executed_buy_with_negative_pnl_as_bad_buy():
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=True,
+    )
+    trade = SimpleNamespace(pnl_pct=Decimal("-0.5"))
+    candles = [
+        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.5, close=99.6),
+    ]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=trade,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "BAD_BUY"
+
+
+def test_classify_executed_buy_without_associated_trade_is_unknown():
+    """Decisión ejecutada pero sin trade asociado todavía (race) → UNKNOWN."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=True,
+    )
+    candles = [_candle(t0 + timedelta(minutes=1), high=100.1, low=99.95, close=100.05)]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "UNKNOWN"
+
+
 def _make_decision(*, input: dict, output: dict, ts=None, executed=False):
     """Helper for tests — minimal Decision-like object without DB."""
     from types import SimpleNamespace

@@ -132,6 +132,14 @@ def _classify(
         or (t_mfe is not None and t_mae is not None and t_mfe < t_mae)
         or (t_mfe is not None and t_mae is None)
     )
+    if action == "BUY" and decision.executed:
+        if associated_trade is None or getattr(associated_trade, "pnl_pct", None) is None:
+            return "UNKNOWN"
+        try:
+            pnl = float(associated_trade.pnl_pct)
+        except (TypeError, ValueError):
+            return "UNKNOWN"
+        return "GOOD_BUY" if pnl > 0 else "BAD_BUY"
     if action == "HOLD":
         if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
             return "PENDING"
