@@ -32,6 +32,39 @@ export interface Decision {
   trade_id: string | null; executed: boolean; rejected_reason: string | null;
 }
 
+export type OutcomeClassification =
+  | "MISSED_OPPORTUNITY"
+  | "GOOD_HOLD"
+  | "BLOCKED_GOOD_TRADE"
+  | "CORRECTLY_BLOCKED"
+  | "GOOD_BUY"
+  | "BAD_BUY"
+  | "GOOD_SELL"
+  | "BAD_SELL"
+  | "PENDING"
+  | "UNKNOWN";
+
+export interface DecisionOutcome {
+  decision_id: string;
+  ts: string;
+  action: string | null;
+  confidence: number | null;
+  regime: string | null;
+  executed: boolean;
+  rejected_reason: string | null;
+  horizon_min: number;
+  matured: boolean;
+  forward_return_pct: number | null;
+  mfe_pct: number | null;
+  mae_pct: number | null;
+  time_to_mfe_min: number | null;
+  time_to_mae_min: number | null;
+  sl_dist_pct: number | null;
+  tp_target_pct: number | null;
+  classification: OutcomeClassification;
+  computed_at: string;
+}
+
 export interface ConfigEntry {
   key: string; value: string;
   value_type: "int" | "float" | "string" | "bool" | "json";
