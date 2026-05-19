@@ -22,6 +22,28 @@ def _candle(t, *, high, low, close=None, open_=None):
     )
 
 
+def _dense_candles(t0, *, horizon_min, peaks):
+    """Build dense per-minute candles for a window. `peaks` is a list of dicts
+    {min, high, low, close?} overriding specific minutes; other minutes get neutral
+    candles (high=low=close=100.0) that don't affect MFE/MAE around price_t=100.
+    """
+    peaks_by_min = {p["min"]: p for p in peaks}
+    out = []
+    for i in range(1, horizon_min + 1):
+        if i in peaks_by_min:
+            p = peaks_by_min[i]
+            out.append(_candle(
+                t0 + timedelta(minutes=i),
+                high=p["high"], low=p["low"], close=p.get("close"),
+            ))
+        else:
+            out.append(_candle(
+                t0 + timedelta(minutes=i),
+                high=100.0, low=100.0, close=100.0,
+            ))
+    return out
+
+
 def test_decision_attribution_dataclass_is_frozen():
     attr = DecisionAttribution(
         decision_id=uuid4(),
@@ -103,10 +125,10 @@ def test_classify_hold_as_missed_when_mfe_exceeds_target_and_no_sl_hit():
         output={"action": "HOLD"},
         ts=t0,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.05, low=99.95, close=100.05),
-        _candle(t0 + timedelta(minutes=10), high=100.5, low=100.0, close=100.5),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.05, "low": 99.95, "close": 100.05},
+        {"min": 10, "high": 100.5, "low": 100.0, "close": 100.5},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -130,10 +152,10 @@ def test_classify_hold_as_good_when_mae_exceeds_sl_before_mfe():
         output={"action": "HOLD"},
         ts=t0,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.6, close=99.7),
-        _candle(t0 + timedelta(minutes=5), high=100.5, low=99.9, close=100.4),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.6, "close": 99.7},
+        {"min": 5, "high": 100.5, "low": 99.9, "close": 100.4},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -150,9 +172,9 @@ def test_classify_hold_as_good_when_mfe_below_tp_target():
         output={"action": "HOLD"},
         ts=t0,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.3, low=99.95, close=100.2),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.3, "low": 99.95, "close": 100.2},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -170,9 +192,9 @@ def test_classify_buy_rejected_as_blocked_good_when_mfe_hits_first():
         ts=t0,
         executed=False,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=2), high=100.5, low=99.95, close=100.4),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 2, "high": 100.5, "low": 99.95, "close": 100.4},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -190,10 +212,10 @@ def test_classify_buy_rejected_as_correctly_blocked_when_mae_hits_first():
         ts=t0,
         executed=False,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.5, close=99.6),
-        _candle(t0 + timedelta(minutes=10), high=100.5, low=99.7, close=100.4),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.5, "close": 99.6},
+        {"min": 10, "high": 100.5, "low": 99.7, "close": 100.4},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -211,9 +233,9 @@ def test_classify_executed_buy_with_positive_pnl_as_good_buy():
         executed=True,
     )
     trade = SimpleNamespace(pnl_pct=Decimal("1.2"))
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.95, close=100.05),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.95, "close": 100.05},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=trade,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -231,9 +253,9 @@ def test_classify_executed_buy_with_negative_pnl_as_bad_buy():
         executed=True,
     )
     trade = SimpleNamespace(pnl_pct=Decimal("-0.5"))
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.5, close=99.6),
-    ]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.5, "close": 99.6},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=trade,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -251,7 +273,9 @@ def test_classify_executed_buy_without_associated_trade_is_unknown():
         ts=t0,
         executed=True,
     )
-    candles = [_candle(t0 + timedelta(minutes=1), high=100.1, low=99.95, close=100.05)]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.95, "close": 100.05},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -269,7 +293,9 @@ def test_classify_executed_sell_with_positive_trade_pnl_as_good_sell():
         executed=True,
     )
     trade = SimpleNamespace(pnl_pct=Decimal("0.8"))
-    candles = [_candle(t0 + timedelta(minutes=1), high=100.1, low=99.9, close=100)]
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.9, "close": 100.0},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=trade,
         horizon_min=240, now=t0 + timedelta(hours=5),
@@ -286,15 +312,35 @@ def test_classify_pending_when_window_not_matured_and_no_resolution():
         output={"action": "HOLD"},
         ts=t0,
     )
-    candles = [
-        _candle(t0 + timedelta(minutes=1), high=100.1, low=99.98, close=100.05),
-    ]
+    candles = _dense_candles(t0, horizon_min=30, peaks=[
+        {"min": 1, "high": 100.1, "low": 99.98, "close": 100.05},
+    ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
         horizon_min=240, now=t0 + timedelta(minutes=30),
     )
     assert result.classification == "PENDING"
     assert result.matured is False
+
+
+def test_coverage_ok_returns_unknown_when_collector_partially_degraded():
+    """Regression: if price_collector delivers only 20 candles in a 240-min window,
+    `_coverage_ok` MUST trigger UNKNOWN (~91.6% missing). Previously a density gate
+    bypassed this case.
+    """
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "HOLD"},
+        ts=t0,
+    )
+    candles = _dense_candles(t0, horizon_min=20, peaks=[])[:20]
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "UNKNOWN"
 
 
 def test_classify_unknown_when_ohlcv_coverage_below_threshold():

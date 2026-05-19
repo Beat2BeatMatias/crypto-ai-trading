@@ -89,24 +89,18 @@ def attribute(
 
 
 _OHLCV_MISSING_THRESHOLD_PCT = 30.0
-_OHLCV_DENSITY_GATE_PCT = 0.1
 
 
 def _coverage_ok(candles: list[Any], horizon_min: int, now: datetime, ts0: datetime) -> bool:
     """True if at least (100 - threshold)% of the expected 1m slots are present.
 
-    The missing-percent rule only triggers once the caller has supplied at least
-    ~10% of the expected candle count. Below that bar we cannot distinguish a
-    broken OHLCV pipeline from a deliberately sparse fixture and we let the
-    classification fall through.
+    `expected` is the smaller of `horizon_min` and elapsed minutes since `ts0`. If the
+    window hasn't elapsed yet (e.g., immature PENDING), we expect proportionally fewer
+    candles. In production OHLCV is dense (1m candles every minute), so this check
+    triggers UNKNOWN only when the price collector has real gaps.
     """
     expected = min(horizon_min, int((now - ts0).total_seconds() // 60))
     if expected <= 0:
-        return True
-    if not candles:
-        return False
-    density_gate = max(1, int(expected * _OHLCV_DENSITY_GATE_PCT))
-    if len(candles) < density_gate:
         return True
     missing_pct = (expected - len(candles)) / expected * 100
     return missing_pct <= _OHLCV_MISSING_THRESHOLD_PCT
