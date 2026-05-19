@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import (
     Decision, Trade, PlaybookVersion, Ohlcv, Indicators,
     ConfigEntry, ConfigHistory, FeeSnapshot, BalanceSnapshot,
+    DecisionOutcome,
 )
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
@@ -1065,6 +1066,35 @@ class Supervisor:
             if buy_confidences else 0.0
         )
 
+        # -- Contrafactual outcomes (PR2) --
+        outcome_rows = (await self.session.execute(
+            select(DecisionOutcome)
+            .join(Decision, Decision.id == DecisionOutcome.decision_id)
+            .where(Decision.ts >= since, Decision.agent == "decisor")
+        )).scalars().all()
+
+        evaluated_decisions = len([o for o in outcome_rows if o.classification not in ("PENDING", "UNKNOWN")])
+        missed_count = len([o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"])
+        bad_buy_count = len([o for o in outcome_rows if o.classification == "BAD_BUY"])
+        blocked_good_count = len([o for o in outcome_rows if o.classification == "BLOCKED_GOOD_TRADE"])
+        correctly_blocked_count = len([o for o in outcome_rows if o.classification == "CORRECTLY_BLOCKED"])
+        good_hold_count = len([o for o in outcome_rows if o.classification == "GOOD_HOLD"])
+        good_buy_count = len([o for o in outcome_rows if o.classification == "GOOD_BUY"])
+
+        missed_rate = (missed_count / evaluated_decisions * 100) if evaluated_decisions > 0 else 0.0
+        bad_buy_rate = (bad_buy_count / max(good_buy_count + bad_buy_count, 1) * 100)
+
+        top_misses = sorted(
+            [o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"],
+            key=lambda o: float(o.mfe_pct or 0),
+            reverse=True,
+        )[:5]
+        top_misses_block = "\n".join([
+            f"  miss +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
+            f"(mae {float(o.mae_pct or 0):+.2f}%, sl_dist {float(o.sl_dist_pct or 0):.2f}%)"
+            for o in top_misses
+        ]) or "  (sin misses en el período)"
+
         # -- A2: Max drawdown real y Sharpe del período --
         sorted_closed = sorted(trades, key=lambda t: t.ts_close or t.ts_open)
         running_pnl = 0.0
@@ -1131,4 +1161,16 @@ class Supervisor:
             "two_pass_triggered_count": two_pass_count,
             "avg_position_size_pct": avg_position_size_pct,
             "avg_buy_confidence": avg_buy_confidence,
+            # Contrafactual (PR2)
+            "evaluated_decisions": evaluated_decisions,
+            "total_outcome_rows": len(outcome_rows),
+            "missed_count": missed_count,
+            "bad_buy_count": bad_buy_count,
+            "blocked_good_count": blocked_good_count,
+            "correctly_blocked_count": correctly_blocked_count,
+            "good_hold_count": good_hold_count,
+            "good_buy_count": good_buy_count,
+            "missed_rate": round(missed_rate, 1),
+            "bad_buy_rate": round(bad_buy_rate, 1),
+            "top_misses_block": top_misses_block,
         }
