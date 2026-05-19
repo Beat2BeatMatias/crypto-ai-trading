@@ -77,6 +77,35 @@ class Decision(Base):
     )
 
 
+class DecisionOutcome(Base):
+    __tablename__ = "decision_outcomes"
+
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("decisions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    horizon_min: Mapped[int] = mapped_column(Integer, nullable=False)
+    matured: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    forward_return_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    mfe_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    mae_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    time_to_mfe_min: Mapped[int | None] = mapped_column(Integer)
+    time_to_mae_min: Mapped[int | None] = mapped_column(Integer)
+    sl_dist_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    tp_target_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    classification: Mapped[str] = mapped_column(String(32), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+
+    decision: Mapped["Decision"] = relationship("Decision", foreign_keys=[decision_id])
+
+    __table_args__ = (
+        Index("idx_decision_outcomes_classification", "classification", "computed_at"),
+    )
+
+
 class Trade(Base):
     __tablename__ = "trades"
 
