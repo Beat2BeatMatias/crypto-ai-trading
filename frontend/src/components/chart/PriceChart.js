@@ -4,6 +4,7 @@ import { CandlestickSeries, HistogramSeries, LineSeries, createChart, } from "li
 import { createSeriesMarkers } from "lightweight-charts";
 import { api } from "../../api/client";
 import { useWebSocket } from "../../hooks/useWebSocket";
+import ReasoningBlock from "../ReasoningBlock";
 import { TIMEFRAMES, bucketStart, timeframeFromConfigMinutes, timeframeSeconds } from "./timeframe";
 import { bollingerBands, ema } from "./indicators";
 const COLORS = {
@@ -21,6 +22,8 @@ const COLORS = {
     decisionBuy: "#26a69a",
     decisionSell: "#ef5350",
     decisionHold: "#71717a",
+    missedOpportunity: "#f59e0b",
+    blockedGood: "#f59e0b80",
 };
 function toUtc(iso) {
     return Math.floor(new Date(iso).getTime() / 1000);
@@ -71,7 +74,9 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
         bb: true,
         decisions: true,
         closedTrades: true,
+        outcomes: true,
     });
+    const [outcomes, setOutcomes] = useState([]);
     const [indicatorValues, setIndicatorValues] = useState({ ema20: null, ema50: null, ema200: null });
     const [selectedDecisions, setSelectedDecisions] = useState([]);
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -243,6 +248,12 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
         return () => clearInterval(id);
     }, []);
     useEffect(() => {
+        const load = () => api.outcomes(24).then(setOutcomes).catch(() => { });
+        load();
+        const id = setInterval(load, 60_000);
+        return () => clearInterval(id);
+    }, []);
+    useEffect(() => {
         candlesRef.current = candles;
         const data = toCandlestickData(candles);
         // Guardar la vela live antes de que setData la pise
@@ -260,12 +271,15 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
                 lastCandleRef.current = prevLive;
             }
             else if (prevTime === apiTime) {
-                // Mismo bucket: fusionar — el high/low live puede superar al de la DB
+                // Mismo bucket: respetar los valores OHLCV reales de la API como base
+                // y solo actualizar close con el último precio live.
+                // No acumular high/low del prevLive porque puede haber quedado
+                // distorsionado por tickers previos fuera de rango.
                 const merged = {
                     time: lastFromApi.time,
                     open: lastFromApi.open,
-                    high: Math.max(lastFromApi.high, prevLive.high),
-                    low: Math.min(lastFromApi.low, prevLive.low),
+                    high: lastFromApi.high,
+                    low: lastFromApi.low,
                     close: prevLive.close,
                 };
                 candleSeriesRef.current?.update(merged);
@@ -350,6 +364,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
     }, [openTrades]);
     const markers = useMemo(() => {
         const out = [];
+        const outcomeByDecisionId = new Map(outcomes.map((o) => [o.decision_id, o]));
         // Posiciones abiertas: flecha visible con precio (son pocas, siempre con label)
         openTrades.forEach((t) => {
             out.push({
@@ -390,11 +405,34 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
         }
         if (showOverlays.decisions) {
             decisions.forEach((d) => {
-                if (!d.action || d.action === "HOLD")
+                const outcome = outcomeByDecisionId.get(d.id);
+                if (d.action === "HOLD" || !d.action) {
+                    if (!showOverlays.outcomes)
+                        return;
+                    if (outcome?.classification === "MISSED_OPPORTUNITY") {
+                        const label = outcome.mfe_pct != null && outcome.mfe_pct >= 1
+                            ? `miss +${outcome.mfe_pct.toFixed(1)}%`
+                            : "";
+                        out.push({
+                            time: toUtc(d.ts),
+                            position: "aboveBar",
+                            color: COLORS.missedOpportunity,
+                            shape: "circle",
+                            size: 0.8,
+                            text: label,
+                        });
+                    }
                     return;
-                const color = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
+                }
+                const baseColor = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
                 if (d.executed) {
-                    // Decisiones ejecutadas: flecha mediana con label de acción
+                    let color = baseColor;
+                    if (showOverlays.outcomes && outcome) {
+                        if (outcome.classification === "GOOD_BUY")
+                            color = COLORS.decisionBuy;
+                        else if (outcome.classification === "BAD_BUY")
+                            color = COLORS.decisionSell;
+                    }
                     out.push({
                         time: toUtc(d.ts),
                         position: d.action === "BUY" ? "belowBar" : "aboveBar",
@@ -405,20 +443,31 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
                     });
                 }
                 else {
-                    // Decisiones bloqueadas: punto muy pequeño sin texto
-                    out.push({
-                        time: toUtc(d.ts),
-                        position: d.action === "BUY" ? "belowBar" : "aboveBar",
-                        color: `${color}55`,
-                        shape: "circle",
-                        size: 0.3,
-                        text: "",
-                    });
+                    if (showOverlays.outcomes && outcome?.classification === "BLOCKED_GOOD_TRADE") {
+                        out.push({
+                            time: toUtc(d.ts),
+                            position: "belowBar",
+                            color: COLORS.blockedGood,
+                            shape: "circle",
+                            size: 0.7,
+                            text: "",
+                        });
+                    }
+                    else {
+                        out.push({
+                            time: toUtc(d.ts),
+                            position: d.action === "BUY" ? "belowBar" : "aboveBar",
+                            color: `${baseColor}55`,
+                            shape: "circle",
+                            size: 0.3,
+                            text: "",
+                        });
+                    }
                 }
             });
         }
         return out.sort((a, b) => a.time - b.time);
-    }, [openTrades, closedTrades, decisions, showOverlays.closedTrades, showOverlays.decisions]);
+    }, [openTrades, closedTrades, decisions, outcomes, showOverlays.closedTrades, showOverlays.decisions, showOverlays.outcomes]);
     useEffect(() => {
         markersPluginRef.current?.setMarkers(markers);
     }, [markers]);
@@ -453,11 +502,17 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
                 }
             }
             else {
+                // Limitar extensión de bigotes: solo mover high/low si el precio
+                // está dentro de un 5% del rango actual. Precios fuera de ese rango
+                // indican un ticker espurio (testnet, retraso de red, etc.).
+                const WICK_TOLERANCE = 0.05;
+                const withinRange = data.price >= current.low * (1 - WICK_TOLERANCE) &&
+                    data.price <= current.high * (1 + WICK_TOLERANCE);
                 const updated = {
                     time: current.time,
                     open: current.open,
-                    high: Math.max(current.high, data.price),
-                    low: Math.min(current.low, data.price),
+                    high: withinRange ? Math.max(current.high, data.price) : current.high,
+                    low: withinRange ? Math.min(current.low, data.price) : current.low,
                     close: data.price,
                 };
                 series.update(updated);
@@ -488,7 +543,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
     const fmtPrice = (v) => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return (_jsxs("div", { className: "rounded-xl overflow-hidden", style: { background: "#0b0e11" }, children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2", children: [_jsxs("div", { className: "flex items-center gap-3 min-w-0", children: [_jsx("span", { className: "text-sm font-bold text-white tracking-wide", children: "BTC/USDT" }), livePrice != null && (_jsx("span", { className: "text-xl font-mono font-bold", style: { color: COLORS.bullish }, children: fmtPrice(livePrice) })), loading && _jsx("span", { className: "text-xs", style: { color: "#848e9c" }, children: "cargando\u2026" })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("div", { className: "inline-flex rounded gap-0.5", style: { background: "#1e2026" }, children: TIMEFRAMES.map((tf) => (_jsx("button", { onClick: () => setTimeframe(tf), className: "px-2.5 py-1 text-xs font-medium rounded transition-colors", style: timeframe === tf
                                         ? { background: "#2b3139", color: "#f0b90b" }
-                                        : { color: "#848e9c" }, children: tf }, tf))) }), _jsxs("div", { className: "inline-flex rounded gap-0.5 text-xs", style: { background: "#1e2026" }, children: [_jsx(Toggle, { label: "EMA", active: showOverlays.emas, onClick: () => setShowOverlays((s) => ({ ...s, emas: !s.emas })) }), _jsx(Toggle, { label: "BB", active: showOverlays.bb, onClick: () => setShowOverlays((s) => ({ ...s, bb: !s.bb })) }), _jsx(Toggle, { label: "Trades", active: showOverlays.closedTrades, onClick: () => setShowOverlays((s) => ({ ...s, closedTrades: !s.closedTrades })) }), _jsx(Toggle, { label: "Se\u00F1ales", active: showOverlays.decisions, onClick: () => setShowOverlays((s) => ({ ...s, decisions: !s.decisions })) })] })] })] }), showOverlays.emas && (indicatorValues.ema20 || indicatorValues.ema50 || indicatorValues.ema200) && (_jsxs("div", { className: "flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 pb-1.5 text-xs font-mono", children: [indicatorValues.ema20 != null && (_jsxs("span", { style: { color: COLORS.ema20 }, children: ["MA(20) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema20) })] })), indicatorValues.ema50 != null && (_jsxs("span", { style: { color: COLORS.ema50 }, children: ["MA(50) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema50) })] })), indicatorValues.ema200 != null && (_jsxs("span", { style: { color: COLORS.ema200 }, children: ["MA(200) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema200) })] }))] })), _jsx("div", { ref: containerRef, style: { height } }), selectedDecisions.length > 0 && (_jsx(DecisionPanel, { decisions: selectedDecisions, onClose: () => setSelectedDecisions([]) })), _jsx(Legend, { openTrades: openTrades.length })] }));
+                                        : { color: "#848e9c" }, children: tf }, tf))) }), _jsxs("div", { className: "inline-flex rounded gap-0.5 text-xs", style: { background: "#1e2026" }, children: [_jsx(Toggle, { label: "EMA", active: showOverlays.emas, onClick: () => setShowOverlays((s) => ({ ...s, emas: !s.emas })) }), _jsx(Toggle, { label: "BB", active: showOverlays.bb, onClick: () => setShowOverlays((s) => ({ ...s, bb: !s.bb })) }), _jsx(Toggle, { label: "Trades", active: showOverlays.closedTrades, onClick: () => setShowOverlays((s) => ({ ...s, closedTrades: !s.closedTrades })) }), _jsx(Toggle, { label: "Se\u00F1ales", active: showOverlays.decisions, onClick: () => setShowOverlays((s) => ({ ...s, decisions: !s.decisions })) }), _jsx(Toggle, { label: "Outcomes", active: showOverlays.outcomes, onClick: () => setShowOverlays((s) => ({ ...s, outcomes: !s.outcomes })) })] })] })] }), showOverlays.emas && (indicatorValues.ema20 || indicatorValues.ema50 || indicatorValues.ema200) && (_jsxs("div", { className: "flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 pb-1.5 text-xs font-mono", children: [indicatorValues.ema20 != null && (_jsxs("span", { style: { color: COLORS.ema20 }, children: ["MA(20) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema20) })] })), indicatorValues.ema50 != null && (_jsxs("span", { style: { color: COLORS.ema50 }, children: ["MA(50) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema50) })] })), indicatorValues.ema200 != null && (_jsxs("span", { style: { color: COLORS.ema200 }, children: ["MA(200) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema200) })] }))] })), _jsx("div", { ref: containerRef, style: { height } }), selectedDecisions.length > 0 && (_jsx(DecisionPanel, { decisions: selectedDecisions, onClose: () => setSelectedDecisions([]) })), _jsx(Legend, { openTrades: openTrades.length })] }));
 }
 function Toggle({ label, active, onClick }) {
     return (_jsx("button", { onClick: onClick, className: "px-2.5 py-1 rounded transition-colors text-xs", style: active ? { background: "#2b3139", color: "#eaecef" } : { color: "#848e9c" }, children: label }));
@@ -511,7 +566,7 @@ function DecisionPanel({ decisions, onClose }) {
                     const signal = d.output?.signal;
                     const regime = d.output?.market_regime;
                     const risk = d.output?.risk_assessment;
-                    return (_jsxs("div", { className: "px-4 py-3 space-y-2", children: [_jsxs("div", { className: "flex items-center gap-3 flex-wrap", children: [_jsx("span", { style: { color: "#848e9c" }, children: fmtTs(d.ts) }), _jsx("span", { className: "px-2 py-0.5 rounded font-bold text-[11px]", style: { background: `${actionColor(d.action)}22`, color: actionColor(d.action) }, children: d.action ?? "?" }), d.executed ? (_jsx("span", { className: "px-1.5 py-0.5 rounded text-[10px]", style: { background: "#0d2d1a", color: COLORS.decisionBuy }, children: "Ejecutada" })) : (_jsx("span", { className: "px-1.5 py-0.5 rounded text-[10px]", style: { background: "#2d1a1a", color: "#f87171" }, children: "Bloqueada" })), confidence != null && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Confianza: ", _jsx("span", { style: { color: "#eaecef" }, children: typeof confidence === "number" ? `${(confidence * 100).toFixed(0)}%` : confidence })] }))] }), !d.executed && d.rejected_reason && (_jsxs("div", { className: "flex gap-2", children: [_jsx("span", { style: { color: "#848e9c", flexShrink: 0 }, children: "Bloqueada por:" }), _jsx("span", { style: { color: "#fbbf24" }, children: d.rejected_reason })] })), _jsxs("div", { className: "flex flex-wrap gap-x-4 gap-y-1", children: [signal && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Se\u00F1al: ", _jsx("span", { style: { color: "#eaecef" }, children: signal })] })), regime && (_jsxs("span", { style: { color: "#848e9c" }, children: ["R\u00E9gimen: ", _jsx("span", { style: { color: "#eaecef" }, children: regime })] })), risk && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Riesgo: ", _jsx("span", { style: { color: "#eaecef" }, children: risk })] }))] }), reasoning && (_jsxs("p", { className: "leading-relaxed", style: { color: "#c9d1d9", fontStyle: "italic" }, children: ["\"", reasoning, "\""] })), _jsxs("div", { className: "flex flex-wrap gap-x-4 gap-y-0.5", style: { color: "#4b5563" }, children: [_jsx("span", { children: d.model }), d.latency_ms != null && _jsxs("span", { children: [(d.latency_ms / 1000).toFixed(1), "s"] }), d.tokens_in != null && _jsxs("span", { children: [d.tokens_in + (d.tokens_out ?? 0), " tokens"] })] })] }, d.id));
+                    return (_jsxs("div", { className: "px-4 py-3 space-y-2", children: [_jsxs("div", { className: "flex items-center gap-3 flex-wrap", children: [_jsx("span", { style: { color: "#848e9c" }, children: fmtTs(d.ts) }), _jsx("span", { className: "px-2 py-0.5 rounded font-bold text-[11px]", style: { background: `${actionColor(d.action)}22`, color: actionColor(d.action) }, children: d.action ?? "?" }), d.executed ? (_jsx("span", { className: "px-1.5 py-0.5 rounded text-[10px]", style: { background: "#0d2d1a", color: COLORS.decisionBuy }, children: "Ejecutada" })) : (_jsx("span", { className: "px-1.5 py-0.5 rounded text-[10px]", style: { background: "#2d1a1a", color: "#f87171" }, children: "Bloqueada" })), confidence != null && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Confianza: ", _jsx("span", { style: { color: "#eaecef" }, children: typeof confidence === "number" ? `${(confidence * 100).toFixed(0)}%` : confidence })] }))] }), !d.executed && d.rejected_reason && (_jsxs("div", { className: "flex gap-2", children: [_jsx("span", { style: { color: "#848e9c", flexShrink: 0 }, children: "Bloqueada por:" }), _jsx("span", { style: { color: "#fbbf24" }, children: d.rejected_reason })] })), _jsxs("div", { className: "flex flex-wrap gap-x-4 gap-y-1", children: [signal && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Se\u00F1al: ", _jsx("span", { style: { color: "#eaecef" }, children: signal })] })), regime && (_jsxs("span", { style: { color: "#848e9c" }, children: ["R\u00E9gimen: ", _jsx("span", { style: { color: "#eaecef" }, children: regime })] })), risk && (_jsxs("span", { style: { color: "#848e9c" }, children: ["Riesgo: ", _jsx("span", { style: { color: "#eaecef" }, children: risk })] }))] }), reasoning && (_jsx(ReasoningBlock, { reasoning: reasoning, compact: true })), _jsxs("div", { className: "flex flex-wrap gap-x-4 gap-y-0.5", style: { color: "#4b5563" }, children: [_jsx("span", { children: d.model }), d.latency_ms != null && _jsxs("span", { children: [(d.latency_ms / 1000).toFixed(1), "s"] }), d.tokens_in != null && _jsxs("span", { children: [d.tokens_in + (d.tokens_out ?? 0), " tokens"] })] })] }, d.id));
                 }) })] }));
 }
 function Legend({ openTrades }) {

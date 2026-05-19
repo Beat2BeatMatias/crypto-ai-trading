@@ -3,7 +3,7 @@ from typing import Any
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import Trade
+from shared.db.models import Trade, Ohlcv
 from execution.executor import Executor
 
 logger = structlog.get_logger()
@@ -46,6 +46,7 @@ class OrderTracker:
                                  trade_id=str(trade.id), error=str(e))
 
         current_price = await self._fetch_current_price()
+        last_candle_low = await self._fetch_last_candle_low()
 
         try:
             # Obtener fills de venta desde Binance (los 50 más recientes)
@@ -97,16 +98,23 @@ class OrderTracker:
                     continue
 
             # --- Mecanismo 2: software SL guardian ---
-            # Si el precio actual está por debajo del stop_loss, el bracket de Binance
-            # no se ejecutó (gap de precio, testnet, orden no colocada, etc.).
-            # Se emite un market sell de emergencia para garantizar el cierre.
+            # Dispara si el precio actual (ticker puntual) O el low de la última vela
+            # están por debajo del stop_loss. El ticker puntual puede no capturar
+            # el mínimo intravela, por lo que el low de la vela cierra esa brecha.
             sl = float(trade.stop_loss or 0)
-            if sl > 0 and current_price is not None and current_price < sl:
+            sl_breached = sl > 0 and (
+                (current_price is not None and current_price < sl)
+                or (last_candle_low is not None and last_candle_low < sl)
+            )
+            if sl_breached:
+                trigger_price = current_price if (current_price is not None and current_price < sl) else last_candle_low
                 logger.warning(
                     "order_tracker.sl_guardian_triggered",
                     trade_id=str(trade.id),
                     stop_loss=sl,
                     current_price=current_price,
+                    last_candle_low=last_candle_low,
+                    trigger_price=trigger_price,
                 )
                 try:
                     await self._cancel_bracket_orders(trade)
@@ -124,6 +132,25 @@ class OrderTracker:
             return float(ticker.get("last") or ticker.get("close") or 0) or None
         except Exception as e:
             logger.warning("order_tracker.price_fetch_failed", error=str(e))
+            return None
+
+    async def _fetch_last_candle_low(self) -> float | None:
+        """Retorna el low de la última vela 1m almacenada en BD.
+
+        Complementa al ticker puntual: si el precio tocó el SL intravela
+        pero ya rebotó al momento del poll, el ticker no lo detecta pero
+        el low de la vela sí. Usa 1m para máxima resolución temporal.
+        """
+        try:
+            row = (await self.session.execute(
+                select(Ohlcv)
+                .where(Ohlcv.timeframe == "1m")
+                .order_by(Ohlcv.time.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            return float(row.low) if row else None
+        except Exception as e:
+            logger.warning("order_tracker.candle_low_fetch_failed", error=str(e))
             return None
 
     async def _cancel_bracket_orders(self, trade: Trade) -> None:

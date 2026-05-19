@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,8 @@ logger = structlog.get_logger()
 # Binance Spot: STOP_LOSS_LIMIT requiere un precio límite ligeramente por debajo
 # del stop price para garantizar el fill ante pequeños gaps de precio.
 _SL_LIMIT_SLIPPAGE = 0.9985  # 0.15% por debajo del stop price
+_SL_BRACKET_RETRIES = 2
+_SL_BRACKET_RETRY_DELAY_SEC = 2.0
 
 
 class Executor:
@@ -57,26 +60,35 @@ class Executor:
             d.trade_id = trade.id
         await self.session.commit()
 
-        # Colocar brackets SL/TP (best-effort): si fallan, el trade ya está en BD.
+        # Colocar brackets SL/TP (best-effort con retry): si agotan los intentos,
+        # el trade queda en BD con order_id_sl=NULL y el SL Guardian lo cubre.
         # Binance Spot usa STOP_LOSS_LIMIT (no STOP_MARKET, que es solo para Futures).
         sl_order_id: str | None = None
         tp_order_id: str | None = None
 
         if decision.stop_loss is not None:
-            try:
-                sl_limit_price = round(decision.stop_loss * _SL_LIMIT_SLIPPAGE, 2)
-                sl_order = await self.exchange.create_order(
-                    self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
-                    price=sl_limit_price,
-                    params={"stopPrice": decision.stop_loss, "timeInForce": "GTC"},
-                )
-                sl_order_id = str(sl_order.get("id")) if sl_order.get("id") else None
-                logger.info("executor.sl_bracket_placed",
-                            order_id=sl_order_id, stop_price=decision.stop_loss,
-                            limit_price=sl_limit_price)
-            except Exception as e:
-                logger.warning("executor.sl_bracket_failed",
-                               error=str(e), trade_id=str(trade.id))
+            sl_limit_price = round(decision.stop_loss * _SL_LIMIT_SLIPPAGE, 2)
+            for attempt in range(1, _SL_BRACKET_RETRIES + 1):
+                try:
+                    sl_order = await self.exchange.create_order(
+                        self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
+                        price=sl_limit_price,
+                        params={"stopPrice": decision.stop_loss, "timeInForce": "GTC"},
+                    )
+                    sl_order_id = str(sl_order.get("id")) if sl_order.get("id") else None
+                    logger.info("executor.sl_bracket_placed",
+                                order_id=sl_order_id, stop_price=decision.stop_loss,
+                                limit_price=sl_limit_price, attempt=attempt)
+                    break
+                except Exception as e:
+                    logger.warning("executor.sl_bracket_attempt_failed",
+                                   error=str(e), trade_id=str(trade.id), attempt=attempt)
+                    if attempt < _SL_BRACKET_RETRIES:
+                        await asyncio.sleep(_SL_BRACKET_RETRY_DELAY_SEC)
+            else:
+                logger.error("executor.sl_bracket_failed_all_retries",
+                             trade_id=str(trade.id), stop_price=decision.stop_loss,
+                             retries=_SL_BRACKET_RETRIES)
 
         if decision.take_profit is not None:
             try:

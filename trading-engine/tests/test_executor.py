@@ -252,6 +252,64 @@ async def test_execute_buy_uses_stop_loss_limit_order_type(session):
     assert sl_limit_price == pytest.approx(66400.0 * 0.9985, rel=1e-3)
 
 
+async def test_execute_buy_sl_bracket_retries_on_failure(session):
+    # GIVEN un exchange donde el bracket SL falla una vez y luego tiene éxito
+    # (el TP también usa create_order; aquí lo deshabilitamos para aislar el SL)
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-RETRY", avg_price=67000.0, filled=0.001, fee=0.07)
+    sl_attempts = []
+
+    async def _create_order_side_effect(symbol, order_type, side, qty, *args, **kwargs):
+        if order_type == "STOP_LOSS_LIMIT":
+            sl_attempts.append(1)
+            if len(sl_attempts) == 1:
+                raise Exception("transient error")
+            return {"id": "ORD-RETRY-sl"}
+        return {"id": "ORD-TP"}
+
+    exchange.create_order = AsyncMock(side_effect=_create_order_side_effect)
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy
+    trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
+                                        usdt_balance=10000.0)
+
+    # THEN el bracket SL quedó colocado en el segundo intento
+    await session.refresh(trade)
+    assert trade.order_id_sl == "ORD-RETRY-sl"
+    assert len(sl_attempts) == 2
+
+
+async def test_execute_buy_sl_bracket_logs_error_after_all_retries_exhausted(session):
+    # GIVEN un exchange donde el bracket SL falla en todos los intentos
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-NOSL", avg_price=67000.0, filled=0.001, fee=0.07)
+    sl_attempts = []
+
+    async def _create_order_always_fails(symbol, order_type, side, qty, *args, **kwargs):
+        if order_type == "STOP_LOSS_LIMIT":
+            sl_attempts.append(1)
+            raise Exception("permanent error")
+        return {"id": "ORD-TP"}
+
+    exchange.create_order = AsyncMock(side_effect=_create_order_always_fails)
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy
+    trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
+                                        usdt_balance=10000.0)
+
+    # THEN el trade está guardado pero sin bracket SL
+    await session.refresh(trade)
+    assert trade.status == "open"
+    assert trade.order_id_sl is None
+    # AND se intentó exactamente _SL_BRACKET_RETRIES veces
+    from execution.executor import _SL_BRACKET_RETRIES
+    assert len(sl_attempts) == _SL_BRACKET_RETRIES
+
+
 async def test_execute_sell_closes_trade_and_computes_pnl(session):
     # GIVEN an open trade created via execute_buy
     decision_id = uuid.uuid4()

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
+import ReasoningBlock from "../components/ReasoningBlock";
 function Card({ title, children }) {
     return (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5", children: [_jsx("h3", { className: "text-sm font-semibold text-zinc-400 mb-3 uppercase tracking-wide", children: title }), children] }));
 }
@@ -23,6 +24,25 @@ function EngineStatusPill({ health }) {
     const label = paused ? "Engine pausado" : slow ? "Engine lento" : "Engine activo";
     return (_jsxs("div", { className: "flex items-center gap-2 border-l border-zinc-700 pl-4", children: [_jsx("span", { className: `size-2.5 rounded-full ${dot}` }), _jsx("span", { className: "text-sm text-zinc-300", children: label }), _jsxs("span", { className: "text-xs text-zinc-500", children: ["(", health.detail, ")"] })] }));
 }
+function useCountdown(engineHealth) {
+    const [secsLeft, setSecsLeft] = useState(null);
+    useEffect(() => {
+        if (engineHealth?.next_execution_in_min == null) {
+            setSecsLeft(null);
+            return;
+        }
+        setSecsLeft(engineHealth.next_execution_in_min * 60);
+        const timer = setInterval(() => {
+            setSecsLeft(prev => {
+                if (prev == null || prev <= 0)
+                    return 0;
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [engineHealth?.next_execution_in_min, engineHealth?.last_decision_age_min]);
+    return secsLeft;
+}
 export function Dashboard() {
     const [positions, setPositions] = useState([]);
     const [lastDecision, setLastDecision] = useState(null);
@@ -31,6 +51,7 @@ export function Dashboard() {
     const [ticker, setTicker] = useState(null);
     const [engineHealth, setEngineHealth] = useState(null);
     const [balance, setBalance] = useState(null);
+    const countdownSecs = useCountdown(engineHealth);
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
     const loadStats = () => api.dailyStats().then(setStats).catch(() => { });
@@ -81,5 +102,13 @@ export function Dashboard() {
                             ? _jsx("p", { className: "text-zinc-500 text-sm", children: "Ninguna posici\u00F3n abierta." })
                             : positions.map(p => (_jsxs("div", { className: "rounded-lg bg-zinc-800 p-3 mb-2", children: [_jsxs("div", { className: "flex justify-between text-sm", children: [_jsx("span", { children: p.symbol }), _jsxs("span", { className: p.unrealized_pnl && p.unrealized_pnl > 0 ? "text-emerald-400" : "text-red-400", children: [p.unrealized_pnl != null ? `$${p.unrealized_pnl.toFixed(2)}` : "—", p.unrealized_pct != null ? ` (${p.unrealized_pct.toFixed(2)}%)` : ""] })] }), _jsxs("div", { className: "text-xs text-zinc-500 mt-1", children: ["qty ", p.quantity_btc.toFixed(6), " | entry $", p.entry_price.toFixed(2), p.current_price ? ` | actual $${p.current_price.toFixed(2)}` : ""] })] }, p.id))) }), _jsx(Card, { title: "\u00DAltima decisi\u00F3n", children: !lastDecision
                             ? _jsx("p", { className: "text-zinc-500 text-sm", children: "Sin decisiones a\u00FAn." })
-                            : (_jsxs("div", { children: [_jsx("div", { className: `text-4xl font-bold mb-2 ${actionColor}`, children: out?.action ?? "—" }), _jsxs("div", { className: "text-sm text-zinc-400 mb-2", children: ["Confianza: ", _jsxs("span", { className: "text-white", children: [((out?.confidence ?? 0) * 100).toFixed(0), "%"] }), out?.regime && _jsx("span", { className: "ml-3 text-zinc-500", children: out.regime })] }), _jsx("p", { className: "text-sm text-zinc-300 leading-relaxed", children: out?.reasoning ?? "" }), _jsx("div", { className: "mt-3 text-xs text-zinc-600", children: new Date(lastDecision.ts).toLocaleString("es-AR") })] })) }), _jsx(Card, { title: "Estado del d\u00EDa", children: !stats ? (_jsx("p", { className: "text-zinc-500 text-sm", children: "Cargando..." })) : (_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsxs("div", { className: `text-2xl font-bold font-mono ${pnlColor}`, children: [pnlTotal >= 0 ? "+" : "", "$", pnlTotal.toFixed(2)] }), _jsx("div", { className: "text-xs text-zinc-500 mt-0.5", children: "P&L total del d\u00EDa" })] }), _jsxs("div", { children: [_jsx(StatRow, { label: "Realizado", value: `${stats.pnl_realized >= 0 ? "+" : ""}$${stats.pnl_realized.toFixed(2)}`, valueClass: stats.pnl_realized > 0 ? "text-emerald-400" : stats.pnl_realized < 0 ? "text-red-400" : "text-zinc-400" }), _jsx(StatRow, { label: "No realizado", value: `${stats.pnl_unrealized >= 0 ? "+" : ""}$${stats.pnl_unrealized.toFixed(2)}`, valueClass: stats.pnl_unrealized > 0 ? "text-emerald-400" : stats.pnl_unrealized < 0 ? "text-red-400" : "text-zinc-400" }), _jsx(StatRow, { label: "Fees pagadas", value: `$${stats.fees_total.toFixed(4)}`, valueClass: "text-zinc-500" })] }), _jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 uppercase mb-1", children: "Trades" }), _jsx(StatRow, { label: "Abiertos / Cerrados", value: `${stats.trades_open} / ${stats.trades_closed}` }), stats.trades_closed > 0 && (_jsx(StatRow, { label: "Win / Loss", value: `${stats.trades_won}W · ${stats.trades_lost}L`, valueClass: stats.trades_won > stats.trades_lost ? "text-emerald-400" : "text-red-400" }))] }), _jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 uppercase mb-1", children: "Decisiones" }), _jsx(StatRow, { label: "Total", value: stats.decisions_total }), _jsx(StatRow, { label: "BUY / SELL / HOLD", value: `${stats.decisions_buy} / ${stats.decisions_sell} / ${stats.decisions_hold}` }), _jsx(StatRow, { label: "Ejecutadas", value: stats.decisions_executed, valueClass: "text-emerald-400" }), _jsx(StatRow, { label: "Bloqueadas", value: stats.decisions_blocked, valueClass: stats.decisions_blocked > 0 ? "text-amber-400" : "text-zinc-400" })] })] })) })] })] }));
+                            : (_jsxs("div", { children: [_jsx("div", { className: `text-4xl font-bold mb-2 ${actionColor}`, children: out?.action ?? "—" }), _jsxs("div", { className: "text-sm text-zinc-400 mb-2", children: ["Confianza: ", _jsxs("span", { className: "text-white", children: [((out?.confidence ?? 0) * 100).toFixed(0), "%"] }), out?.regime && _jsx("span", { className: "ml-3 text-zinc-500", children: out.regime })] }), out?.reasoning && _jsx(ReasoningBlock, { reasoning: out.reasoning, compact: true }), _jsx("div", { className: "mt-3 text-xs text-zinc-600", children: new Date(lastDecision.ts).toLocaleString("es-AR") }), countdownSecs != null && (_jsxs("div", { className: "mt-2 flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2", children: [_jsx("span", { className: "text-xs text-zinc-500", children: "Pr\u00F3xima ejecuci\u00F3n" }), _jsx("span", { className: `ml-auto font-mono text-sm font-semibold ${countdownSecs === 0
+                                                    ? "text-emerald-400 animate-pulse"
+                                                    : countdownSecs <= 60
+                                                        ? "text-amber-400"
+                                                        : "text-zinc-300"}`, children: countdownSecs === 0
+                                                    ? "ejecutando..."
+                                                    : countdownSecs < 60
+                                                        ? `${countdownSecs}s`
+                                                        : `${Math.floor(countdownSecs / 60)}m ${countdownSecs % 60}s` })] }))] })) }), _jsx(Card, { title: "Estado del d\u00EDa", children: !stats ? (_jsx("p", { className: "text-zinc-500 text-sm", children: "Cargando..." })) : (_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsxs("div", { className: `text-2xl font-bold font-mono ${pnlColor}`, children: [pnlTotal >= 0 ? "+" : "", "$", pnlTotal.toFixed(2)] }), _jsx("div", { className: "text-xs text-zinc-500 mt-0.5", children: "P&L total del d\u00EDa" })] }), _jsxs("div", { children: [_jsx(StatRow, { label: "Realizado", value: `${stats.pnl_realized >= 0 ? "+" : ""}$${stats.pnl_realized.toFixed(2)}`, valueClass: stats.pnl_realized > 0 ? "text-emerald-400" : stats.pnl_realized < 0 ? "text-red-400" : "text-zinc-400" }), _jsx(StatRow, { label: "No realizado", value: `${stats.pnl_unrealized >= 0 ? "+" : ""}$${stats.pnl_unrealized.toFixed(2)}`, valueClass: stats.pnl_unrealized > 0 ? "text-emerald-400" : stats.pnl_unrealized < 0 ? "text-red-400" : "text-zinc-400" }), _jsx(StatRow, { label: "Fees pagadas", value: `$${stats.fees_total.toFixed(4)}`, valueClass: "text-zinc-500" })] }), _jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 uppercase mb-1", children: "Trades" }), _jsx(StatRow, { label: "Abiertos / Cerrados", value: `${stats.trades_open} / ${stats.trades_closed}` }), stats.trades_closed > 0 && (_jsx(StatRow, { label: "Win / Loss", value: `${stats.trades_won}W · ${stats.trades_lost}L`, valueClass: stats.trades_won > stats.trades_lost ? "text-emerald-400" : "text-red-400" }))] }), _jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 uppercase mb-1", children: "Decisiones" }), _jsx(StatRow, { label: "Total", value: stats.decisions_total }), _jsx(StatRow, { label: "BUY / SELL / HOLD", value: `${stats.decisions_buy} / ${stats.decisions_sell} / ${stats.decisions_hold}` }), _jsx(StatRow, { label: "Ejecutadas", value: stats.decisions_executed, valueClass: "text-emerald-400" }), _jsx(StatRow, { label: "Bloqueadas", value: stats.decisions_blocked, valueClass: stats.decisions_blocked > 0 ? "text-amber-400" : "text-zinc-400" })] })] })) })] })] }));
 }

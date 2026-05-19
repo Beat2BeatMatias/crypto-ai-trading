@@ -57,6 +57,13 @@ export const api = {
     playbookActivate: (version) => post(`/playbook/${version}/activate`, {}),
     playbookEditContent: (version, content) => patch(`/playbook/${version}/content`, { content }),
     supervisorRuns: (limit = 30) => get(`/supervisor/runs?limit=${limit}`),
+    outcomes: (sinceHours = 24, classification) => {
+        const q = new URLSearchParams();
+        q.set("since_hours", String(sinceHours));
+        if (classification)
+            q.set("classification", classification);
+        return get(`/decisions/outcomes?${q.toString()}`);
+    },
     dailyStats: () => get("/stats/daily"),
     ohlcv: (timeframe, limit = 300) => get(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
 };
