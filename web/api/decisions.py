@@ -4,10 +4,10 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import Decision
+from shared.db.models import Decision, DecisionOutcome
 
 router = APIRouter()
 
@@ -230,3 +230,70 @@ async def list_supervisor_runs(
             playbook_win_rate_baseline=out.get("playbook_win_rate_baseline"),
         ))
     return result
+
+
+class DecisionOutcomeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    decision_id: UUID
+    ts: datetime
+    action: str | None
+    confidence: float | None
+    regime: str | None
+    executed: bool
+    rejected_reason: str | None
+
+    horizon_min: int
+    matured: bool
+    forward_return_pct: float | None
+    mfe_pct: float | None
+    mae_pct: float | None
+    time_to_mfe_min: int | None
+    time_to_mae_min: int | None
+    sl_dist_pct: float | None
+    tp_target_pct: float | None
+    classification: str
+    computed_at: datetime
+
+
+@router.get("/decisions/outcomes", response_model=list[DecisionOutcomeOut])
+async def list_outcomes(
+    session: Annotated[AsyncSession, Depends(_session)],
+    since_hours: int = Query(24, ge=1, le=168),
+    classification: str | None = Query(None),
+    limit: int = Query(500, ge=1, le=5000),
+) -> list[DecisionOutcomeOut]:
+    since = datetime.now(tz=timezone.utc) - timedelta(hours=since_hours)
+    stmt = (
+        select(Decision, DecisionOutcome)
+        .join(DecisionOutcome, Decision.id == DecisionOutcome.decision_id)
+        .where(Decision.ts >= since)
+        .order_by(Decision.ts.desc())
+        .limit(limit)
+    )
+    if classification:
+        stmt = stmt.where(DecisionOutcome.classification == classification)
+    rows = (await session.execute(stmt)).all()
+    out = []
+    for d, o in rows:
+        out.append(DecisionOutcomeOut(
+            decision_id=d.id,
+            ts=d.ts,
+            action=(d.output or {}).get("action"),
+            confidence=(d.output or {}).get("confidence"),
+            regime=(d.output or {}).get("regime"),
+            executed=d.executed,
+            rejected_reason=d.rejected_reason,
+            horizon_min=o.horizon_min,
+            matured=o.matured,
+            forward_return_pct=float(o.forward_return_pct) if o.forward_return_pct is not None else None,
+            mfe_pct=float(o.mfe_pct) if o.mfe_pct is not None else None,
+            mae_pct=float(o.mae_pct) if o.mae_pct is not None else None,
+            time_to_mfe_min=o.time_to_mfe_min,
+            time_to_mae_min=o.time_to_mae_min,
+            sl_dist_pct=float(o.sl_dist_pct) if o.sl_dist_pct is not None else None,
+            tp_target_pct=float(o.tp_target_pct) if o.tp_target_pct is not None else None,
+            classification=o.classification,
+            computed_at=o.computed_at,
+        ))
+    return out
