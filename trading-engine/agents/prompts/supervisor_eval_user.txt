@@ -21,6 +21,12 @@ MERCADO:
   BTC: ${open_btc:,.0f} -> ${close_btc:,.0f} ({pct_24h:+.2f}%) | ATR(1h): ${atr_avg:,.0f} ({atr_pct:.2f}%, {vol_label})
   Régimen dominante actual: {dominant_regime}
 
+ANÁLISIS CONTRAFÁCTICO (últimas 24h, horizonte {expected_holding_max_min}min):
+  Decisiones evaluadas: {evaluated_decisions} / {total_decisions}
+  HOLDs missed: {missed_count} ({missed_rate:.1f}%)
+  BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%)
+  Bloqueados buenos (BUYs rechazados que hubieran ganado): {blocked_good_count}
+
 PLAYBOOK ACTIVO (extracto):
 {previous_playbook}
 
