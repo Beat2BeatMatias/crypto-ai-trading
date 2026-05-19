@@ -5,7 +5,8 @@ Runs hourly (configurable). Idempotent: upserts on `decision_id`.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Callable, ContextManager
+from types import SimpleNamespace
+from typing import Any, Iterable, Callable, ContextManager
 
 import structlog
 from sqlalchemy import select, or_
@@ -88,3 +89,90 @@ async def _upsert_outcome(session: AsyncSession, attr) -> None:
             delete(DecisionOutcome).where(DecisionOutcome.decision_id == attr.decision_id)
         )
         session.add(DecisionOutcome(**payload))
+
+
+async def outcome_attribution_tick(
+    *,
+    session_factory: Callable[[], "ContextManager[AsyncSession]"],
+    horizon_min: int = 240,
+    now_fn: Callable[[], datetime] | None = None,
+) -> None:
+    """Tick called by the scheduler. Idempotent."""
+    now = (now_fn or _utcnow)()
+    async with session_factory() as session:
+        candidates = await _fetch_candidates(session, now=now)
+        if not candidates:
+            logger.info("outcome_attribution.job.no_candidates")
+            return
+        ohlcv = await _fetch_ohlcv_1m(
+            session,
+            ts_from=min(c.ts for c in candidates),
+            ts_to=now,
+        )
+        ohlcv_by_minute = _index_ohlcv_by_minute(ohlcv)
+        processed = 0
+        for d in candidates:
+            window = _slice_window(
+                ohlcv_by_minute, ts_from=d.ts, ts_to=d.ts + timedelta(minutes=horizon_min),
+            )
+            trade = (await _load_trade(session, d.trade_id)) if d.trade_id else None
+            attr = attribute(
+                decision=d, ohlcv_1m=window, associated_trade=trade,
+                horizon_min=horizon_min, now=now,
+            )
+            await _upsert_outcome(session, attr)
+            processed += 1
+        await session.commit()
+        logger.info("outcome_attribution.job.completed", processed=processed)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _index_ohlcv_by_minute(rows: Iterable[Ohlcv]) -> dict[datetime, Ohlcv]:
+    return {_truncate_to_minute(r.time): r for r in rows}
+
+
+def _truncate_to_minute(t: datetime) -> datetime:
+    if t.tzinfo is not None:
+        t = t.astimezone(timezone.utc).replace(tzinfo=None)
+    return t.replace(second=0, microsecond=0)
+
+
+def _slice_window(
+    index_by_min: dict[datetime, Ohlcv], *, ts_from: datetime, ts_to: datetime,
+) -> list[Any]:
+    start = _truncate_to_minute(ts_from)
+    end = _truncate_to_minute(ts_to)
+    out: list[Any] = []
+    cursor = start + timedelta(minutes=1)
+    while cursor <= end:
+        row = index_by_min.get(cursor)
+        if row is not None:
+            out.append(_with_aware_time(row))
+        cursor += timedelta(minutes=1)
+    return out
+
+
+def _with_aware_time(o: Ohlcv) -> Any:
+    """Return a thin proxy that guarantees `time` is UTC-aware.
+
+    In production `Ohlcv.time` is TIMESTAMPTZ → always aware. In tests using SQLite
+    the value may come back naive, which would break datetime arithmetic against the
+    aware `Decision.ts`. The wrapper keeps `attribute()` simple and tz-agnostic.
+    """
+    t = o.time
+    if t.tzinfo is not None:
+        return o
+    return SimpleNamespace(
+        time=t.replace(tzinfo=timezone.utc),
+        open=o.open, high=o.high, low=o.low, close=o.close,
+        volume=getattr(o, "volume", None),
+    )
+
+
+async def _load_trade(session: AsyncSession, trade_id) -> "Trade | None":
+    return (await session.execute(
+        select(Trade).where(Trade.id == trade_id)
+    )).scalar_one_or_none()

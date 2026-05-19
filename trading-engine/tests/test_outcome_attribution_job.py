@@ -192,3 +192,44 @@ async def test_upsert_outcome_inserts_then_updates(session):
     assert len(rows) == 1
     assert rows[0].classification == "MISSED_OPPORTUNITY"
     assert rows[0].matured is True
+
+
+class _SessionContext:
+    """Async context manager wrapping an existing session for tests."""
+    def __init__(self, session): self._s = session
+    async def __aenter__(self): return self._s
+    async def __aexit__(self, *_): return None
+
+
+async def test_outcome_attribution_tick_classifies_pending_and_finalized_decisions(session):
+    from agents.outcome_attribution_job import outcome_attribution_tick
+
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    now = t0 + timedelta(hours=5)
+    decision = Decision(
+        ts=t0, agent="decisor", model="m",
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "HOLD"}, executed=False,
+    )
+    session.add(decision)
+    for i in range(1, 241):
+        session.add(Ohlcv(
+            time=t0 + timedelta(minutes=i), timeframe="1m",
+            open=Decimal("100.0"), high=Decimal("100.5"),
+            low=Decimal("99.95"), close=Decimal("100.4"),
+            volume=Decimal("1.0"),
+        ))
+    await session.commit()
+
+    def factory():
+        return _SessionContext(session)
+
+    await outcome_attribution_tick(
+        session_factory=factory, horizon_min=240, now_fn=lambda: now,
+    )
+
+    outcome = (await session.execute(
+        select(DecisionOutcome).where(DecisionOutcome.decision_id == decision.id)
+    )).scalar_one()
+    assert outcome.classification == "MISSED_OPPORTUNITY"
