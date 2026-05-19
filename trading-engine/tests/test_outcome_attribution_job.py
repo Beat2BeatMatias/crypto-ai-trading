@@ -152,3 +152,43 @@ async def test_fetch_candidates_returns_decisions_in_window(session):
     ids = {c.id for c in candidates}
     assert fresh.id in ids
     assert done.id not in ids
+
+
+async def test_upsert_outcome_inserts_then_updates(session):
+    from agents.outcome_attribution_job import _upsert_outcome
+    from agents.outcome_attribution import DecisionAttribution
+
+    decision = Decision(
+        ts=datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc),
+        agent="decisor", model="m",
+        input={}, output={"action": "HOLD"}, executed=False,
+    )
+    session.add(decision)
+    await session.commit()
+
+    attr1 = DecisionAttribution(
+        decision_id=decision.id, horizon_min=240, matured=False,
+        forward_return_pct=None, mfe_pct=0.1, mae_pct=-0.05,
+        time_to_mfe_min=5, time_to_mae_min=2,
+        sl_dist_pct=0.3, tp_target_pct=0.39,
+        classification="PENDING",
+        computed_at=datetime(2026, 5, 18, 13, 0, tzinfo=timezone.utc),
+    )
+    await _upsert_outcome(session, attr1)
+    await session.commit()
+
+    attr2 = DecisionAttribution(
+        decision_id=decision.id, horizon_min=240, matured=True,
+        forward_return_pct=0.5, mfe_pct=0.5, mae_pct=-0.05,
+        time_to_mfe_min=15, time_to_mae_min=2,
+        sl_dist_pct=0.3, tp_target_pct=0.39,
+        classification="MISSED_OPPORTUNITY",
+        computed_at=datetime(2026, 5, 18, 14, 0, tzinfo=timezone.utc),
+    )
+    await _upsert_outcome(session, attr2)
+    await session.commit()
+
+    rows = (await session.execute(select(DecisionOutcome))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].classification == "MISSED_OPPORTUNITY"
+    assert rows[0].matured is True

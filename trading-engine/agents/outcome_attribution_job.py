@@ -52,3 +52,39 @@ async def _fetch_ohlcv_1m(
         .order_by(Ohlcv.time.asc())
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def _upsert_outcome(session: AsyncSession, attr) -> None:
+    """Dialect-agnostic UPSERT on (decision_id) PK.
+
+    Postgres uses ON CONFLICT; SQLite (tests) uses delete + insert (simpler, transactional).
+    """
+    bind = session.get_bind()
+    dialect = bind.dialect.name if bind is not None else "postgresql"
+    payload = dict(
+        decision_id=attr.decision_id,
+        horizon_min=attr.horizon_min,
+        matured=attr.matured,
+        forward_return_pct=attr.forward_return_pct,
+        mfe_pct=attr.mfe_pct,
+        mae_pct=attr.mae_pct,
+        time_to_mfe_min=attr.time_to_mfe_min,
+        time_to_mae_min=attr.time_to_mae_min,
+        sl_dist_pct=attr.sl_dist_pct,
+        tp_target_pct=attr.tp_target_pct,
+        classification=attr.classification,
+        computed_at=attr.computed_at,
+    )
+    if dialect == "postgresql":
+        stmt = pg_insert(DecisionOutcome).values(**payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["decision_id"],
+            set_={k: v for k, v in payload.items() if k != "decision_id"},
+        )
+        await session.execute(stmt)
+    else:
+        from sqlalchemy import delete
+        await session.execute(
+            delete(DecisionOutcome).where(DecisionOutcome.decision_id == attr.decision_id)
+        )
+        session.add(DecisionOutcome(**payload))
