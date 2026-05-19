@@ -475,6 +475,17 @@ async def run() -> None:
             except Exception as e:
                 logger.error("order_tracker.error", error=str(e))
 
+    async def outcome_attribution_tick_wrapper() -> None:
+        from agents.outcome_attribution_job import outcome_attribution_tick
+        horizon_min = 240
+        try:
+            async with session_factory() as s:
+                store = ConfigStore(s)
+                horizon_min = int(await store.get_typed(ConfigKey.EXPECTED_HOLDING_MAX_MIN))
+        except Exception as e:
+            logger.warning("outcome_attribution.config_read_failed", error=str(e))
+        await outcome_attribution_tick(session_factory=session_factory, horizon_min=horizon_min)
+
     async with session_factory() as s:
         store = ConfigStore(s)
         interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
@@ -485,6 +496,8 @@ async def run() -> None:
     sched.add_fee_refresh(fees_tick, hours=24)
     sched.add_position_refresh(positions_tick, seconds=30)
     sched.add_order_tracker(order_tracker_tick, seconds=30)
+    sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=60)
+    logger.info("scheduler.outcome_attribution_registered", interval_min=60)
     sched.start()
 
     stop_event = asyncio.Event()
