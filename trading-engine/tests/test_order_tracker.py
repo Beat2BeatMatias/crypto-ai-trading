@@ -263,3 +263,216 @@ async def test_fetch_last_candle_low_returns_none_when_no_ohlcv(session):
 
     # THEN retorna None sin lanzar excepción
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — Bracket fill detection (fills parciales y match por order_id)
+# ---------------------------------------------------------------------------
+
+async def test_bracket_fill_detected_from_partial_fills_same_order_id(session):
+    # GIVEN un trade de 0.00012 BTC y Binance devuelve 3 sub-fills del mismo order_id
+    # que suman exactamente 0.00012 BTC (caso real: Binance parte fills grandes)
+    trade = _make_open_trade(session, qty=0.00012, stop_loss=76721.08)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77000.0})  # > SL, no activa guardian
+    exchange.fetch_my_trades = AsyncMock(return_value=[
+        {"side": "sell", "order": "ORD-SL-PARTIAL", "amount": 4e-05,
+         "price": 76791.21, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.003}},
+        {"side": "sell", "order": "ORD-SL-PARTIAL", "amount": 7e-05,
+         "price": 76791.21, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.005}},
+        {"side": "sell", "order": "ORD-SL-PARTIAL", "amount": 1e-05,
+         "price": 76791.21, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.001}},
+    ])
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cerró correctamente (suma de sub-fills = 0.00012 ≈ qty del trade)
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "sl_triggered"
+    assert float(trade.exit_price) == pytest.approx(76791.21, rel=1e-4)
+
+
+async def test_bracket_fill_matched_by_order_id_sl_exact(session):
+    # GIVEN un trade con order_id_sl conocido y un fill con ese mismo order_id
+    # cuya cantidad difiere en más del 2% (no matchearía por cantidad)
+    trade = _make_open_trade(session, qty=0.00013, stop_loss=76721.08,
+                             order_id_sl="KNOWN-SL-ORDER")
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77000.0})
+    exchange.fetch_my_trades = AsyncMock(return_value=[
+        # Cantidad distinta al trade (0.00010 vs 0.00013, diferencia >2%)
+        # Sin match por ID, este fill sería ignorado; con match por ID, cierra el trade
+        {"side": "sell", "order": "KNOWN-SL-ORDER", "amount": 0.00010,
+         "price": 76700.0, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.008}},
+    ])
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra por match exacto de order_id (no por cantidad)
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "sl_triggered"
+
+
+async def test_bracket_fill_matched_by_qty_fallback_when_known_id_not_found(session):
+    # GIVEN un trade con order_id_sl="ORDER-A" pero el fill llega con order_id="ORDER-B"
+    # (caso: el bracket se ejecutó pero Binance asignó un ID diferente al esperado).
+    # La cantidad coincide con el trade (±2%), así que el fallback por cantidad debe actuar.
+    trade = _make_open_trade(session, qty=0.00013, stop_loss=76721.08,
+                             order_id_sl="ORDER-A")
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77500.0})  # > SL, no activa guardian
+    exchange.fetch_my_trades = AsyncMock(return_value=[
+        # order_id diferente al registrado, pero cantidad idéntica → fallback por qty
+        {"side": "sell", "order": "ORDER-B", "amount": 0.00013,
+         "price": 76800.0, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.01}},
+    ])
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra por fallback de cantidad (el ID exacto no matcheó,
+    # pero el fill de cantidad equivalente es suficiente evidencia de cierre)
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "sl_triggered"
+
+
+async def test_bracket_fill_qty_fallback_when_no_bracket_ids_in_db(session):
+    # GIVEN un trade SIN order_id_sl ni order_id_tp en BD (brackets no se guardaron)
+    # y un fill cuya cantidad coincide con el trade (±2%)
+    trade = _make_open_trade(session, qty=0.00013, stop_loss=76721.08,
+                             order_id_sl=None)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77500.0})
+    exchange.fetch_my_trades = AsyncMock(return_value=[
+        {"side": "sell", "order": "ANY-ORDER", "amount": 0.00013,
+         "price": 76700.0, "timestamp": 9_999_999_999_999,
+         "fee": {"cost": 0.01}},
+    ])
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra por fallback de cantidad (no hay IDs conocidos)
+    await session.refresh(trade)
+    assert trade.status == "closed"
+
+
+# ---------------------------------------------------------------------------
+# Tests — execute_sell con balance insuficiente
+# ---------------------------------------------------------------------------
+
+async def test_execute_sell_adjusts_qty_when_btc_balance_insufficient(session):
+    # GIVEN un trade de 0.00013 BTC pero solo 0.000097 BTC libre en Binance
+    # (caso real: el BTC fue consumido por bracket de otro trade)
+    trade = _make_open_trade(session, qty=0.00013)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.000097, "USDT": 100.0},
+        "total": {"BTC": 0.000097, "USDT": 100.0},
+    })
+    # El sell se ejecuta con la cantidad ajustada
+    exchange.create_market_order = AsyncMock(return_value={
+        "id": "ORD-SELL-ADJ", "average": 76700.0, "filled": 0.000097,
+        "fee": {"cost": 0.007},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el sell
+    closed = await executor.execute_sell(
+        trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
+    )
+
+    # THEN el trade se cierra con la cantidad disponible (no falla por insufficient balance)
+    assert closed.status == "closed"
+    # AND se usó la cantidad real disponible en la llamada al exchange
+    call_args = exchange.create_market_order.call_args
+    qty_used = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("amount")
+    assert qty_used == pytest.approx(0.000097, rel=1e-3)
+
+
+async def test_execute_sell_raises_when_btc_balance_near_zero(session):
+    # GIVEN un trade abierto pero BTC libre en cuenta = 0 (todo consumido)
+    trade = _make_open_trade(session, qty=0.00013)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.0, "USDT": 100.0},
+        "total": {"BTC": 0.0},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN intentamos cerrar el trade
+    # THEN se lanza RuntimeError con mensaje claro (no llama al exchange)
+    with pytest.raises(RuntimeError, match="BTC insuficiente"):
+        await executor.execute_sell(
+            trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
+        )
+    exchange.create_market_order.assert_not_called()
+
+
+async def test_execute_sell_proceeds_with_trade_qty_if_balance_check_fails(session):
+    # GIVEN un trade abierto y el fetch_balance lanza excepción (exchange caído)
+    trade = _make_open_trade(session, qty=0.00013)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_balance = AsyncMock(side_effect=Exception("exchange timeout"))
+    exchange.create_market_order = AsyncMock(return_value={
+        "id": "ORD-SELL-FALLBACK", "average": 76700.0, "filled": 0.00013,
+        "fee": {"cost": 0.01},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el sell (balance check falló)
+    closed = await executor.execute_sell(
+        trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
+    )
+
+    # THEN el sell se ejecuta de todas formas con la cantidad del trade (fallback)
+    assert closed.status == "closed"
+    call_args = exchange.create_market_order.call_args
+    qty_used = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("amount")
+    assert qty_used == pytest.approx(0.00013, rel=1e-3)

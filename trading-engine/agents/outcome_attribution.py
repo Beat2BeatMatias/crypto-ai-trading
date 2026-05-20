@@ -19,6 +19,8 @@ Classification = Literal[
     "GOOD_SELL", "BAD_SELL",
 ]
 
+_OHLCV_MISSING_THRESHOLD_PCT = 30.0
+
 
 @dataclass(frozen=True)
 class DecisionAttribution:
@@ -90,9 +92,6 @@ def attribute(
         classification=classification,
         computed_at=now,
     )
-
-
-_OHLCV_MISSING_THRESHOLD_PCT = 30.0
 
 
 def _coverage_ok(

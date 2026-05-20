@@ -120,8 +120,36 @@ class Executor:
         trade = await self.session.get(Trade, trade_id)
         if trade is None or trade.status != "open":
             raise RuntimeError(f"Trade {trade_id} not open")
+
+        # Verificar balance BTC disponible antes de emitir la orden.
+        # Si el BTC fue consumido por otra orden (ej. bracket compartido entre trades),
+        # usar la cantidad real disponible para evitar el error "insufficient balance".
+        qty_to_sell = float(trade.quantity_btc)
+        try:
+            balance = await self.exchange.fetch_balance()
+            btc_free = float((balance.get("free") or {}).get("BTC") or 0)
+            if btc_free < qty_to_sell * 0.95:
+                logger.warning(
+                    "executor.sell_qty_adjusted_low_balance",
+                    trade_id=str(trade_id),
+                    expected_qty=qty_to_sell,
+                    available_btc=btc_free,
+                    close_reason=close_reason,
+                )
+                qty_to_sell = btc_free
+            if qty_to_sell < 1e-6:
+                raise RuntimeError(
+                    f"BTC insuficiente para cerrar trade {trade_id}: "
+                    f"disponible={btc_free}, esperado={float(trade.quantity_btc)}"
+                )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.warning("executor.balance_check_failed_using_trade_qty",
+                           trade_id=str(trade_id), error=str(e))
+
         order = await self.exchange.create_market_order(
-            self.symbol, "sell", float(trade.quantity_btc),
+            self.symbol, "sell", qty_to_sell,
         )
         avg_price = float(order.get("average") or 0.0)
         fee = float((order.get("fee") or {}).get("cost") or 0.0)
