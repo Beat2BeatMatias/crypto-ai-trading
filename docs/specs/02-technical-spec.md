@@ -594,6 +594,7 @@ Comportamiento:
 ```python
 _SAFE_BOUNDS = {
   "sl_atr_multiplier":          (0.1, 0.8),
+  "sl_atr_max_multiplier":      (0.5, 20.0),
   "min_rr_ratio":               (1.0, 3.0),
   "decisor_interval_min":       (5, 60),
   "max_position_pct":           (0.01, 0.20),

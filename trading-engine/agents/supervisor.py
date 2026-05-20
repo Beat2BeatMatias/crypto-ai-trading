@@ -30,7 +30,7 @@ logger = structlog.get_logger()
 _SAFE_BOUNDS: dict[str, tuple] = {
     # ENFORCEMENT (Risk Gate los aplica)
     "sl_atr_multiplier":           (0.1, 0.8),
-    "sl_atr_max_multiplier":       (0.5, 3.0),
+    "sl_atr_max_multiplier":       (0.5, 20.0),
     "min_rr_ratio":                (1.0, 3.0),
     "max_position_pct":            (0.01, 0.20),
     "min_fees_to_tp_ratio":        (1.5, 6.0),
@@ -154,7 +154,7 @@ ENFORCEMENT — Risk Gate los aplica con dureza:
 - atr_timeframe: "5m" | "15m" | "1h" — granularidad del ATR de referencia.
 - sl_atr_multiplier: 0.1 a 0.8 (cuanto menor, SL más cerca; debe ser < sl_atr_max_multiplier).
   Criterio: bajar si los SL llegan tarde y dejan grandes pérdidas; subir si te sacan con ruido.
-- sl_atr_max_multiplier: 0.5 a 3.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
+- sl_atr_max_multiplier: 0.5 a 20.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
 - min_rr_ratio: 1.0 a 3.0 — subir si avg_loss > avg_win con persistencia.
 - max_position_pct: 0.01 a 0.20 — subir SOLO si WR>60% y PF>1.5 sostenidos. Bajar ante drawdown.
 - min_fees_to_tp_ratio: 1.5 a 6.0 — subir si los TPs apenas pasan fees (rentabilidad marginal).

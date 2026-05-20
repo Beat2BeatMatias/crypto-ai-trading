@@ -206,7 +206,7 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   sl_atr_max_multiplier: {
     label: "Multiplicador SL máximo (ATR)",
     description: "Distancia máxima del Stop Loss en múltiplos del ATR. SL más amplio que este es rechazado por el Risk Gate (R4).",
-    type: "slider", min: 0.5, max: 3.0, step: 0.1, unit: "× ATR",
+    type: "slider", min: 0.5, max: 20.0, step: 0.1, unit: "× ATR",
     format: fmt1, parse: parseFloat,
   },
   rsi_overbought_1h: {
