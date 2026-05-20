@@ -136,6 +136,41 @@ async def health(request: Request) -> dict:
                   AND latency_ms IS NOT NULL
             """))).first()
 
+            # Outcome Attribution: last job run + 24h stats
+            oa_last_row = (await s.execute(text("""
+                SELECT MAX(computed_at) AS last_run
+                FROM decision_outcomes
+            """))).first()
+            oa_last_run = oa_last_row.last_run if oa_last_row else None
+
+            oa_interval_row = (await s.execute(
+                text("SELECT value FROM config WHERE key = 'outcome_attribution_interval_min'")
+            )).first()
+            oa_interval_min = int(float(oa_interval_row.value)) if oa_interval_row else 60
+
+            if oa_last_run:
+                oa_age_min = int((datetime.now(timezone.utc) - oa_last_run).total_seconds() / 60)
+                oa_ok = oa_age_min < oa_interval_min * 3
+            else:
+                oa_age_min = None
+                oa_ok = False
+
+            oa_stats_row = (await s.execute(text("""
+                SELECT
+                    COUNT(*)                                                            AS total,
+                    COUNT(*) FILTER (WHERE classification = 'MISSED_OPPORTUNITY')      AS missed,
+                    COUNT(*) FILTER (WHERE classification = 'GOOD_HOLD')               AS good_hold,
+                    COUNT(*) FILTER (WHERE classification = 'BAD_BUY')                 AS bad_buy,
+                    COUNT(*) FILTER (WHERE classification = 'GOOD_BUY')                AS good_buy,
+                    COUNT(*) FILTER (WHERE classification = 'BLOCKED_GOOD_TRADE')      AS blocked_good,
+                    COUNT(*) FILTER (WHERE classification = 'CORRECTLY_BLOCKED')       AS correctly_blocked,
+                    COUNT(*) FILTER (WHERE classification = 'PENDING')                 AS pending,
+                    COUNT(*) FILTER (WHERE classification = 'UNKNOWN')                 AS unknown
+                FROM decision_outcomes o
+                JOIN decisions d ON d.id = o.decision_id
+                WHERE d.ts >= NOW() - INTERVAL '24 hours'
+            """))).first()
+
             # Postgres: row counts and DB size
             table_counts_rows = (await s.execute(text("""
                 SELECT
@@ -226,6 +261,23 @@ async def health(request: Request) -> dict:
                 "two_pass_triggered_24h": two_pass_count,
                 "by_rule_24h": dict(coh_by_rule),
             },
+            "outcome_attribution": {
+                "ok": oa_ok,
+                "last_run_age_min": oa_age_min,
+                "interval_min": oa_interval_min,
+                "last_run_ts": oa_last_run.isoformat() if oa_last_run else None,
+                "stats_24h": {
+                    "total": int(oa_stats_row.total) if oa_stats_row else 0,
+                    "missed_opportunity": int(oa_stats_row.missed) if oa_stats_row else 0,
+                    "good_hold": int(oa_stats_row.good_hold) if oa_stats_row else 0,
+                    "bad_buy": int(oa_stats_row.bad_buy) if oa_stats_row else 0,
+                    "good_buy": int(oa_stats_row.good_buy) if oa_stats_row else 0,
+                    "blocked_good_trade": int(oa_stats_row.blocked_good) if oa_stats_row else 0,
+                    "correctly_blocked": int(oa_stats_row.correctly_blocked) if oa_stats_row else 0,
+                    "pending": int(oa_stats_row.pending) if oa_stats_row else 0,
+                    "unknown": int(oa_stats_row.unknown) if oa_stats_row else 0,
+                },
+            },
             "postgres": {
                 "table_counts": {
                     "decisions": int(table_counts_rows.decisions) if table_counts_rows else None,
@@ -250,6 +302,7 @@ async def health(request: Request) -> dict:
             "recent_rejections_1h": None,
             "risk_gate": None,
             "coherence": None,
+            "outcome_attribution": None,
             "postgres": {"table_counts": None, "db_size": None, "db_bytes": None},
         }
 

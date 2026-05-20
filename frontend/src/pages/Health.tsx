@@ -16,6 +16,24 @@ interface PlaybookStatus {
   model: string | null;
   win_rate: number | null;
 }
+interface OutcomeStats {
+  total: number;
+  missed_opportunity: number;
+  good_hold: number;
+  bad_buy: number;
+  good_buy: number;
+  blocked_good_trade: number;
+  correctly_blocked: number;
+  pending: number;
+  unknown: number;
+}
+interface OutcomeAttributionStatus {
+  ok: boolean;
+  last_run_age_min: number | null;
+  interval_min: number;
+  last_run_ts: string | null;
+  stats_24h: OutcomeStats;
+}
 interface HealthData {
   ok: boolean;
   db: string;
@@ -26,6 +44,7 @@ interface HealthData {
   llm: LlmStatus | null;
   playbook: PlaybookStatus | null;
   recent_rejections_1h: number | null;
+  outcome_attribution: OutcomeAttributionStatus | null;
 }
 
 function StatusRow({ label, ok, detail }: { label: string; ok: boolean; detail: string }) {
@@ -197,6 +216,78 @@ export function Health() {
           <span className={`font-semibold ${(data.recent_rejections_1h ?? 0) > 0 ? "text-orange-400" : "text-zinc-300"}`}>
             {data.recent_rejections_1h ?? "—"}
           </span>
+        </div>
+      )}
+
+      {/* Outcome Attribution */}
+      {data?.outcome_attribution && (
+        <div className="rounded-xl bg-zinc-900 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Outcome Attribution</h2>
+            <span className="flex items-center gap-2 text-sm">
+              <span className={`size-2 rounded-full ${data.outcome_attribution.ok ? "bg-emerald-400" : "bg-red-400"}`} />
+              <span className="text-zinc-400">
+                {data.outcome_attribution.last_run_age_min !== null
+                  ? `último run hace ${data.outcome_attribution.last_run_age_min}m · intervalo ${data.outcome_attribution.interval_min}m`
+                  : "sin runs aún"}
+              </span>
+            </span>
+          </div>
+
+          {/* Distribución de clasificaciones 24h */}
+          {(() => {
+            const s = data.outcome_attribution.stats_24h;
+            const evaluated = s.total - s.pending - s.unknown;
+            const missedRate = evaluated > 0 ? ((s.missed_opportunity / evaluated) * 100).toFixed(1) : "—";
+            const badBuyRate = (s.good_buy + s.bad_buy) > 0
+              ? ((s.bad_buy / (s.good_buy + s.bad_buy)) * 100).toFixed(1) : "—";
+
+            return (
+              <div className="space-y-3">
+                {/* Métricas clave */}
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div className="bg-zinc-800 rounded p-3">
+                    <p className="text-zinc-400 text-xs">Evaluadas (24h)</p>
+                    <p className="text-lg font-semibold">{evaluated}</p>
+                    <p className="text-xs text-zinc-500">de {s.total} totales</p>
+                  </div>
+                  <div className={`rounded p-3 ${s.missed_opportunity > 0 ? "bg-amber-950 border border-amber-800" : "bg-zinc-800"}`}>
+                    <p className="text-zinc-400 text-xs">Miss rate</p>
+                    <p className={`text-lg font-semibold ${s.missed_opportunity > 0 ? "text-amber-400" : ""}`}>
+                      {missedRate}%
+                    </p>
+                    <p className="text-xs text-zinc-500">{s.missed_opportunity} missed</p>
+                  </div>
+                  <div className={`rounded p-3 ${s.bad_buy > 0 ? "bg-red-950" : "bg-zinc-800"}`}>
+                    <p className="text-zinc-400 text-xs">Bad buy rate</p>
+                    <p className={`text-lg font-semibold ${s.bad_buy > 0 ? "text-red-400" : ""}`}>
+                      {badBuyRate}%
+                    </p>
+                    <p className="text-xs text-zinc-500">{s.bad_buy} bad / {s.good_buy} good</p>
+                  </div>
+                </div>
+
+                {/* Distribución completa */}
+                <div className="grid grid-cols-2 gap-1.5 text-xs">
+                  {[
+                    { label: "GOOD_HOLD",          value: s.good_hold,          color: "text-zinc-300" },
+                    { label: "MISSED_OPPORTUNITY",  value: s.missed_opportunity, color: "text-amber-400" },
+                    { label: "GOOD_BUY",            value: s.good_buy,           color: "text-emerald-400" },
+                    { label: "BAD_BUY",             value: s.bad_buy,            color: "text-red-400" },
+                    { label: "BLOCKED_GOOD_TRADE",  value: s.blocked_good_trade, color: "text-amber-300" },
+                    { label: "CORRECTLY_BLOCKED",   value: s.correctly_blocked,  color: "text-zinc-400" },
+                    { label: "PENDING",             value: s.pending,            color: "text-zinc-500" },
+                    { label: "UNKNOWN",             value: s.unknown,            color: "text-zinc-600" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} className="flex items-center justify-between bg-zinc-800 rounded px-2.5 py-1.5">
+                      <span className="text-zinc-400 font-mono text-xs">{label}</span>
+                      <span className={`font-semibold ${color}`}>{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
