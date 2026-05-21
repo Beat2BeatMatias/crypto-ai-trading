@@ -18,7 +18,8 @@ class RiskGate:
                  daily_stop_pct: float, max_drawdown_pct: float,
                  max_slippage_pct: float, taker_fee_pct: float,
                  min_rr_ratio: float = 1.3, sl_atr_multiplier: float = 0.3,
-                 sl_atr_max_multiplier: float = 1.5):
+                 sl_atr_max_multiplier: float = 1.5,
+                 min_notional_usdt: float = 5.0):
         self.max_position_pct = max_position_pct
         self.max_simultaneous_trades = max_simultaneous_trades
         self.daily_stop_pct = daily_stop_pct
@@ -28,6 +29,7 @@ class RiskGate:
         self.min_rr_ratio = min_rr_ratio
         self.sl_atr_multiplier = sl_atr_multiplier
         self.sl_atr_max_multiplier = sl_atr_max_multiplier
+        self.min_notional_usdt = min_notional_usdt
 
     def validate(self, *, decision: DecisorOutput, current_price: float, atr_ref: float,
                  open_positions_count: int, daily_pnl_pct: float, total_drawdown_pct: float,
@@ -75,6 +77,42 @@ class RiskGate:
                 "R1",
                 f"position_size_pct {decision.position_size_pct:.4f} > max {self.max_position_pct:.4f}",
             )
+
+        # R11 — NOTIONAL mínimo de Binance (filtro NOTIONAL con applyMinToMarket=true)
+        # Valida los tres tipos de orden que se emiten al abrir un trade:
+        #   1. MARKET BUY: notional = usdt_balance * position_size_pct
+        #   2. STOP_LOSS_LIMIT (SL): notional = qty_btc * sl_limit_price
+        #      donde sl_limit_price = stop_loss * 0.9985 (factor de slippage del executor)
+        #   3. LIMIT (TP): notional = qty_btc * take_profit
+        # El SL es el caso más restrictivo porque usa el precio más bajo del set.
+        # Referencia: https://developers.binance.com/docs/binance-spot-api-docs/filters#notional
+        notional_usdt = usdt_balance * decision.position_size_pct
+        if notional_usdt < self.min_notional_usdt:
+            return self._reject(
+                "R11",
+                f"notional BUY {notional_usdt:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT "
+                f"(Binance NOTIONAL filter)",
+            )
+
+        # Estimar qty_btc para validar brackets (notional_usdt / precio_actual)
+        qty_btc_est = notional_usdt / current_price if current_price > 0 else 0.0
+        if qty_btc_est > 0 and decision.stop_loss is not None:
+            _SL_LIMIT_SLIPPAGE = 0.9985
+            sl_notional = qty_btc_est * decision.stop_loss * _SL_LIMIT_SLIPPAGE
+            if sl_notional < self.min_notional_usdt:
+                return self._reject(
+                    "R11",
+                    f"notional SL {sl_notional:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT "
+                    f"(Binance NOTIONAL filter — SL limit price too low for position size)",
+                )
+        if qty_btc_est > 0 and decision.take_profit is not None:
+            tp_notional = qty_btc_est * decision.take_profit
+            if tp_notional < self.min_notional_usdt:
+                return self._reject(
+                    "R11",
+                    f"notional TP {tp_notional:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT "
+                    f"(Binance NOTIONAL filter — TP price too low for position size)",
+                )
 
         # R8 — posiciones simultáneas
         if open_positions_count >= self.max_simultaneous_trades:

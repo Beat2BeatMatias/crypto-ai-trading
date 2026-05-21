@@ -365,6 +365,7 @@ async def run() -> None:
                 max_slippage_pct=max_slippage_pct, taker_fee_pct=fees.taker,
                 min_rr_ratio=min_rr_ratio, sl_atr_multiplier=sl_atr_multiplier,
                 sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
+                min_notional_usdt=float(calibration.get("min_notional_usdt", 5.0)),
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_ref=atr,

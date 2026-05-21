@@ -40,6 +40,7 @@ class OrderTracker:
             if trade.close_requested:
                 logger.info("order_tracker.manual_close_requested", trade_id=str(trade.id))
                 try:
+                    await self._cancel_bracket_orders(trade)
                     await self.executor.execute_sell(
                         trade_id=trade.id, decision_id=None, close_reason="manual_close",
                     )

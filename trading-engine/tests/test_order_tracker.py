@@ -592,3 +592,123 @@ async def test_execute_sell_proceeds_with_trade_qty_if_balance_check_fails(sessi
     call_args = exchange.create_market_order.call_args
     qty_used = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("amount")
     assert qty_used == pytest.approx(0.00013, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Cierre manual (close_requested)
+# ---------------------------------------------------------------------------
+
+async def test_manual_close_cancels_bracket_orders_before_sell(session):
+    # GIVEN un trade con close_requested=True y bracket SL/TP activos en Binance
+    trade = _make_open_trade(
+        session,
+        qty=0.00013,
+        stop_loss=76500.0,
+        take_profit=78000.0,
+        order_id_sl="ORD-SL-ACTIVE",
+        order_id_tp="ORD-TP-ACTIVE",
+    )
+    trade.close_requested = True
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77000.0})
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00013, "USDT": 100.0},
+        "total": {"BTC": 0.00013},
+    })
+    exchange.create_market_order = AsyncMock(return_value={
+        "id": "ORD-SELL-MANUAL", "average": 77000.0, "filled": 0.00013,
+        "fee": {"cost": 0.01},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN se cancelaron los brackets ANTES del market sell
+    cancel_calls = [str(c.args[0]) for c in exchange.cancel_order.call_args_list]
+    assert "ORD-SL-ACTIVE" in cancel_calls
+    assert "ORD-TP-ACTIVE" in cancel_calls
+    # AND el trade quedó cerrado con reason manual_close
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "manual_close"
+
+
+async def test_manual_close_succeeds_even_if_cancel_bracket_fails(session):
+    # GIVEN un trade con close_requested=True y cancel_order lanza excepción
+    # (las órdenes SL/TP ya vencieron o no existen en Binance)
+    trade = _make_open_trade(
+        session,
+        qty=0.00013,
+        stop_loss=76500.0,
+        order_id_sl="ORD-SL-EXPIRED",
+    )
+    trade.close_requested = True
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77000.0})
+    exchange.cancel_order = AsyncMock(side_effect=Exception("Order does not exist"))
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00013, "USDT": 100.0},
+        "total": {"BTC": 0.00013},
+    })
+    exchange.create_market_order = AsyncMock(return_value={
+        "id": "ORD-SELL-MANUAL", "average": 77000.0, "filled": 0.00013,
+        "fee": {"cost": 0.01},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos (cancel_order falla pero el flow no debe romperse)
+    await tracker.poll_once()
+
+    # THEN el trade igual se cierra (cancel silencia el error, igual que el SL guardian)
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "manual_close"
+
+
+async def test_manual_close_without_bracket_orders_closes_directly(session):
+    # GIVEN un trade con close_requested=True sin order_id_sl ni order_id_tp
+    trade = _make_open_trade(
+        session,
+        qty=0.00013,
+        stop_loss=76500.0,
+        order_id_sl=None,
+        order_id_tp=None,
+    )
+    trade.close_requested = True
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77000.0})
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00013, "USDT": 100.0},
+        "total": {"BTC": 0.00013},
+    })
+    exchange.create_market_order = AsyncMock(return_value={
+        "id": "ORD-SELL-MANUAL", "average": 77000.0, "filled": 0.00013,
+        "fee": {"cost": 0.01},
+    })
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN no se intentó cancelar ninguna orden (no había brackets)
+    exchange.cancel_order.assert_not_called()
+    # AND el trade se cerró correctamente
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "manual_close"
