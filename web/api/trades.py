@@ -28,6 +28,8 @@ class TradeOut(BaseModel):
     close_requested: bool
     order_id_open: str | None
     order_id_close: str | None
+    order_id_sl: str | None
+    order_id_tp: str | None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
@@ -46,6 +48,8 @@ def _to_out(r: Trade) -> TradeOut:
         close_requested=bool(r.close_requested),
         order_id_open=r.order_id_open,
         order_id_close=r.order_id_close,
+        order_id_sl=r.order_id_sl,
+        order_id_tp=r.order_id_tp,
     )
 
 @router.get("/trades", response_model=list[TradeOut])

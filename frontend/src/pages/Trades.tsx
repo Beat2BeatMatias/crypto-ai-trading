@@ -345,14 +345,30 @@ export function Trades() {
             {/* ── Fila 2: Gestión de riesgo ── */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-3 border-t border-zinc-800">
               <div>
-                <div className="text-xs text-zinc-500 mb-1">Stop Loss</div>
+                <div className="text-xs text-zinc-500 mb-1">
+                  Stop Loss
+                  {t.stop_loss && !t.order_id_sl && (
+                    <span
+                      title="Orden SL no colocada en Binance — cubierto por SL Guardian (software)"
+                      className="ml-1 text-amber-400 cursor-help"
+                    >⚠ guardian</span>
+                  )}
+                </div>
                 <div className="font-mono text-sm text-red-400">{fmt(t.stop_loss)}</div>
                 <div className="text-xs text-zinc-600 mt-0.5">
                   {slDistance(t.entry_price, t.stop_loss)} abajo
                 </div>
               </div>
               <div>
-                <div className="text-xs text-zinc-500 mb-1">Take Profit</div>
+                <div className="text-xs text-zinc-500 mb-1">
+                  Take Profit
+                  {t.take_profit && !t.order_id_tp && (
+                    <span
+                      title="Orden TP no colocada en Binance — cubierto por TP Guardian (software)"
+                      className="ml-1 text-amber-400 cursor-help"
+                    >⚠ guardian</span>
+                  )}
+                </div>
                 <div className="font-mono text-sm text-emerald-400">{fmt(t.take_profit)}</div>
                 <div className="text-xs text-zinc-600 mt-0.5">
                   {tpDistance(t.entry_price, t.take_profit)} arriba
@@ -385,14 +401,24 @@ export function Trades() {
             )}
 
             {/* ── Order IDs ── */}
-            {(t.order_id_open || t.order_id_close) && (
-              <div className="mt-2 flex gap-4 text-xs text-zinc-600">
+            {(t.order_id_open || t.order_id_close || t.order_id_sl || t.order_id_tp) && (
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-600">
                 {t.order_id_open && (
-                  <span>Order apertura: <span className="font-mono">{t.order_id_open}</span></span>
+                  <span>Apertura: <span className="font-mono">{t.order_id_open}</span></span>
                 )}
                 {t.order_id_close && (
-                  <span>Order cierre: <span className="font-mono">{t.order_id_close}</span></span>
+                  <span>Cierre: <span className="font-mono">{t.order_id_close}</span></span>
                 )}
+                {t.order_id_sl ? (
+                  <span>SL bracket: <span className="font-mono">{t.order_id_sl}</span></span>
+                ) : t.stop_loss ? (
+                  <span className="text-amber-500/70">SL: guardian software</span>
+                ) : null}
+                {t.order_id_tp ? (
+                  <span>TP bracket: <span className="font-mono">{t.order_id_tp}</span></span>
+                ) : t.take_profit ? (
+                  <span className="text-amber-500/70">TP: guardian software</span>
+                ) : null}
               </div>
             )}
 

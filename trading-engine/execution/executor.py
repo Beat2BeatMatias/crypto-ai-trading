@@ -18,6 +18,13 @@ _SL_LIMIT_SLIPPAGE = 0.9985  # 0.15% por debajo del stop price
 _SL_BRACKET_RETRIES = 2
 _SL_BRACKET_RETRY_DELAY_SEC = 2.0
 
+# OCO (One-Cancels-the-Other): coloca SL y TP en una sola llamada a Binance.
+# Cuando uno se ejecuta, Binance cancela automáticamente el otro, resolviendo
+# el problema de saldo insuficiente que ocurre al colocarlos por separado
+# (el SL reserva el BTC y Binance rechaza el TP con "insufficient balance").
+_OCO_RETRIES = 2
+_OCO_RETRY_DELAY_SEC = 2.0
+
 
 class Executor:
     def __init__(self, exchange: Any, session: AsyncSession, *, symbol: str):
@@ -60,50 +67,44 @@ class Executor:
             d.trade_id = trade.id
         await self.session.commit()
 
-        # Colocar brackets SL/TP (best-effort con retry): si agotan los intentos,
-        # el trade queda en BD con order_id_sl=NULL y el SL Guardian lo cubre.
-        # Binance Spot usa STOP_LOSS_LIMIT (no STOP_MARKET, que es solo para Futures).
+        # Colocar brackets SL/TP via OCO (One-Cancels-the-Other).
+        # La OCO coloca SL y TP en una sola llamada: cuando uno se ejecuta,
+        # Binance cancela el otro automáticamente. Esto elimina el problema de
+        # "insufficient balance" que ocurre al colocarlos por separado (el SL
+        # reserva el BTC y Binance rechaza el TP con saldo insuficiente).
+        #
+        # Fallback en cascada si algún precio no está disponible:
+        #   1. OCO (SL + TP en un request) — preferido cuando ambos precios existen
+        #   2. Solo SL STOP_LOSS_LIMIT — cuando no hay TP en la decisión
+        #   3. Solo TP LIMIT — cuando no hay SL en la decisión (poco común)
+        #   4. Sin bracket — SL Guardian y TP Guardian del OrderTracker cubren el trade
         sl_order_id: str | None = None
         tp_order_id: str | None = None
 
-        if decision.stop_loss is not None:
-            sl_limit_price = round(decision.stop_loss * _SL_LIMIT_SLIPPAGE, 2)
-            for attempt in range(1, _SL_BRACKET_RETRIES + 1):
-                try:
-                    sl_order = await self.exchange.create_order(
-                        self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
-                        price=sl_limit_price,
-                        params={"stopPrice": decision.stop_loss, "timeInForce": "GTC"},
-                    )
-                    sl_order_id = str(sl_order.get("id")) if sl_order.get("id") else None
-                    logger.info("executor.sl_bracket_placed",
-                                order_id=sl_order_id, stop_price=decision.stop_loss,
-                                limit_price=sl_limit_price, attempt=attempt)
-                    break
-                except Exception as e:
-                    logger.warning("executor.sl_bracket_attempt_failed",
-                                   error=str(e), trade_id=str(trade.id), attempt=attempt)
-                    if attempt < _SL_BRACKET_RETRIES:
-                        await asyncio.sleep(_SL_BRACKET_RETRY_DELAY_SEC)
-            else:
-                logger.error("executor.sl_bracket_failed_all_retries",
-                             trade_id=str(trade.id), stop_price=decision.stop_loss,
-                             retries=_SL_BRACKET_RETRIES)
+        has_sl = decision.stop_loss is not None
+        has_tp = decision.take_profit is not None
 
-        if decision.take_profit is not None:
-            try:
-                tp_order = await self.exchange.create_order(
-                    self.symbol, "LIMIT", "sell", filled_qty, price=decision.take_profit,
-                    params={"timeInForce": "GTC"},
-                )
-                tp_order_id = str(tp_order.get("id")) if tp_order.get("id") else None
-                logger.info("executor.tp_bracket_placed",
-                            order_id=tp_order_id, price=decision.take_profit)
-            except Exception as e:
-                logger.warning("executor.tp_bracket_failed",
-                               error=str(e), trade_id=str(trade.id))
+        if has_sl and has_tp:
+            sl_order_id, tp_order_id = await self._place_oco_bracket(
+                filled_qty=filled_qty,
+                stop_loss=decision.stop_loss,
+                take_profit=decision.take_profit,
+                trade_id=trade.id,
+            )
+        elif has_sl:
+            sl_order_id = await self._place_sl_bracket(
+                filled_qty=filled_qty,
+                stop_loss=decision.stop_loss,
+                trade_id=trade.id,
+            )
+        elif has_tp:
+            tp_order_id = await self._place_tp_bracket(
+                filled_qty=filled_qty,
+                take_profit=decision.take_profit,
+                trade_id=trade.id,
+            )
 
-        # Actualizar trade con los IDs de las órdenes bracket obtenidas
+        # Persistir los IDs de brackets obtenidos (incluso si solo uno fue exitoso)
         if sl_order_id is not None or tp_order_id is not None:
             await self.session.refresh(trade)
             trade.order_id_sl = sl_order_id
@@ -114,6 +115,111 @@ class Executor:
         logger.info("executor.buy_executed", trade_id=str(trade.id), price=avg_price,
                     sl_placed=(sl_order_id is not None), tp_placed=(tp_order_id is not None))
         return trade
+
+    async def _place_oco_bracket(
+        self, *, filled_qty: float, stop_loss: float, take_profit: float,
+        trade_id: uuid.UUID,
+    ) -> tuple[str | None, str | None]:
+        """Coloca una orden OCO (SL + TP simultáneos) con retry.
+
+        Binance OCO para Spot: create_oco_order(symbol, side, qty, price, stopPrice, stopLimitPrice).
+          - price       → límite del TP (LIMIT_MAKER)
+          - stopPrice   → precio de activación del SL
+          - stopLimitPrice → precio límite del SL (ligeramente por debajo del stopPrice)
+
+        Si la OCO falla (exchange no soporta, error transitorio), hace fallback
+        colocando SL solo — el TP Guardian del OrderTracker cubre el TP.
+        """
+        sl_limit_price = round(stop_loss * _SL_LIMIT_SLIPPAGE, 2)
+
+        for attempt in range(1, _OCO_RETRIES + 1):
+            try:
+                oco = await self.exchange.create_order(
+                    self.symbol, "OCO", "sell", filled_qty,
+                    price=take_profit,
+                    params={
+                        "stopPrice": stop_loss,
+                        "stopLimitPrice": sl_limit_price,
+                        "stopLimitTimeInForce": "GTC",
+                    },
+                )
+                # Binance retorna orderListId + dos órdenes hijas en "orders"
+                orders = oco.get("orders") or []
+                sl_id: str | None = None
+                tp_id: str | None = None
+                for o in orders:
+                    otype = (o.get("type") or "").upper()
+                    if otype in ("STOP_LOSS_LIMIT", "STOP_LOSS"):
+                        sl_id = str(o["orderId"]) if o.get("orderId") else None
+                    elif otype in ("LIMIT_MAKER", "LIMIT"):
+                        tp_id = str(o["orderId"]) if o.get("orderId") else None
+                # Fallback: si la respuesta no tiene "orders", usar el id raíz
+                if not sl_id and not tp_id:
+                    root_id = str(oco.get("id") or oco.get("orderListId") or "")
+                    sl_id = root_id or None
+                    tp_id = root_id or None
+                logger.info("executor.oco_bracket_placed",
+                            trade_id=str(trade_id), sl_id=sl_id, tp_id=tp_id,
+                            stop_price=stop_loss, tp_price=take_profit, attempt=attempt)
+                return sl_id, tp_id
+            except Exception as e:
+                logger.warning("executor.oco_bracket_attempt_failed",
+                               error=str(e), trade_id=str(trade_id), attempt=attempt)
+                if attempt < _OCO_RETRIES:
+                    await asyncio.sleep(_OCO_RETRY_DELAY_SEC)
+
+        # Fallback: OCO agotó reintentos → colocar solo el SL
+        logger.warning("executor.oco_failed_falling_back_to_sl_only",
+                       trade_id=str(trade_id), stop_price=stop_loss, tp_price=take_profit)
+        sl_id = await self._place_sl_bracket(
+            filled_qty=filled_qty, stop_loss=stop_loss, trade_id=trade_id,
+        )
+        return sl_id, None
+
+    async def _place_sl_bracket(
+        self, *, filled_qty: float, stop_loss: float, trade_id: uuid.UUID,
+    ) -> str | None:
+        """Coloca solo la orden STOP_LOSS_LIMIT con retry."""
+        sl_limit_price = round(stop_loss * _SL_LIMIT_SLIPPAGE, 2)
+        for attempt in range(1, _SL_BRACKET_RETRIES + 1):
+            try:
+                sl_order = await self.exchange.create_order(
+                    self.symbol, "STOP_LOSS_LIMIT", "sell", filled_qty,
+                    price=sl_limit_price,
+                    params={"stopPrice": stop_loss, "timeInForce": "GTC"},
+                )
+                sl_id = str(sl_order.get("id")) if sl_order.get("id") else None
+                logger.info("executor.sl_bracket_placed",
+                            order_id=sl_id, stop_price=stop_loss,
+                            limit_price=sl_limit_price, attempt=attempt)
+                return sl_id
+            except Exception as e:
+                logger.warning("executor.sl_bracket_attempt_failed",
+                               error=str(e), trade_id=str(trade_id), attempt=attempt)
+                if attempt < _SL_BRACKET_RETRIES:
+                    await asyncio.sleep(_SL_BRACKET_RETRY_DELAY_SEC)
+        logger.error("executor.sl_bracket_failed_all_retries",
+                     trade_id=str(trade_id), stop_price=stop_loss,
+                     retries=_SL_BRACKET_RETRIES)
+        return None
+
+    async def _place_tp_bracket(
+        self, *, filled_qty: float, take_profit: float, trade_id: uuid.UUID,
+    ) -> str | None:
+        """Coloca solo la orden LIMIT de TP (sin SL asociado)."""
+        try:
+            tp_order = await self.exchange.create_order(
+                self.symbol, "LIMIT", "sell", filled_qty, price=take_profit,
+                params={"timeInForce": "GTC"},
+            )
+            tp_id = str(tp_order.get("id")) if tp_order.get("id") else None
+            logger.info("executor.tp_bracket_placed",
+                        order_id=tp_id, price=take_profit)
+            return tp_id
+        except Exception as e:
+            logger.warning("executor.tp_bracket_failed",
+                           error=str(e), trade_id=str(trade_id))
+            return None
 
     async def execute_sell(self, *, trade_id: uuid.UUID, decision_id: uuid.UUID | None,
                             close_reason: str) -> Trade:

@@ -170,6 +170,34 @@ class OrderTracker:
                 except Exception as e:
                     logger.error("order_tracker.sl_guardian_failed",
                                  trade_id=str(trade.id), error=str(e))
+                continue
+
+            # --- Mecanismo 4: software TP guardian ---
+            # Actúa cuando el bracket de TP no fue colocado en Binance (order_id_tp == None),
+            # lo cual ocurre cuando Binance rechaza la orden LIMIT por saldo insuficiente
+            # (el BTC ya está reservado por la orden SL activa).
+            # En ese caso, monitorea el precio actual y cierra con market sell al alcanzar el TP.
+            tp = float(trade.take_profit or 0)
+            tp_guardian_active = not trade.order_id_tp and tp > 0
+            tp_reached = (
+                tp_guardian_active
+                and current_price is not None
+                and current_price >= tp
+            )
+            if tp_reached:
+                logger.warning(
+                    "order_tracker.tp_guardian_triggered",
+                    trade_id=str(trade.id),
+                    take_profit=tp,
+                    current_price=current_price,
+                )
+                try:
+                    await self.executor.execute_sell(
+                        trade_id=trade.id, decision_id=None, close_reason="tp_triggered",
+                    )
+                except Exception as e:
+                    logger.error("order_tracker.tp_guardian_failed",
+                                 trade_id=str(trade.id), error=str(e))
 
     async def _fetch_current_price(self) -> float | None:
         """Obtiene el precio actual del mercado para el guardian de SL."""

@@ -14,6 +14,8 @@ export interface Trade {
   close_requested: boolean;
   order_id_open: string | null;
   order_id_close: string | null;
+  order_id_sl: string | null;
+  order_id_tp: string | null;
 }
 
 export interface Position {
