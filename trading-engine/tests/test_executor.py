@@ -120,7 +120,14 @@ def _make_exchange(order_id: str = "ORD-001", avg_price: float = 67000.0,
     }
     ex = MagicMock()
     ex.create_market_order = AsyncMock(return_value=order)
-    ex.create_order = AsyncMock(return_value={"id": f"{order_id}-sl"})
+    # Por defecto simula respuesta OCO con dos órdenes hijas
+    ex.create_order = AsyncMock(return_value={
+        "orderListId": f"{order_id}-oco",
+        "orders": [
+            {"orderId": f"{order_id}-sl", "type": "STOP_LOSS_LIMIT"},
+            {"orderId": f"{order_id}-tp", "type": "LIMIT_MAKER"},
+        ],
+    })
     return ex
 
 
@@ -175,9 +182,9 @@ async def test_execute_buy_creates_trade_and_position(session):
     assert trades[0].order_id_open == "ORD-BUY-1"
     assert trades[0].status == "open"
     assert float(trades[0].entry_price) == pytest.approx(67000.0)
-    # AND los IDs de las órdenes bracket quedan persistidos
+    # AND los IDs de las órdenes bracket OCO quedan persistidos (SL y TP distintos)
     assert trades[0].order_id_sl == "ORD-BUY-1-sl"
-    assert trades[0].order_id_tp == "ORD-BUY-1-sl"
+    assert trades[0].order_id_tp == "ORD-BUY-1-tp"
 
     # AND a Position row was created
     positions = (await session.execute(sa_select(Position))).scalars().all()
@@ -202,19 +209,19 @@ async def test_execute_buy_marks_decision_executed(session):
     assert d.executed is True
 
 
-async def test_execute_buy_trade_saved_even_if_sl_bracket_fails(session):
-    # GIVEN un exchange donde la orden market BUY funciona pero el bracket SL falla
+async def test_execute_buy_trade_saved_even_if_all_brackets_fail(session):
+    # GIVEN un exchange donde el market BUY funciona pero la OCO y el SL fallback también fallan
     decision_id = uuid.uuid4()
     await _insert_decision(session, decision_id)
     exchange = _make_exchange(order_id="ORD-BUY-NOSL", avg_price=67000.0, filled=0.001, fee=0.07)
-    exchange.create_order = AsyncMock(side_effect=Exception("STOP_LOSS_LIMIT not supported"))
+    exchange.create_order = AsyncMock(side_effect=Exception("OCO not supported"))
     executor = Executor(exchange, session, symbol="BTC/USDT")
 
-    # WHEN ejecutamos el buy (bracket fallará)
+    # WHEN ejecutamos el buy (todos los brackets fallarán)
     trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
                                         usdt_balance=10000.0)
 
-    # THEN el Trade queda guardado en BD con executed=True
+    # THEN el Trade queda guardado en BD — los guardians de OrderTracker lo cubrirán
     trades = (await session.execute(sa_select(Trade))).scalars().all()
     assert len(trades) == 1
     assert trades[0].status == "open"
@@ -228,42 +235,127 @@ async def test_execute_buy_trade_saved_even_if_sl_bracket_fails(session):
     assert d.executed is True
 
 
-async def test_execute_buy_uses_stop_loss_limit_order_type(session):
-    # GIVEN un exchange que captura el tipo de orden usado para el SL
+async def test_execute_buy_uses_oco_order_when_both_sl_and_tp_exist(session):
+    # GIVEN una decisión con SL y TP
     decision_id = uuid.uuid4()
     await _insert_decision(session, decision_id)
-    exchange = _make_exchange(order_id="ORD-BUY-SL", avg_price=67000.0, filled=0.001, fee=0.07)
+    exchange = _make_exchange(order_id="ORD-OCO", avg_price=67000.0, filled=0.001, fee=0.07)
     executor = Executor(exchange, session, symbol="BTC/USDT")
 
     # WHEN ejecutamos el buy
-    await executor.execute_buy(decision=_make_buy_decision(stop_loss=66400.0),
-                                decision_id=decision_id, usdt_balance=10000.0)
-
-    # THEN el bracket SL se coloca con tipo STOP_LOSS_LIMIT (no STOP_MARKET)
-    calls = exchange.create_order.call_args_list
-    sl_call = calls[0]
-    assert sl_call.args[1] == "STOP_LOSS_LIMIT", (
-        f"Se esperaba STOP_LOSS_LIMIT pero se usó: {sl_call.args[1]}"
+    trade = await executor.execute_buy(
+        decision=_make_buy_decision(stop_loss=66400.0, take_profit=67800.0),
+        decision_id=decision_id, usdt_balance=10000.0,
     )
-    # AND el price límite es ligeramente menor al stop price (0.15% de slippage)
-    sl_limit_price = sl_call.args[4] if len(sl_call.args) > 4 else sl_call.kwargs.get("price")
-    assert sl_limit_price is not None
-    assert sl_limit_price < 66400.0
-    assert sl_limit_price == pytest.approx(66400.0 * 0.9985, rel=1e-3)
+
+    # THEN se usó una orden OCO (no STOP_LOSS_LIMIT ni LIMIT por separado)
+    calls = exchange.create_order.call_args_list
+    assert len(calls) == 1
+    oco_call = calls[0]
+    assert oco_call.args[1] == "OCO", (
+        f"Se esperaba OCO pero se usó: {oco_call.args[1]}"
+    )
+    # AND el price del OCO es el TP (LIMIT_MAKER)
+    oco_price = oco_call.args[4] if len(oco_call.args) > 4 else oco_call.kwargs.get("price")
+    assert oco_price == pytest.approx(67800.0, rel=1e-4)
+    # AND el stopPrice en params es el SL
+    params = oco_call.kwargs.get("params") or (oco_call.args[5] if len(oco_call.args) > 5 else {})
+    assert params.get("stopPrice") == pytest.approx(66400.0, rel=1e-4)
+    # AND los IDs de las órdenes bracket quedan persistidos desde la respuesta OCO
+    await session.refresh(trade)
+    assert trade.order_id_sl == "ORD-OCO-sl"
+    assert trade.order_id_tp == "ORD-OCO-tp"
+
+
+async def test_execute_buy_oco_sl_limit_price_has_slippage(session):
+    # GIVEN una decisión con SL = 66400
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-SLIP", avg_price=67000.0, filled=0.001, fee=0.07)
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy
+    await executor.execute_buy(
+        decision=_make_buy_decision(stop_loss=66400.0, take_profit=67800.0),
+        decision_id=decision_id, usdt_balance=10000.0,
+    )
+
+    # THEN el stopLimitPrice en la OCO tiene 0.15% de slippage por debajo del stopPrice
+    calls = exchange.create_order.call_args_list
+    params = calls[0].kwargs.get("params") or {}
+    stop_limit = params.get("stopLimitPrice")
+    assert stop_limit is not None
+    assert stop_limit < 66400.0
+    assert stop_limit == pytest.approx(66400.0 * 0.9985, rel=1e-3)
+
+
+async def test_execute_buy_oco_retries_then_falls_back_to_sl_only(session):
+    # GIVEN un exchange donde la OCO falla siempre pero el SL STOP_LOSS_LIMIT funciona
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-FBSL", avg_price=67000.0, filled=0.001, fee=0.07)
+    oco_attempts = []
+
+    async def _create_order_side_effect(symbol, order_type, side, qty, *args, **kwargs):
+        if order_type == "OCO":
+            oco_attempts.append(1)
+            raise Exception("OCO not supported on testnet")
+        return {"id": "ORD-FBSL-sl"}
+
+    exchange.create_order = AsyncMock(side_effect=_create_order_side_effect)
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN ejecutamos el buy
+    trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
+                                        usdt_balance=10000.0)
+
+    # THEN la OCO fue intentada _OCO_RETRIES veces antes del fallback
+    from execution.executor import _OCO_RETRIES
+    assert len(oco_attempts) == _OCO_RETRIES
+    # AND el fallback colocó el SL bracket solo
+    await session.refresh(trade)
+    assert trade.order_id_sl == "ORD-FBSL-sl"
+    # AND el TP queda NULL — el TP Guardian del OrderTracker lo cubre
+    assert trade.order_id_tp is None
+
+
+async def test_execute_buy_uses_sl_only_when_no_tp_in_decision(session):
+    # GIVEN una decisión sin take_profit
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = _make_exchange(order_id="ORD-SLONLY", avg_price=67000.0, filled=0.001, fee=0.07)
+    exchange.create_order = AsyncMock(return_value={"id": "ORD-SLONLY-sl"})
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    decision = _make_buy_decision(take_profit=0.0)
+    decision.take_profit = None
+
+    # WHEN ejecutamos el buy
+    trade = await executor.execute_buy(decision=decision, decision_id=decision_id,
+                                        usdt_balance=10000.0)
+
+    # THEN se colocó STOP_LOSS_LIMIT directo (no OCO)
+    calls = exchange.create_order.call_args_list
+    assert calls[0].args[1] == "STOP_LOSS_LIMIT"
+    await session.refresh(trade)
+    assert trade.order_id_sl == "ORD-SLONLY-sl"
+    assert trade.order_id_tp is None
 
 
 async def test_execute_buy_sl_bracket_retries_on_failure(session):
-    # GIVEN un exchange donde el bracket SL falla una vez y luego tiene éxito
-    # (el TP también usa create_order; aquí lo deshabilitamos para aislar el SL)
+    # GIVEN que la OCO falla (para simplificar) y el SL fallback falla una vez y luego tiene éxito
     decision_id = uuid.uuid4()
     await _insert_decision(session, decision_id)
     exchange = _make_exchange(order_id="ORD-RETRY", avg_price=67000.0, filled=0.001, fee=0.07)
-    sl_attempts = []
+    call_count = {"oco": 0, "sl": 0}
 
     async def _create_order_side_effect(symbol, order_type, side, qty, *args, **kwargs):
+        if order_type == "OCO":
+            call_count["oco"] += 1
+            raise Exception("OCO not supported")
         if order_type == "STOP_LOSS_LIMIT":
-            sl_attempts.append(1)
-            if len(sl_attempts) == 1:
+            call_count["sl"] += 1
+            if call_count["sl"] == 1:
                 raise Exception("transient error")
             return {"id": "ORD-RETRY-sl"}
         return {"id": "ORD-TP"}
@@ -275,22 +367,22 @@ async def test_execute_buy_sl_bracket_retries_on_failure(session):
     trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
                                         usdt_balance=10000.0)
 
-    # THEN el bracket SL quedó colocado en el segundo intento
+    # THEN el bracket SL quedó colocado en el segundo intento del fallback
     await session.refresh(trade)
     assert trade.order_id_sl == "ORD-RETRY-sl"
-    assert len(sl_attempts) == 2
+    assert call_count["sl"] == 2
 
 
 async def test_execute_buy_sl_bracket_logs_error_after_all_retries_exhausted(session):
-    # GIVEN un exchange donde el bracket SL falla en todos los intentos
+    # GIVEN que la OCO y el SL fallback fallan en todos los intentos
     decision_id = uuid.uuid4()
     await _insert_decision(session, decision_id)
     exchange = _make_exchange(order_id="ORD-NOSL", avg_price=67000.0, filled=0.001, fee=0.07)
     sl_attempts = []
 
     async def _create_order_always_fails(symbol, order_type, side, qty, *args, **kwargs):
-        if order_type == "STOP_LOSS_LIMIT":
-            sl_attempts.append(1)
+        if order_type in ("OCO", "STOP_LOSS_LIMIT"):
+            sl_attempts.append(order_type)
             raise Exception("permanent error")
         return {"id": "ORD-TP"}
 
@@ -301,13 +393,17 @@ async def test_execute_buy_sl_bracket_logs_error_after_all_retries_exhausted(ses
     trade = await executor.execute_buy(decision=_make_buy_decision(), decision_id=decision_id,
                                         usdt_balance=10000.0)
 
-    # THEN el trade está guardado pero sin bracket SL
+    # THEN el trade está guardado pero sin ningún bracket
     await session.refresh(trade)
     assert trade.status == "open"
     assert trade.order_id_sl is None
-    # AND se intentó exactamente _SL_BRACKET_RETRIES veces
-    from execution.executor import _SL_BRACKET_RETRIES
-    assert len(sl_attempts) == _SL_BRACKET_RETRIES
+    assert trade.order_id_tp is None
+    # AND se intentó OCO (_OCO_RETRIES) + SL fallback (_SL_BRACKET_RETRIES) veces
+    from execution.executor import _OCO_RETRIES, _SL_BRACKET_RETRIES
+    oco_count = sum(1 for t in sl_attempts if t == "OCO")
+    sl_count = sum(1 for t in sl_attempts if t == "STOP_LOSS_LIMIT")
+    assert oco_count == _OCO_RETRIES
+    assert sl_count == _SL_BRACKET_RETRIES
 
 
 async def test_execute_sell_closes_trade_and_computes_pnl(session):

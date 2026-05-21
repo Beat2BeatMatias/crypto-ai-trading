@@ -44,3 +44,39 @@ async def test_list_trades_filter_by_status(client, app_with_db):
     data = r.json()
     assert len(data) == 1
     assert data[0]["status"] == "open"
+
+
+async def test_trade_response_includes_bracket_order_ids(client, app_with_db):
+    # GIVEN un trade con order_id_sl y order_id_tp seteados (OCO exitosa)
+    await _create_trade(
+        app_with_db.state.session_factory,
+        order_id_sl="SL-12345",
+        order_id_tp="TP-67890",
+    )
+
+    # WHEN pedimos la lista de trades
+    r = await client.get("/api/trades")
+
+    # THEN la respuesta incluye los IDs de los brackets
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["order_id_sl"] == "SL-12345"
+    assert data[0]["order_id_tp"] == "TP-67890"
+
+
+async def test_trade_response_bracket_ids_null_when_not_placed(client, app_with_db):
+    # GIVEN un trade sin brackets (OCO falló, guardian de software lo cubre)
+    await _create_trade(app_with_db.state.session_factory)
+
+    # WHEN pedimos la lista de trades
+    r = await client.get("/api/trades")
+
+    # THEN los campos bracket son null (no ausentes)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert "order_id_sl" in data[0]
+    assert "order_id_tp" in data[0]
+    assert data[0]["order_id_sl"] is None
+    assert data[0]["order_id_tp"] is None
