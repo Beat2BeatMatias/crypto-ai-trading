@@ -712,3 +712,94 @@ async def test_manual_close_without_bracket_orders_closes_directly(session):
     await session.refresh(trade)
     assert trade.status == "closed"
     assert trade.close_reason == "manual_close"
+
+
+# ---------------------------------------------------------------------------
+# Tests — Force close por NOTIONAL insuficiente
+# ---------------------------------------------------------------------------
+
+async def test_force_close_triggered_on_notional_error_during_manual_close(session):
+    # GIVEN un trade con close_requested=True cuyo sell falla por NOTIONAL insuficiente
+    trade = _make_open_trade(session, qty=0.00006, stop_loss=76500.0)
+    trade.close_requested = True
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77800.0})
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00006, "USDT": 100.0},
+        "total": {"BTC": 0.00006},
+    })
+    # Binance rechaza la orden por NOTIONAL insuficiente
+    exchange.create_market_order = AsyncMock(
+        side_effect=Exception('binance {"code":-1013,"msg":"Filter failure: NOTIONAL"}')
+    )
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra con force_closed_notional sin datos de venta real
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "force_closed_notional"
+    assert trade.exit_price is None
+    assert trade.pnl_usdt is None
+
+
+async def test_force_close_not_triggered_on_other_errors(session):
+    # GIVEN un trade con close_requested=True cuyo sell falla por insuficient balance (no NOTIONAL)
+    trade = _make_open_trade(session, qty=0.00013, stop_loss=76500.0)
+    trade.close_requested = True
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77800.0})
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.0, "USDT": 100.0},
+        "total": {"BTC": 0.0},
+    })
+    exchange.create_market_order = AsyncMock(
+        side_effect=Exception("Account has insufficient balance for requested action.")
+    )
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade NO se cierra por force_close (el error no es NOTIONAL)
+    await session.refresh(trade)
+    assert trade.status == "open"
+
+
+async def test_force_close_trade_executor_sets_correct_fields(session):
+    # GIVEN un trade abierto
+    trade = _make_open_trade(session, qty=0.00006, entry=77222.0, stop_loss=76500.0)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN hacemos force_close con precio de mercado
+    closed = await executor.force_close_trade(
+        trade_id=trade.id,
+        market_price=77800.0,
+        close_reason="force_closed_notional",
+    )
+
+    # THEN el trade queda cerrado con los campos correctos
+    assert closed.status == "closed"
+    assert closed.close_reason == "force_closed_notional"
+    assert closed.ts_close is not None
+    # AND exit_price / pnl son null: el BTC nunca se vendió en el exchange
+    assert closed.exit_price is None
+    assert closed.pnl_usdt is None
+    assert closed.pnl_pct is None
+    assert closed.order_id_close is None

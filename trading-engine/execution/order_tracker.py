@@ -45,8 +45,32 @@ class OrderTracker:
                         trade_id=trade.id, decision_id=None, close_reason="manual_close",
                     )
                 except Exception as e:
-                    logger.error("order_tracker.manual_close_failed",
-                                 trade_id=str(trade.id), error=str(e))
+                    error_str = str(e)
+                    if "-1013" in error_str and "NOTIONAL" in error_str:
+                        logger.warning(
+                            "order_tracker.manual_close_notional_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        try:
+                            market_price = await self._fetch_current_price()
+                            if market_price:
+                                await self.executor.force_close_trade(
+                                    trade_id=trade.id,
+                                    market_price=market_price,
+                                    close_reason="force_closed_notional",
+                                )
+                            else:
+                                logger.error(
+                                    "order_tracker.manual_close_notional_price_unavailable",
+                                    trade_id=str(trade.id),
+                                )
+                        except Exception as fe:
+                            logger.error("order_tracker.force_close_failed",
+                                         trade_id=str(trade.id), error=str(fe))
+                    else:
+                        logger.error("order_tracker.manual_close_failed",
+                                     trade_id=str(trade.id), error=error_str)
 
         current_price = await self._fetch_current_price()
         last_candle_low = await self._fetch_last_candle_low()

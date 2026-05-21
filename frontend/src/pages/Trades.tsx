@@ -3,6 +3,26 @@ import type React from "react";
 import { api } from "../api/client";
 import type { Trade } from "../types";
 
+// ── Close reason labels ───────────────────────────────────────────────────────
+
+const CLOSE_REASON_LABELS: Record<string, { label: string; className: string }> = {
+  sl_triggered:          { label: "Stop Loss",             className: "text-red-400" },
+  tp_triggered:          { label: "Take Profit",           className: "text-green-400" },
+  bracket_fill:          { label: "Bracket ejecutado",     className: "text-blue-400" },
+  manual_close:          { label: "Cierre manual",         className: "text-yellow-400" },
+  force_closed_notional: { label: "⚠ Cierre forzado — posición por debajo del mínimo NOTIONAL de Binance", className: "text-orange-400 font-semibold" },
+};
+
+function closeReasonBadge(reason: string | null) {
+  if (!reason) return null;
+  const def = CLOSE_REASON_LABELS[reason];
+  return (
+    <span className={`text-xs italic ml-auto ${def ? def.className : "text-zinc-600"}`}>
+      {def ? def.label : reason}
+    </span>
+  );
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 
 function fmt(n: number | null | undefined, decimals = 2, prefix = "$"): string {
@@ -317,9 +337,7 @@ export function Trades() {
                   → {new Date(t.ts_close).toLocaleString("es-AR", { hour12: false })}
                 </span>
               )}
-              {t.close_reason && (
-                <span className="text-xs text-zinc-600 italic ml-auto">{t.close_reason}</span>
-              )}
+              {closeReasonBadge(t.close_reason)}
             </div>
 
             {/* ── Fila 1: Ejecución ── */}

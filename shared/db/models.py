@@ -126,7 +126,7 @@ class Trade(Base):
     status: Mapped[str] = mapped_column(String(12), nullable=False)
     stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     take_profit: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
-    close_reason: Mapped[str | None] = mapped_column(String(20))
+    close_reason: Mapped[str | None] = mapped_column(String(30))
     order_id_open: Mapped[str | None] = mapped_column(String(50))
     order_id_close: Mapped[str | None] = mapped_column(String(50))
     order_id_sl: Mapped[str | None] = mapped_column(String(50))

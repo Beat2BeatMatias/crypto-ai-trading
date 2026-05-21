@@ -288,6 +288,40 @@ class Executor:
         logger.info("executor.sell_executed", trade_id=str(trade.id))
         return trade
 
+    async def force_close_trade(self, *, trade_id: uuid.UUID, market_price: float,
+                                close_reason: str) -> Trade:
+        """Cierra un trade en BD sin emitir ninguna orden al exchange.
+
+        Usado cuando el exchange rechaza la orden por motivos estructurales
+        (ej. NOTIONAL insuficiente) y el trade no puede cerrarse de forma normal.
+        El PnL se calcula con el precio de mercado actual como precio de salida.
+        No se registra order_id_close ya que no hubo orden real.
+        """
+        trade = await self.session.get(Trade, trade_id)
+        if trade is None or trade.status != "open":
+            raise RuntimeError(f"Trade {trade_id} not open")
+        trade.exit_price = None   # sin orden real — el BTC permanece en la cuenta
+        trade.ts_close = datetime.now(tz=timezone.utc)
+        trade.status = "closed"
+        trade.close_reason = close_reason
+        trade.pnl_usdt = None     # no aplica: no hubo venta en el exchange
+        trade.pnl_pct = None
+        pos = (await self.session.execute(
+            select(Position).where(Position.trade_id == trade.id)
+        )).scalar_one_or_none()
+        if pos:
+            pos.status = "closed"
+            pos.updated_at = datetime.now(tz=timezone.utc)
+        await self.session.commit()
+        await self.session.refresh(trade)
+        logger.warning(
+            "executor.force_close",
+            trade_id=str(trade.id),
+            close_reason=close_reason,
+            market_price=market_price,
+        )
+        return trade
+
     async def record_bracket_fill(self, *, trade_id: uuid.UUID, fill_price: float,
                                    fill_fee: float, close_reason: str) -> None:
         """Registra el cierre de un trade cuyo SL/TP ya fue ejecutado por Binance.
