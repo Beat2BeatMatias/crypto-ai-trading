@@ -118,16 +118,20 @@ async def session():
 
 def _make_open_trade(session: AsyncSession, *, stop_loss: float = 76721.08,
                      qty: float = 0.00013, entry: float = 76898.09,
-                     order_id_sl: str | None = None) -> Trade:
+                     take_profit: float | None = None,
+                     order_id_sl: str | None = None,
+                     order_id_tp: str | None = None) -> Trade:
     trade = Trade(
         ts_open=datetime(2026, 5, 19, 12, 39, 28, tzinfo=timezone.utc),
         side="BUY",
         quantity_btc=Decimal(str(qty)),
         entry_price=Decimal(str(entry)),
         status="open",
-        stop_loss=Decimal(str(stop_loss)),
+        stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
+        take_profit=Decimal(str(take_profit)) if take_profit else None,
         order_id_open="ORD-OPEN",
         order_id_sl=order_id_sl,
+        order_id_tp=order_id_tp,
         fees_usdt=Decimal("0.05"),
     )
     session.add(trade)
@@ -449,6 +453,118 @@ async def test_execute_sell_raises_when_btc_balance_near_zero(session):
             trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
         )
     exchange.create_market_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — TP Guardian (software fallback cuando bracket de TP no fue colocado)
+# ---------------------------------------------------------------------------
+
+async def test_tp_guardian_triggers_when_no_bracket_and_price_above_tp(session):
+    # GIVEN un trade sin order_id_tp (bracket falló al crear) y el precio supera el TP
+    trade = _make_open_trade(
+        session,
+        entry=77000.0,
+        stop_loss=76500.0,
+        take_profit=78000.0,
+        order_id_sl="ORD-SL-1",
+        order_id_tp=None,   # <-- bracket de TP no fue colocado
+    )
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 78100.0})  # > TP 78000
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra con tp_triggered
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "tp_triggered"
+
+
+async def test_tp_guardian_does_not_trigger_when_bracket_tp_exists(session):
+    # GIVEN un trade CON order_id_tp activo (bracket colocado en Binance)
+    # El broker se encargará de ejecutarlo; el guardian no debe intervenir.
+    trade = _make_open_trade(
+        session,
+        entry=77000.0,
+        stop_loss=76500.0,
+        take_profit=78000.0,
+        order_id_sl="ORD-SL-1",
+        order_id_tp="ORD-TP-1",  # <-- bracket activo
+    )
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 78200.0})  # > TP
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade NO se cierra por el guardian (el bracket en Binance lo gestiona)
+    await session.refresh(trade)
+    assert trade.status == "open"
+
+
+async def test_tp_guardian_does_not_trigger_when_price_below_tp(session):
+    # GIVEN un trade sin bracket de TP pero el precio aún NO alcanzó el TP
+    trade = _make_open_trade(
+        session,
+        entry=77000.0,
+        stop_loss=76500.0,
+        take_profit=78000.0,
+        order_id_tp=None,
+    )
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 77500.0})  # < TP 78000
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade permanece abierto
+    await session.refresh(trade)
+    assert trade.status == "open"
+
+
+async def test_tp_guardian_does_not_trigger_when_no_tp_configured(session):
+    # GIVEN un trade sin take_profit configurado (trade sin TP)
+    trade = _make_open_trade(
+        session,
+        entry=77000.0,
+        stop_loss=76500.0,
+        take_profit=None,
+        order_id_tp=None,
+    )
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 99999.0})  # precio muy alto
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade NO se cierra (no hay TP para comparar)
+    await session.refresh(trade)
+    assert trade.status == "open"
 
 
 async def test_execute_sell_proceeds_with_trade_qty_if_balance_check_fails(session):
