@@ -408,6 +408,14 @@ async def run() -> None:
                         )
             except Exception as e:
                 logger.error("execution.error", error=str(e))
+                # Persistir el error de ejecución en la decisión para que sea visible en el dashboard.
+                try:
+                    error_msg = str(e)
+                    rejected_label = f"execution_error: {error_msg[:160]}"
+                    latest_d.rejected_reason = rejected_label
+                    await s.commit()
+                except Exception as persist_err:
+                    logger.warning("execution.persist_error_failed", error=str(persist_err))
                 cb.record_exchange_failure()
                 if cb.engine_paused:
                     await notify(TelegramEvent.EXCHANGE_FAILURE_STREAK, {

@@ -187,6 +187,28 @@ Depth del order book:
   mid_impact_pct = cuánto movería el precio tu orden (querés que sea bajo).
 
 ═══════════════════════════════════════════════════════════════════
+VERIFICACIÓN OBLIGATORIA ANTES DE EMITIR UN BUY
+═══════════════════════════════════════════════════════════════════
+Antes de escribir el JSON final, ejecutá este chequeo INTERNAMENTE
+con los valores EXACTOS del Bloque B (precio_actual) y tus niveles:
+
+  reward     = take_profit  − precio_actual    (Bloque B)
+  risk       = precio_actual − stop_loss
+  rr_real    = reward / risk
+
+  Si rr_real ≤ {min_rr_ratio}:
+    → El Risk Gate RECHAZARÁ esta decisión (regla R5).
+    → OPCIÓN 1: alejar el TP hacia la siguiente resistencia válida hasta
+                que rr_real > {min_rr_ratio}. Solo si esa resistencia
+                existe en el contexto.
+    → OPCIÓN 2: cambiar action a HOLD y explicar en [NIVELES]:
+                "[R:R INSUFICIENTE] rr_real={rr_real:.2f}, mín={min_rr_ratio}.
+                 Niveles técnicos no ofrecen espacio suficiente a este precio."
+
+  NUNCA emitir BUY con rr_real ≤ {min_rr_ratio}.
+  El valor rr_real que reportes en [NIVELES] DEBE coincidir con este cálculo.
+
+═══════════════════════════════════════════════════════════════════
 ANTI-PATRONES
 ═══════════════════════════════════════════════════════════════════
 - Overtrading: si los últimos 3 ciclos fueron HOLD válido, no forzar entrada.
@@ -197,6 +219,8 @@ ANTI-PATRONES
 - Ignorar ADX < 20 al declarar TRENDING_UP.
 - Declara confluencia A sin RSI <35 en ningún TF relevante. [→ C1]
 - Declara confluencia B sin MACD > Signal en ningún TF relevante. [→ C2]
+- Calcular R:R con un precio de entrada distinto al precio_actual del Bloque B.
+  El R:R siempre se mide desde precio_actual, no desde el SL ni desde un precio imaginado.
 
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,
@@ -257,7 +281,9 @@ Tags adicionales cuando apliquen:
 [SENALES]:  confluencias con código + indicadores clave que las sustentan.
 [CONFIANZA]: porcentaje, fórmula y adjustment. "Confidence 72% = base 0.68 (2 señales,
              RANGE factor) + adj +0.04 (vol 1.8x avg)."
-[NIVELES]:  solo BUY. "SL $X (Y× ATR, sobre bid wall). TP $Z (resistencia EMA). R:R W:1."
+[NIVELES]:  solo BUY. "SL $X (Y× ATR, sobre bid wall). TP $Z (resistencia EMA).
+             R:R W:1 = (TP − precio_actual) / (precio_actual − SL) = reward/risk."
+             El R:R DEBE calcularse con precio_actual del Bloque B, no con precio imaginado.
 
 ═══════════════════════════════════════════════════════════════════
 OUTPUT — JSON EXACTO, sin texto extra

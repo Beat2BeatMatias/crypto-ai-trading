@@ -1,8 +1,11 @@
 """
 CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Decisor.
 
-Reglas C1–C6: producen CoherenceWarning (warnings auditables).
-En modo strict (coherence_strict_mode=True), C1/C2/C3 se convierten en rechazos duros.
+Reglas C1–C7: producen CoherenceWarning (warnings auditables).
+En modo strict (coherence_strict_mode=True), C1/C2/C3/C7 se convierten en rechazos duros.
+
+C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
+el R:R porque el código lo recalcula con el precio real del contexto.
 
 No reemplazan al Risk Gate; se ejecutan ANTES del Risk Gate para que las advertencias
 queden registradas en decisions.output.coherence_warnings incluso cuando el Risk Gate
@@ -22,7 +25,7 @@ logger = structlog.get_logger()
 
 @dataclass
 class CoherenceWarning:
-    rule_id: str          # "C1" … "C6"
+    rule_id: str          # "C1" … "C7"
     message: str
     severity: str = "warning"   # "warning" | "critical" (cuando strict_mode)
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -62,6 +65,7 @@ class CoherenceChecker:
         warnings.extend(self._c4_confidence_without_confluences(decision, ctx))
         warnings.extend(self._c5_buy_low_confidence_no_tag(decision, ctx))
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
+        warnings.extend(self._c7_rr_ratio_verification(decision, ctx))
 
         if warnings:
             logger.warning(
@@ -278,5 +282,60 @@ class CoherenceChecker:
                 "expected_holding_min": holding,
                 "profile": profile,
                 "holding_range": [min_hold, max_hold],
+            },
+        )]
+
+    def _c7_rr_ratio_verification(self, decision: DecisorOutput,
+                                   ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        """
+        C7: R:R real calculado en código no supera el mínimo configurado.
+
+        El LLM tiende a alucinar el R:R reportado en reasoning. Esta regla
+        lo recalcula deterministicamente con el precio real del contexto
+        (ctx["price"] — mismo valor que usará el RiskGate) y emite un warning
+        CRITICAL si el resultado no supera min_rr_ratio.
+
+        Siempre es critical: un BUY con R:R insuficiente no tiene corrección
+        posible en two-pass (los niveles SL/TP no cambian con la revisión),
+        por lo que el Decisor debe degradarlo a HOLD directamente.
+        """
+        if decision.action != DecisorAction.BUY:
+            return []
+        if decision.stop_loss is None or decision.take_profit is None:
+            return []
+
+        price = ctx.get("price") or 0.0
+        min_rr = ctx.get("min_rr_ratio", 1.3)
+
+        if price <= 0:
+            return []
+
+        sl_distance = price - decision.stop_loss
+        if sl_distance <= 0:
+            return []
+
+        reward = decision.take_profit - price
+        rr_real = reward / sl_distance
+
+        if rr_real > min_rr:
+            return []
+
+        return [CoherenceWarning(
+            rule_id="C7",
+            severity="critical",
+            message=(
+                f"R:R real={rr_real:.2f} ≤ min_rr_ratio={min_rr} "
+                f"(TP={decision.take_profit:,.2f}, precio={price:,.2f}, "
+                f"SL={decision.stop_loss:,.2f}). "
+                f"reward={reward:.2f}, risk={sl_distance:.2f}."
+            ),
+            evidence={
+                "rr_real": round(rr_real, 4),
+                "min_rr_ratio": min_rr,
+                "price": price,
+                "stop_loss": decision.stop_loss,
+                "take_profit": decision.take_profit,
+                "reward": round(reward, 2),
+                "risk": round(sl_distance, 2),
             },
         )]

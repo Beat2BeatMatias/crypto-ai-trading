@@ -22,7 +22,12 @@ _VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
 # indicadores no muestran) → vale la pena que el LLM lo revise.
 # C4/C5/C6 son meta-reglas (confianza, holding) → no se benefician
 # tanto de una segunda llamada.
-_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3"})
+# C7 (R:R insuficiente) sí va al two-pass: el second pass le provee el
+# TP mínimo necesario y le pide que busque una resistencia válida por
+# encima de ese nivel. Si no existe → debe emitir HOLD. Si el LLM
+# vuelve a alucinarlo, C7 dispara de nuevo en la re-evaluación y
+# el has_critical() lo bloquea a HOLD antes de ejecutar.
+_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C7"})
 
 
 def _filter_confluence_codes(confluences: list[str]) -> list[str]:
@@ -260,7 +265,8 @@ def _build_review_ctx(decision: DecisorOutput,
     warnings_lines = "\n".join(
         f"  [{w.rule_id}] {w.message}" for w in warnings
     )
-    return {
+
+    ctx: dict[str, Any] = {
         "review_action": decision.action,
         "review_regime": decision.regime,
         "review_confidence": f"{decision.confidence:.2f}",
@@ -270,7 +276,49 @@ def _build_review_ctx(decision: DecisorOutput,
         "review_take_profit": decision.take_profit,
         "review_reasoning": (decision.reasoning or "")[:300],
         "review_warnings_block": warnings_lines,
+        "review_has_c7": False,
+        "review_c7_block": "",
     }
+
+    # Si hay un warning C7, enriquecer con datos calculados en código
+    # para que el LLM sepa exactamente qué TP necesita.
+    c7_warnings = [w for w in warnings if w.rule_id == "C7"]
+    if c7_warnings:
+        ev = c7_warnings[0].evidence
+        price = ev.get("price", 0.0)
+        risk = ev.get("risk", 0.0)
+        min_rr = ev.get("min_rr_ratio", 1.0)
+        tp_min = price + risk * min_rr if price > 0 and risk > 0 else None
+
+        ctx["review_has_c7"] = True
+        ctx["review_c7_block"] = (
+            f"\n═══════════════════════════════════════════════════════════════\n"
+            f"AJUSTE DE R:R REQUERIDO (C7)\n"
+            f"═══════════════════════════════════════════════════════════════\n"
+            f"El código calculó:\n"
+            f"  precio_actual = ${price:,.2f}\n"
+            f"  reward (TP − precio) = ${ev.get('reward', 0):.2f}\n"
+            f"  risk   (precio − SL) = ${risk:.2f}\n"
+            f"  R:R real             = {ev.get('rr_real', 0):.2f}  ←  mínimo requerido: {min_rr}\n"
+            + (f"  TP mínimo necesario  = ${tp_min:,.2f}  (precio + risk × {min_rr})\n" if tp_min else "")
+            + f"\n"
+            f"Tenés DOS opciones:\n"
+            f"\n"
+            f"  OPCIÓN A — Ajustar el TP:\n"
+            f"    Buscá en los bloques C y D una resistencia técnica válida\n"
+            f"    ESTRICTAMENTE por encima de ${tp_min:,.2f}.\n"
+            f"    Si existe → emití BUY con ese nuevo TP (sin cambiar el SL).\n"
+            f"    Verificá que el nuevo R:R = (TP_nuevo − {price:,.2f}) / {risk:.2f} > {min_rr} antes de emitir.\n"
+            f"\n"
+            f"  OPCIÓN B — Emitir HOLD:\n"
+            f"    Si no existe ninguna resistencia técnica por encima de ${tp_min:,.2f},\n"
+            f"    o si el precio ya está en zona de sobrecompra (BB%>95, Stoch>80, RSI>70),\n"
+            f"    emití HOLD con reasoning '[R:R INSUFICIENTE] No hay resistencia válida\n"
+            f"    por encima de ${tp_min:,.2f} en las condiciones actuales.'\n"
+            if tp_min else ""
+        )
+
+    return ctx
 
 
 class _DefaultReviewDict(dict):

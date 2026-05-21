@@ -1,0 +1,298 @@
+"""Tests unitarios para CoherenceChecker — reglas C1 a C7."""
+from __future__ import annotations
+
+import pytest
+
+from risk.coherence_checker import CoherenceChecker
+from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
+
+
+# ---------------------------------------------------------------------------
+# Helper para construir un DecisorOutput mínimo
+# ---------------------------------------------------------------------------
+
+def _buy(
+    *,
+    stop_loss: float = 76900.0,
+    take_profit: float = 78500.0,
+    confluences: list[str] | None = None,
+    confidence: float = 0.75,
+    expected_holding_min: int = 45,
+    reasoning: str = "[DECISION] test [MERCADO] test [SENALES] test [CONFIANZA] test [NIVELES] test",
+) -> DecisorOutput:
+    return DecisorOutput(
+        action=DecisorAction.BUY,
+        regime=MarketRegime.RANGE,
+        confluences=confluences or ["H", "C"],
+        confidence_base=confidence,
+        confidence_adjustment=0.0,
+        confidence=confidence,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        position_size_pct=0.05,
+        expected_holding_min=expected_holding_min,
+        reasoning=reasoning,
+    )
+
+
+def _hold() -> DecisorOutput:
+    return DecisorOutput(
+        action=DecisorAction.HOLD,
+        regime=MarketRegime.RANGE,
+        confluences=[],
+        confidence_base=0.5,
+        confidence_adjustment=0.0,
+        confidence=0.5,
+        stop_loss=None,
+        take_profit=None,
+        position_size_pct=0.0,
+        expected_holding_min=30,
+        reasoning="[DECISION] hold [MERCADO] test [SENALES] - [CONFIANZA] test",
+    )
+
+
+def _ctx(**overrides) -> dict:
+    base = {
+        "price": 78000.0,
+        "rsi_15m": 55.0,
+        "rsi_1h": 52.0,
+        "macd_15m": 10.0,
+        "sig_15m": 8.0,
+        "macd_1h": 5.0,
+        "sig_1h": 3.0,
+        "ema20_1h": 77500.0,
+        "ema50_1h": 77000.0,
+        "block_a_profile": "HIBRIDO",
+        "block_a_holding_range_min": 15,
+        "block_a_holding_range_max": 240,
+        "block_c_tf_blocks": {
+            "15m": {"adx": 22.0},
+            "1h": {"adx": 25.0},
+        },
+        "min_rr_ratio": 1.0,
+    }
+    base.update(overrides)
+    return base
+
+
+# ---------------------------------------------------------------------------
+# C7 — R:R real calculado en código
+# ---------------------------------------------------------------------------
+
+class TestC7RRRatioVerification:
+
+    def test_c7_no_warning_when_rr_above_minimum(self):
+        # GIVEN BUY con TP/SL que dan R:R > min_rr_ratio
+        # price=78000, sl=77100 (risk=900), tp=79100 (reward=1100) → R:R=1.22 > 1.0
+        decision = _buy(stop_loss=77100.0, take_profit=79100.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay warning C7
+        assert c7 == [], f"No debería haber C7 cuando R:R es suficiente, got: {c7}"
+
+    def test_c7_critical_when_rr_below_minimum(self):
+        # GIVEN el caso real: price=78000, sl=77100 (risk=900), tp=78500 (reward=500)
+        # R:R real = 500/900 = 0.56 < 1.0
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN hay un warning C7 crítico
+        assert len(c7) == 1
+        assert c7[0].severity == "critical"
+        assert "0.56" in c7[0].message
+        assert c7[0].evidence["rr_real"] == pytest.approx(0.5556, rel=1e-2)
+
+    def test_c7_critical_always_regardless_of_strict_mode(self):
+        # GIVEN strict_mode=False — C7 es critical igualmente
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN sigue siendo critical aunque strict_mode=False
+        assert len(c7) == 1
+        assert c7[0].severity == "critical"
+
+    def test_c7_uses_context_price_not_llm_reported(self):
+        # GIVEN el LLM podría reportar R:R=1.02 pero el precio real da 0.56
+        # price=78000, sl=77100, tp=78500
+        decision = _buy(
+            stop_loss=77100.0,
+            take_profit=78500.0,
+            reasoning="[NIVELES] SL $77,100. TP $78,500. R:R = 1.02",
+        )
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN detecta que el R:R real es 0.56, no el 1.02 que dijo el LLM
+        assert len(c7) == 1
+        assert c7[0].evidence["rr_real"] == pytest.approx(0.5556, rel=1e-2)
+
+    def test_c7_skipped_for_hold(self):
+        # GIVEN acción HOLD (sin SL/TP)
+        decision = _hold()
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7
+        assert c7 == []
+
+    def test_c7_skipped_when_no_price_in_ctx(self):
+        # GIVEN price=0 en el contexto (datos insuficientes)
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=0.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7 (sin precio no se puede calcular)
+        assert c7 == []
+
+    def test_c7_skipped_when_sl_above_price(self):
+        # GIVEN sl >= price (ya lo rechaza R2 del RiskGate — C7 no evalúa)
+        decision = _buy(stop_loss=78100.0, take_profit=79000.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7 (sl_distance <= 0)
+        assert c7 == []
+
+    def test_c7_evidence_contains_all_fields(self):
+        # GIVEN BUY con R:R insuficiente
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN el evidence tiene todos los campos para auditoría
+        ev = c7[0].evidence
+        assert "rr_real" in ev
+        assert "min_rr_ratio" in ev
+        assert "price" in ev
+        assert "stop_loss" in ev
+        assert "take_profit" in ev
+        assert "reward" in ev
+        assert "risk" in ev
+        assert ev["reward"] == pytest.approx(500.0)
+        assert ev["risk"] == pytest.approx(900.0)
+
+    def test_c7_boundary_exactly_at_minimum_is_rejected(self):
+        # GIVEN R:R = exactamente min_rr_ratio (debe rechazarse — condición es >)
+        # price=78000, sl=77500 (risk=500), tp=78500 (reward=500) → R:R=1.0 = min
+        decision = _buy(stop_loss=77500.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN se rechaza porque R:R=1.0 no es MAYOR que 1.0
+        assert len(c7) == 1
+
+    def test_c7_boundary_just_above_minimum_passes(self):
+        # GIVEN R:R ligeramente superior al mínimo
+        # price=78000, sl=77499 (risk=501), tp=78500 (reward=500) → R:R≈0.998 ← aún bajo
+        # usamos sl=77400 (risk=600), tp=78700 (reward=700) → R:R=1.167 > 1.0
+        decision = _buy(stop_loss=77400.0, take_profit=78700.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7
+        assert c7 == []
+
+    def test_c7_respects_min_rr_ratio_from_context(self):
+        # GIVEN min_rr_ratio=1.5 en el contexto
+        # price=78000, sl=77100 (risk=900), tp=79500 (reward=1500) → R:R=1.67 > 1.5
+        decision = _buy(stop_loss=77100.0, take_profit=79500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.5)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7 porque 1.67 > 1.5
+        assert c7 == []
+
+    def test_c7_triggers_with_higher_min_rr_ratio(self):
+        # GIVEN min_rr_ratio=1.5 pero R:R=1.2 — no alcanza
+        # price=78000, sl=77500 (risk=500), tp=78600 (reward=600) → R:R=1.2 < 1.5
+        decision = _buy(stop_loss=77500.0, take_profit=78600.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.5)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN hay C7
+        assert len(c7) == 1
+        assert "1.5" in c7[0].message
+
+
+# ---------------------------------------------------------------------------
+# has_critical — C7 siempre activa el bloqueo
+# ---------------------------------------------------------------------------
+
+class TestHasCritical:
+
+    def test_has_critical_true_when_c7_present(self):
+        # GIVEN BUY con R:R insuficiente
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+        checker = CoherenceChecker(strict_mode=False)
+
+        # WHEN
+        warnings = checker.evaluate(decision, ctx)
+
+        # THEN has_critical es True independientemente de strict_mode
+        assert checker.has_critical(warnings) is True
+
+    def test_has_critical_false_when_only_non_critical_warnings(self):
+        # GIVEN BUY con R:R suficiente pero con warning C4 (no critical en no-strict)
+        decision = DecisorOutput(
+            action=DecisorAction.BUY,
+            regime=MarketRegime.RANGE,
+            confluences=[],
+            confidence_base=0.9,
+            confidence_adjustment=0.0,
+            confidence=0.9,
+            stop_loss=77100.0,
+            take_profit=79500.0,
+            position_size_pct=0.05,
+            expected_holding_min=45,
+            reasoning="[DECISION] test [MERCADO] test [SENALES] test [CONFIANZA] test [NIVELES] test",
+        )
+        # R:R = (79500-78000)/(78000-77100) = 1500/900 = 1.67 > 1.0 — C7 no dispara
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+        checker = CoherenceChecker(strict_mode=False)
+
+        # WHEN
+        warnings = checker.evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        # THEN no hay C7
+        assert c7 == []

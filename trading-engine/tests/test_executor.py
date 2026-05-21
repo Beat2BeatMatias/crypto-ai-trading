@@ -335,3 +335,37 @@ async def test_execute_sell_closes_trade_and_computes_pnl(session):
     assert closed.close_reason == "take_profit"
     # gross = (68000 - 67000) * 0.001 = 1.0; net = 1.0 - 0.07 - 0.068 = 0.862
     assert float(closed.pnl_usdt) == pytest.approx(0.862, rel=1e-3)
+
+
+async def test_execute_buy_exchange_error_can_be_persisted_as_rejected_reason(session):
+    # GIVEN una decisión insertada y un exchange que falla con NOTIONAL al ejecutar
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    exchange = MagicMock()
+    exchange.create_market_order = AsyncMock(
+        side_effect=Exception('binance {"code":-1013,"msg":"Filter failure: NOTIONAL"}')
+    )
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+
+    # WHEN execute_buy lanza la excepción y el caller la captura y persiste (patrón de main.py)
+    error_msg: str | None = None
+    try:
+        await executor.execute_buy(
+            decision=_make_buy_decision(), decision_id=decision_id, usdt_balance=10000.0
+        )
+    except Exception as e:
+        error_msg = str(e)
+        d = await session.get(Decision, decision_id)
+        assert d is not None
+        d.rejected_reason = f"execution_error: {error_msg[:160]}"
+        await session.commit()
+
+    # THEN el error fue capturado y se puede persistir en la Decision
+    assert error_msg is not None
+    d = await session.get(Decision, decision_id)
+    assert d is not None
+    assert d.rejected_reason is not None
+    assert d.rejected_reason.startswith("execution_error:")
+    assert "NOTIONAL" in d.rejected_reason
+    # AND la decisión no está marcada como ejecutada
+    assert d.executed is False

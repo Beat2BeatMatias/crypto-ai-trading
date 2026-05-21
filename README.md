@@ -31,6 +31,10 @@ GROQ_API_KEY=...
 ### 2. Construir las imágenes
 
 ```bash
+docker-compose build && docker-compose up -d
+```
+
+```bash
 docker-compose build
 ```
 

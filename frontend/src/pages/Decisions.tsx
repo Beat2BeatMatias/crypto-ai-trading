@@ -6,10 +6,19 @@ import ReasoningBlock from "../components/ReasoningBlock";
 function explainRejection(reason: string): string {
   if (reason.startsWith("stop_loss must be"))
     return "El SL propuesto por el LLM estaba por encima del precio actual al momento de validar (el orderbook no tenía snapshot).";
-  if (reason.startsWith("R:R ratio"))
-    return "La relación riesgo/beneficio entre el SL y el TP no alcanzó el mínimo configurado (1.3:1).";
+
+  // Parsear threshold real del mensaje del backend: "R:R ratio 0.88 <= 1.5"
+  const rrMatch = reason.match(/^R:R ratio [\d.]+ <= ([\d.]+)/);
+  if (rrMatch)
+    return `La relación riesgo/beneficio entre el SL y el TP no alcanzó el mínimo configurado (${rrMatch[1]}:1).`;
+
+  // Parsear threshold real: "SL distance 12.00 < 0.2×ATR 30.00" o "SL distance 12.00 > 1.5×ATR 30.00"
+  const slMatch = reason.match(/^SL distance [\d.]+ [<>] ([\d.]+)×ATR/);
+  if (slMatch)
+    return `La distancia del stop-loss al precio de entrada quedó fuera de la banda permitida (${slMatch[1]}× ATR).`;
+
   if (reason.startsWith("SL distance"))
-    return "La distancia del stop-loss al precio de entrada fue menor al 0.3× ATR(1h), considerado demasiado ajustado.";
+    return "La distancia del stop-loss al precio de entrada quedó fuera de la banda permitida por la config de ATR.";
   if (reason.startsWith("max_simultaneous"))
     return "Ya hay el máximo de posiciones simultáneas abiertas.";
   if (reason.startsWith("daily P&L"))
@@ -22,6 +31,13 @@ function explainRejection(reason: string): string {
     return "El LLM devolvió una respuesta que no pudo parsearse como JSON válido.";
   if (reason.startsWith("llm_error"))
     return "Todos los providers LLM fallaron (rate limit o error) y no se obtuvo decisión.";
+  if (reason.startsWith("execution_error")) {
+    if (reason.includes("NOTIONAL"))
+      return "Binance rechazó la orden porque el monto a operar es menor al mínimo permitido (filtro NOTIONAL). Verificá el balance USDT disponible o el porcentaje de posición configurado.";
+    if (reason.includes("insufficient balance"))
+      return "Balance insuficiente en la cuenta de Binance para ejecutar la orden.";
+    return "Binance rechazó la orden al intentar ejecutarla. Ver el detalle técnico abajo.";
+  }
   return "";
 }
 
@@ -79,6 +95,11 @@ export function Decisions() {
     if (reason.startsWith("insufficient_data")) return reason;
     if (reason.startsWith("llm_error")) return "Error LLM";
     if (reason.startsWith("parse_error")) return "Error parsing LLM";
+    if (reason.startsWith("execution_error")) {
+      if (reason.includes("NOTIONAL")) return "Error NOTIONAL (monto < mínimo Binance)";
+      if (reason.includes("insufficient balance")) return "Balance insuficiente";
+      return "Error al ejecutar en exchange";
+    }
     return reason;
   };
 

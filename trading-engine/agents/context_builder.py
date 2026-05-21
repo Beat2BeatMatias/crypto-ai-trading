@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.db.models import Indicators, Position, Decision, Trade
+from shared.db.models import Indicators, Ohlcv, Position, Decision, Trade
 from collectors.orderbook_collector import OrderBookSnapshot
 from agents.labelers import (
     get_operational_profile,
@@ -87,11 +87,36 @@ class ContextBuilder:
             select(Indicators).order_by(desc(Indicators.time)).limit(hist_limit)
         )).scalars().all()
 
+        # Price change percentages from OHLCV history (1h candles)
+        # Fetch enough rows to cover 7d: 24 candles/day × 7 days = 168 + 1
+        ohlcv_1h_rows = (await self.session.execute(
+            select(Ohlcv)
+            .where(Ohlcv.timeframe == "1h")
+            .order_by(desc(Ohlcv.time))
+            .limit(169)
+        )).scalars().all()
+        # Oldest-first for index access: index 0 = most recent
+        ohlcv_1h_rows = list(reversed(ohlcv_1h_rows))
+
         # ------------------------------------------------------------------ #
         # Core scalars
         # ------------------------------------------------------------------ #
-        price = (self._get(ind, "1h", "last_close")
-                 or self._get(ind, "5m", "last_close") or 0.0)
+        # Usar top_ask del orderbook como precio de referencia cuando está
+        # disponible — es la misma fuente que usa RiskGate al validar,
+        # lo que garantiza que el LLM calcule R:R con el precio real de
+        # ejecución y no con el last_close del candle (potencialmente stale).
+        if orderbook is not None:
+            price = orderbook.top_ask
+        else:
+            price = float(
+                self._get(ind, "1h", "last_close")
+                or self._get(ind, "5m", "last_close") or 0.0
+            )
+
+        pct_1h  = self._pct_change(ohlcv_1h_rows, offset=1,  current_price=price)
+        pct_4h  = self._pct_change(ohlcv_1h_rows, offset=4,  current_price=price)
+        pct_24h = self._pct_change(ohlcv_1h_rows, offset=24, current_price=price)
+        pct_7d  = self._pct_change(ohlcv_1h_rows, offset=168, current_price=price)
         sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
         roundtrip_fee_pct = taker_fee_pct * 2
 
@@ -149,8 +174,14 @@ class ContextBuilder:
         vwap_1h = self._get(ind, "1h", "vwap") or 0
         vwap_15m = self._get(ind, "15m", "vwap") or 0
 
-        high_24h = price * 1.02   # placeholder until we persist 24h stats
-        low_24h = price * 0.98
+        # Real 24h high/low from OHLCV 1h candles (last 24 rows = last 24 hours)
+        last_24h = ohlcv_1h_rows[-24:] if len(ohlcv_1h_rows) >= 24 else ohlcv_1h_rows
+        if last_24h:
+            high_24h = float(max(r.high for r in last_24h if r.high is not None) or price)
+            low_24h  = float(min(r.low  for r in last_24h if r.low  is not None) or price)
+        else:
+            high_24h = price
+            low_24h  = price
 
         # ------------------------------------------------------------------ #
         # Portfolio state
@@ -179,7 +210,7 @@ class ContextBuilder:
         # ------------------------------------------------------------------ #
         ob = orderbook
         spread_pct = ob.spread_pct if ob else 0.0
-        imb = ob.imbalance if ob else 1.0
+        imb = ob.imbalance if ob else None
         adj_spread_threshold = cal.get("adj_spread_threshold_pct", 0.05)
 
         # ------------------------------------------------------------------ #
@@ -205,10 +236,10 @@ class ContextBuilder:
             "price": price,
             "spread": ob.spread if ob else 0,
             "spread_pct": spread_pct,
-            "pct_1h": 0.0,
-            "pct_4h": 0.0,
-            "pct_24h": 0.0,
-            "pct_7d": 0.0,
+            "pct_1h": pct_1h,
+            "pct_4h": pct_4h,
+            "pct_24h": pct_24h,
+            "pct_7d": pct_7d,
             "atr_ref": atr_ref_val,
             "atr_ref_tf": atr_timeframe,
             "atr_ref_pct": (atr_ref_val / price * 100) if price else 0,
@@ -256,10 +287,10 @@ class ContextBuilder:
             "block_d_vwap_15m": vwap_15m,
             "block_d_high_24h": high_24h,
             "block_d_low_24h": low_24h,
-            "support_1h": ema50_1h * 0.99 if ema50_1h else 0,
-            "resistance_1h": ema50_1h * 1.01 if ema50_1h else 0,
-            "dist_support_pct": 0,
-            "dist_resistance_pct": 0,
+            "support_1h": ema50_1h if ema50_1h else 0,
+            "resistance_1h": ema200_1h if ema200_1h else 0,
+            "dist_support_pct": round((ema50_1h - price) / price * 100, 4) if (ema50_1h and price) else 0,
+            "dist_resistance_pct": round((ema200_1h - price) / price * 100, 4) if (ema200_1h and price) else 0,
             "low_24h": low_24h,
             "high_24h": high_24h,
             "bid_wall_price": ob.bid_wall_price if ob else 0,
@@ -294,7 +325,7 @@ class ContextBuilder:
             "last_action": last_decisions[0].output.get("action") if last_decisions else "n/a",
             "last_confidence": last_decisions[0].output.get("confidence", 0) if last_decisions else 0,
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
-            "last_decision_ago": "n/a",
+            "last_decision_ago": self._format_time_ago(last_decisions[0].ts) if last_decisions else "n/a",
 
             # ---- Block H: Portfolio state ----
             "capital_total": total_capital,
@@ -603,6 +634,33 @@ class ContextBuilder:
     # ------------------------------------------------------------------ #
     # Static helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _format_time_ago(ts: datetime) -> str:
+        """Return human-readable elapsed time since `ts` (UTC-aware)."""
+        now = datetime.now(tz=timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        delta_sec = int((now - ts).total_seconds())
+        if delta_sec < 60:
+            return f"{delta_sec}s ago"
+        if delta_sec < 3600:
+            return f"{delta_sec // 60}min ago"
+        return f"{delta_sec // 3600}h {(delta_sec % 3600) // 60}min ago"
+
+    @staticmethod
+    def _pct_change(rows: list, offset: int, current_price: float) -> float:
+        """Return % change from `offset` candles ago to current_price.
+
+        rows must be sorted oldest-first. offset=1 means 1 candle ago (1h for 1h TF).
+        Returns 0.0 if there are not enough rows or price is unavailable.
+        """
+        if not current_price or len(rows) < offset + 1:
+            return 0.0
+        past_close = rows[-(offset + 1)].close
+        if past_close is None or float(past_close) == 0:
+            return 0.0
+        return round((current_price - float(past_close)) / float(past_close) * 100, 4)
 
     @staticmethod
     def _get(ind: dict[str, Any], tf: str, key: str) -> Any:

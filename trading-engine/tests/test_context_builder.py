@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -13,8 +13,9 @@ from sqlalchemy import (
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from shared.db.models import Indicators, Position, Decision
+from shared.db.models import Indicators, Ohlcv, Position, Decision
 from agents.context_builder import ContextBuilder
+from collectors.orderbook_collector import OrderBookSnapshot, DepthLevel
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +23,17 @@ from agents.context_builder import ContextBuilder
 # ---------------------------------------------------------------------------
 
 _sqlite_metadata = MetaData()
+
+_ohlcv_table = Table(
+    "ohlcv", _sqlite_metadata,
+    Column("time", DateTime, primary_key=True),
+    Column("timeframe", String(4), primary_key=True),
+    Column("open", Numeric(18, 8)),
+    Column("high", Numeric(18, 8)),
+    Column("low", Numeric(18, 8)),
+    Column("close", Numeric(18, 8)),
+    Column("volume", Numeric(24, 8)),
+)
 
 _indicators_table = Table(
     "indicators", _sqlite_metadata,
@@ -116,7 +128,7 @@ def _before_insert_decision(mapper, connection, target):
 
 @pytest.fixture
 async def session():
-    """Fresh in-memory SQLite session seeded with one Indicators row."""
+    """Fresh in-memory SQLite session seeded with one Indicators row and OHLCV history."""
     event.listen(Indicators, "before_insert", _before_insert_indicators)
     event.listen(Position, "before_insert", _before_insert_position)
     event.listen(Decision, "before_insert", _before_insert_decision)
@@ -151,6 +163,24 @@ async def session():
                 },
             },
         ))
+
+        # Seed OHLCV 1h rows: 170 candles ending at 2025-01-01 11:00 UTC
+        # (the current price comes from Indicators, not OHLCV)
+        base_price = Decimal("94000.00")
+        for i in range(170):
+            candle_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+            # i=0 is oldest (169h ago), i=169 is 1h ago relative to "current" candle time
+            candle_time = datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc) - timedelta(hours=(169 - i))
+            sess.add(Ohlcv(
+                time=candle_time,
+                timeframe="1h",
+                open=base_price,
+                high=base_price + Decimal("100"),
+                low=base_price - Decimal("100"),
+                close=base_price + Decimal(str(i)),  # incremental so each is distinct
+                volume=Decimal("10.0"),
+            ))
+
         await sess.commit()
         yield sess
 
@@ -210,7 +240,7 @@ async def test_build_returns_all_required_keys(session: AsyncSession):
     assert ctx["mode"] == "PAPER_TRADING"
     assert ctx["playbook"] == "# Playbook v0"
     assert ctx["spread"] == 0          # no orderbook
-    assert ctx["imbalance"] == 1.0     # no orderbook default
+    assert ctx["imbalance"] is None    # no orderbook → sin datos reales
     assert ctx["open_positions_count"] == 0
 
 
@@ -369,3 +399,297 @@ def test_format_last_decisions_empty_list_returns_no_prev_message():
 
     # THEN devuelve el mensaje de sin decisiones
     assert "Sin decisiones previas" in result
+
+
+# ---------------------------------------------------------------------------
+# pct_1h / pct_4h / pct_24h / pct_7d — calculados desde OHLCV
+# ---------------------------------------------------------------------------
+
+def test_pct_change_returns_zero_when_not_enough_rows():
+    # GIVEN menos filas que el offset requerido
+    rows = []
+
+    # WHEN calculando con offset=1
+    result = ContextBuilder._pct_change(rows, offset=1, current_price=100.0)
+
+    # THEN devuelve 0.0
+    assert result == 0.0
+
+
+def test_pct_change_calculates_correctly():
+    # GIVEN 3 filas con precios de cierre conocidos
+    class _Row:
+        def __init__(self, close):
+            self.close = Decimal(str(close))
+
+    rows = [_Row(100), _Row(105), _Row(110)]  # oldest to newest
+    # offset=1: compara price con rows[-2].close = 105
+    # offset=2: compara price con rows[-3].close = 100
+
+    # WHEN calculando pct_1h (offset=1)
+    result_1 = ContextBuilder._pct_change(rows, offset=1, current_price=110.0)
+    # THEN (110 - 105) / 105 * 100 = 4.7619...
+    assert result_1 == pytest.approx((110 - 105) / 105 * 100, rel=1e-3)
+
+    # WHEN calculando pct_2 (offset=2)
+    result_2 = ContextBuilder._pct_change(rows, offset=2, current_price=110.0)
+    # THEN (110 - 100) / 100 * 100 = 10.0
+    assert result_2 == pytest.approx(10.0, rel=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_pct_fields_not_zero_when_ohlcv_exists(session: AsyncSession):
+    # GIVEN una sesión con 170 velas OHLCV sembradas en el fixture
+    # (precio actual = 95000 desde Indicators, cierre 1h atrás = 94000 + 169 = 94169)
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN pct_1h, pct_4h, pct_24h son distintos de 0.0
+    assert ctx["pct_1h"] != 0.0, "pct_1h sigue siendo 0, no se calculó"
+    assert ctx["pct_4h"] != 0.0, "pct_4h sigue siendo 0, no se calculó"
+    assert ctx["pct_24h"] != 0.0, "pct_24h sigue siendo 0, no se calculó"
+
+
+@pytest.mark.asyncio
+async def test_pct_1h_value_is_correct(session: AsyncSession):
+    # GIVEN fixture con 170 velas; candle[-2] (1h atrás) tiene close = 94000 + 168 = 94168
+    # precio actual = 95000
+    # pct_1h = (95000 - 94168) / 94168 * 100
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    expected_close_1h_ago = Decimal("94000") + Decimal("168")
+    expected_pct = float(
+        (Decimal("95000") - expected_close_1h_ago) / expected_close_1h_ago * 100
+    )
+
+    # THEN pct_1h coincide con el valor esperado (tolerancia 0.01%)
+    assert ctx["pct_1h"] == pytest.approx(expected_pct, rel=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_pct_fields_zero_when_no_ohlcv(session: AsyncSession):
+    # GIVEN una sesión sin filas OHLCV (borramos las sembradas)
+    from sqlalchemy import text
+    await session.execute(text("DELETE FROM ohlcv"))
+    await session.commit()
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN todos los pct vuelven a 0.0
+    assert ctx["pct_1h"] == 0.0
+    assert ctx["pct_4h"] == 0.0
+    assert ctx["pct_24h"] == 0.0
+    assert ctx["pct_7d"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# high_24h / low_24h — calculados desde OHLCV real
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_high_low_24h_from_ohlcv(session: AsyncSession):
+    # GIVEN fixture con 170 velas 1h (close = 94000+i, high = close+100, low = close-100)
+    # Las últimas 24 velas tienen: high_max = 94000+169+100 = 94269, low_min = 94000+146-100 = 94046
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # En el fixture: high = base_price + 100 = 94000 + 100 = 94100 (fijo para todas las velas)
+    #               low  = base_price - 100 = 94000 - 100 = 93900 (fijo para todas las velas)
+    expected_high = float(Decimal("94000") + Decimal("100"))  # 94100
+    expected_low  = float(Decimal("94000") - Decimal("100"))  # 93900
+
+    assert ctx["high_24h"] == pytest.approx(expected_high, rel=1e-4)
+    assert ctx["low_24h"]  == pytest.approx(expected_low, rel=1e-4)
+    # Sanity: no pueden ser price*1.02 ni price*0.98 (price=95000)
+    assert ctx["high_24h"] != pytest.approx(95000.0 * 1.02, rel=1e-3)
+    assert ctx["low_24h"]  != pytest.approx(95000.0 * 0.98, rel=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_high_low_24h_fallback_to_price_when_no_ohlcv(session: AsyncSession):
+    # GIVEN sin datos OHLCV
+    from sqlalchemy import text
+    await session.execute(text("DELETE FROM ohlcv"))
+    await session.commit()
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN high_24h y low_24h son iguales al precio actual (fallback seguro)
+    assert ctx["high_24h"] == pytest.approx(95000.0)
+    assert ctx["low_24h"]  == pytest.approx(95000.0)
+
+
+# ---------------------------------------------------------------------------
+# dist_support_pct / dist_resistance_pct — distancias reales
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dist_support_and_resistance_calculated(session: AsyncSession):
+    # GIVEN indicadores con ema50_1h=93000, ema200_1h=90000, price=95000
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN dist_support_pct = (ema50_1h - price) / price * 100 = (93000 - 95000) / 95000 * 100
+    expected_support_dist = (93000 - 95000) / 95000 * 100
+    expected_resist_dist  = (90000 - 95000) / 95000 * 100
+
+    assert ctx["dist_support_pct"]    == pytest.approx(expected_support_dist, rel=1e-3)
+    assert ctx["dist_resistance_pct"] == pytest.approx(expected_resist_dist, rel=1e-3)
+    assert ctx["dist_support_pct"]    != 0
+    assert ctx["dist_resistance_pct"] != 0
+
+
+@pytest.mark.asyncio
+async def test_support_resistance_1h_use_ema_levels(session: AsyncSession):
+    # GIVEN ema50_1h=93000 y ema200_1h=90000 en el fixture
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN support_1h = ema50_1h (no ema50 * 0.99)
+    assert ctx["support_1h"]    == pytest.approx(93000.0)
+    # THEN resistance_1h = ema200_1h (no ema50 * 1.01)
+    assert ctx["resistance_1h"] == pytest.approx(90000.0)
+
+
+# ---------------------------------------------------------------------------
+# imbalance — None cuando no hay orderbook
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_imbalance_none_when_no_orderbook(session: AsyncSession):
+    # GIVEN sin orderbook
+
+    # WHEN construyendo el context (orderbook=None por defecto en _build)
+    ctx = await _build(session)
+
+    # THEN imbalance es None y label es "n/d"
+    assert ctx["imbalance"] is None
+    assert ctx["imbalance_label"] == "n/d"
+
+
+# ---------------------------------------------------------------------------
+# last_decision_ago — tiempo transcurrido real
+# ---------------------------------------------------------------------------
+
+def test_format_time_ago_seconds():
+    # GIVEN un timestamp de hace 45 segundos
+    ts = datetime.now(tz=timezone.utc) - timedelta(seconds=45)
+
+    # WHEN formateando
+    result = ContextBuilder._format_time_ago(ts)
+
+    # THEN devuelve formato "Xs ago"
+    assert "s ago" in result
+    assert "min" not in result
+
+
+def test_format_time_ago_minutes():
+    # GIVEN un timestamp de hace 45 minutos (menos de 1h, para que no entre en el branch de horas)
+    ts = datetime.now(tz=timezone.utc) - timedelta(minutes=45)
+
+    # WHEN formateando
+    result = ContextBuilder._format_time_ago(ts)
+
+    # THEN devuelve "45min ago"
+    assert "45min ago" in result
+
+
+def test_format_time_ago_hours():
+    # GIVEN un timestamp de hace 2h 30min
+    ts = datetime.now(tz=timezone.utc) - timedelta(hours=2, minutes=30)
+
+    # WHEN formateando
+    result = ContextBuilder._format_time_ago(ts)
+
+    # THEN devuelve "2h 30min ago"
+    assert "2h 30min ago" in result
+
+
+@pytest.mark.asyncio
+async def test_last_decision_ago_not_na_when_decisions_exist(session: AsyncSession):
+    # GIVEN una decisión reciente en la DB
+    session.add(Decision(
+        ts=datetime.now(tz=timezone.utc) - timedelta(minutes=15),
+        agent="decisor",
+        model="gpt-4o",
+        tokens_in=100,
+        tokens_out=50,
+        latency_ms=800,
+        input={},
+        output={"action": "HOLD", "confidence": 0.5},
+    ))
+    await session.commit()
+
+    # WHEN construyendo el context
+    ctx = await _build(session)
+
+    # THEN last_decision_ago no es "n/a"
+    assert ctx["last_decision_ago"] != "n/a"
+    assert "min ago" in ctx["last_decision_ago"] or "s ago" in ctx["last_decision_ago"]
+
+
+# ---------------------------------------------------------------------------
+# precio — single source of truth: orderbook.top_ask cuando está disponible
+# ---------------------------------------------------------------------------
+
+def _make_snapshot(top_ask: float, top_bid: float | None = None) -> OrderBookSnapshot:
+    """Construye un OrderBookSnapshot mínimo para tests."""
+    bid = top_bid if top_bid is not None else top_ask - 1.0
+    mid = (bid + top_ask) / 2
+    depth = DepthLevel(price_pct=0.1, bid_btc=1.0, bid_usdt=mid, ask_btc=1.0, ask_usdt=mid)
+    return OrderBookSnapshot(
+        spread=top_ask - bid,
+        spread_pct=(top_ask - bid) / mid * 100,
+        bid_total_btc=10.0,
+        ask_total_btc=10.0,
+        imbalance=1.0,
+        bid_wall_price=bid - 10,
+        bid_wall_size=5.0,
+        bid_wall_distance_pct=0.1,
+        ask_wall_price=top_ask + 10,
+        ask_wall_size=5.0,
+        ask_wall_distance_pct=0.1,
+        top_bid=bid,
+        top_ask=top_ask,
+        depth_01pct=depth,
+        depth_025pct=depth,
+        depth_05pct=depth,
+        depth_1pct=depth,
+        mid_impact_pct=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_price_uses_orderbook_top_ask_when_available(session: AsyncSession):
+    # GIVEN un orderbook con top_ask distinto al last_close del indicador (95000)
+    ob = _make_snapshot(top_ask=96500.0)
+
+    # WHEN construyendo el context con ese orderbook
+    ctx = await _build(session, orderbook=ob)
+
+    # THEN ctx["price"] es el top_ask del orderbook, no el last_close stale
+    assert ctx["price"] == pytest.approx(96500.0), (
+        "El precio en el context debe coincidir con ob.top_ask "
+        "para que LLM y RiskGate usen la misma referencia"
+    )
+
+
+@pytest.mark.asyncio
+async def test_price_falls_back_to_last_close_when_no_orderbook(session: AsyncSession):
+    # GIVEN sin orderbook (indicador tiene last_close=95000 en el fixture)
+
+    # WHEN construyendo el context sin orderbook
+    ctx = await _build(session, orderbook=None)
+
+    # THEN ctx["price"] es el last_close del indicador 1h
+    assert ctx["price"] == pytest.approx(95000.0), (
+        "Sin orderbook el precio debe venir del last_close del indicador como fallback"
+    )

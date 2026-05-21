@@ -28,6 +28,17 @@ from agents.prompt_manager import PromptManager
 
 _sqlite_metadata = MetaData()
 
+_ohlcv_table = Table(
+    "ohlcv", _sqlite_metadata,
+    Column("time", DateTime, primary_key=True),
+    Column("timeframe", String(4), primary_key=True),
+    Column("open", Numeric(18, 8)),
+    Column("high", Numeric(18, 8)),
+    Column("low", Numeric(18, 8)),
+    Column("close", Numeric(18, 8)),
+    Column("volume", Numeric(24, 8)),
+)
+
 _indicators_table = Table(
     "indicators", _sqlite_metadata,
     Column("time", DateTime, primary_key=True),
@@ -372,3 +383,218 @@ async def test_two_pass_disabled_uses_single_llm_call(session: AsyncSession):
     rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
     assert rows[0].output["two_pass_triggered"] is False
     assert rows[0].tokens_in == 100
+
+
+# ---------------------------------------------------------------------------
+# Two-pass C7 — R:R adjustment
+# ---------------------------------------------------------------------------
+
+# BUY con R:R insuficiente: price=95000, sl=93000 (risk=2000), tp=96000 (reward=1000) → R:R=0.5
+_BUY_BAD_RR = json.dumps({
+    "regime": "RANGE",
+    "confluences": ["H", "C"],
+    "action": "BUY",
+    "confidence_base": 0.7,
+    "confidence_adjustment": 0.0,
+    "confidence": 0.7,
+    "stop_loss": 93000.0,
+    "take_profit": 96000.0,
+    "position_size_pct": 0.05,
+    "expected_holding_min": 45,
+    "reasoning": "[DECISION] BUY [MERCADO] RANGE [SENALES] H y C [CONFIANZA] 70% [NIVELES] SL $93k TP $96k R:R 1.5",
+})
+
+# BUY corregido por el LLM en second pass: tp=98000 → R:R = (98000-95000)/(95000-93000) = 1.5
+_BUY_CORRECTED_RR = json.dumps({
+    "regime": "RANGE",
+    "confluences": ["H", "C"],
+    "action": "BUY",
+    "confidence_base": 0.7,
+    "confidence_adjustment": 0.0,
+    "confidence": 0.7,
+    "stop_loss": 93000.0,
+    "take_profit": 98000.0,
+    "position_size_pct": 0.05,
+    "expected_holding_min": 45,
+    "reasoning": "[DECISION] BUY ajustado [MERCADO] RANGE [SENALES] H y C [CONFIANZA] 70% [NIVELES] SL $93k TP $98k R:R 1.5",
+})
+
+# HOLD emitido por el LLM en second pass cuando no hay nivel válido
+_HOLD_AFTER_C7 = json.dumps({
+    "regime": "RANGE",
+    "confluences": [],
+    "action": "HOLD",
+    "confidence_base": 0.5,
+    "confidence_adjustment": 0.0,
+    "confidence": 0.5,
+    "stop_loss": None,
+    "take_profit": None,
+    "position_size_pct": 0.0,
+    "expected_holding_min": 15,
+    "reasoning": "[R:R INSUFICIENTE] No hay resistencia válida por encima del TP mínimo requerido.",
+})
+
+
+@pytest.mark.asyncio
+async def test_two_pass_triggered_by_c7_when_rr_insufficient(session: AsyncSession):
+    # GIVEN LLM responde BUY con R:R insuficiente en pass 1 y luego lo corrige en pass 2
+    mock_resp_pass1 = LLMResponse(
+        text=_BUY_BAD_RR, tokens_in=100, tokens_out=50,
+        latency_ms=42, provider=LLMProvider.GEMINI_FLASH.value,
+    )
+    mock_resp_pass2 = LLMResponse(
+        text=_BUY_CORRECTED_RR, tokens_in=100, tokens_out=50,
+        latency_ms=42, provider=LLMProvider.GEMINI_FLASH.value,
+    )
+    llm = MagicMock(spec=LLMClient)
+    llm.call = AsyncMock(side_effect=[mock_resp_pass1, mock_resp_pass2])
+    pm = _make_prompt_manager()
+    pm.load_user_template = MagicMock(return_value="review {review_warnings_block} {review_c7_block}")
+
+    decisor = Decisor(
+        session=session, llm=llm, symbol="BTC/USDT",
+        prompt_manager=pm, provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[], two_pass_enabled=True,
+    )
+
+    # WHEN deciding
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN se hicieron 2 llamadas al LLM (pass 1 + pass 2)
+    assert llm.call.call_count == 2
+
+    # AND la decisión final es el BUY corregido con TP=98000
+    assert result.action == DecisorAction.BUY
+    assert result.take_profit == pytest.approx(98000.0)
+
+    # AND two_pass_triggered=True en la DB
+    rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
+    assert rows[0].output["two_pass_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_c7_two_pass_degrades_to_hold_when_llm_still_fails(session: AsyncSession):
+    # GIVEN LLM responde BUY con R:R insuficiente en ambos passes
+    mock_resp = LLMResponse(
+        text=_BUY_BAD_RR, tokens_in=100, tokens_out=50,
+        latency_ms=42, provider=LLMProvider.GEMINI_FLASH.value,
+    )
+    llm = MagicMock(spec=LLMClient)
+    llm.call = AsyncMock(return_value=mock_resp)
+    pm = _make_prompt_manager()
+    pm.load_user_template = MagicMock(return_value="review {review_warnings_block} {review_c7_block}")
+
+    decisor = Decisor(
+        session=session, llm=llm, symbol="BTC/USDT",
+        prompt_manager=pm, provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[], two_pass_enabled=True,
+    )
+
+    # WHEN deciding
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN la decisión final es HOLD (C7 bloquea ambos passes)
+    assert result.action == DecisorAction.HOLD
+
+    # AND rejected_reason contiene C7
+    rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
+    assert "C7" in (rows[0].rejected_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_c7_two_pass_degrades_to_hold_when_llm_emits_hold(session: AsyncSession):
+    # GIVEN LLM responde BUY con R:R insuficiente en pass 1 y luego HOLD en pass 2
+    mock_resp_pass1 = LLMResponse(
+        text=_BUY_BAD_RR, tokens_in=100, tokens_out=50,
+        latency_ms=42, provider=LLMProvider.GEMINI_FLASH.value,
+    )
+    mock_resp_pass2 = LLMResponse(
+        text=_HOLD_AFTER_C7, tokens_in=100, tokens_out=50,
+        latency_ms=42, provider=LLMProvider.GEMINI_FLASH.value,
+    )
+    llm = MagicMock(spec=LLMClient)
+    llm.call = AsyncMock(side_effect=[mock_resp_pass1, mock_resp_pass2])
+    pm = _make_prompt_manager()
+    pm.load_user_template = MagicMock(return_value="review {review_warnings_block} {review_c7_block}")
+
+    decisor = Decisor(
+        session=session, llm=llm, symbol="BTC/USDT",
+        prompt_manager=pm, provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[], two_pass_enabled=True,
+    )
+
+    # WHEN deciding
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN resultado final es HOLD (el LLM lo emitió correctamente en pass 2)
+    assert result.action == DecisorAction.HOLD
+
+    # AND two_pass_triggered=True en la DB
+    rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
+    assert rows[0].output["two_pass_triggered"] is True
+    # No rejected_reason porque el LLM mismo emitió HOLD (no fue forzado por has_critical)
+    assert rows[0].rejected_reason is None
+
+
+def test_build_review_ctx_includes_c7_block_when_c7_present():
+    # GIVEN warnings con C7
+    from risk.coherence_checker import CoherenceWarning
+    from agents.decisor import _build_review_ctx
+    from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
+
+    decision = DecisorOutput(
+        action=DecisorAction.BUY, regime=MarketRegime.RANGE,
+        confluences=["H", "C"], confidence_base=0.7,
+        confidence_adjustment=0.0, confidence=0.7,
+        stop_loss=93000.0, take_profit=96000.0,
+        position_size_pct=0.05, expected_holding_min=45,
+        reasoning="test",
+    )
+    warnings = [CoherenceWarning(
+        rule_id="C7", severity="critical",
+        message="R:R real=0.50 ≤ min_rr_ratio=1.0",
+        evidence={
+            "rr_real": 0.5, "min_rr_ratio": 1.0,
+            "price": 95000.0, "stop_loss": 93000.0,
+            "take_profit": 96000.0, "reward": 1000.0, "risk": 2000.0,
+        },
+    )]
+
+    # WHEN
+    ctx = _build_review_ctx(decision, warnings)
+
+    # THEN el contexto incluye el bloque C7 con el TP mínimo calculado
+    assert ctx["review_has_c7"] is True
+    assert "review_c7_block" in ctx
+    assert "97,000" in ctx["review_c7_block"]  # tp_min = 95000 + 2000 × 1.0 = 97000 (formato con separador)
+    assert "0.50" in ctx["review_c7_block"]    # rr_real reportado
+    assert "OPCIÓN A" in ctx["review_c7_block"]
+    assert "OPCIÓN B" in ctx["review_c7_block"]
+
+
+def test_build_review_ctx_no_c7_block_when_no_c7():
+    # GIVEN warnings sin C7
+    from risk.coherence_checker import CoherenceWarning
+    from agents.decisor import _build_review_ctx
+    from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
+
+    decision = DecisorOutput(
+        action=DecisorAction.BUY, regime=MarketRegime.RANGE,
+        confluences=["H"], confidence_base=0.7,
+        confidence_adjustment=0.0, confidence=0.7,
+        stop_loss=93000.0, take_profit=98000.0,
+        position_size_pct=0.05, expected_holding_min=45,
+        reasoning="test",
+    )
+    warnings = [CoherenceWarning(
+        rule_id="C1", severity="warning",
+        message="RSI no oversold",
+        evidence={},
+    )]
+
+    # WHEN
+    ctx = _build_review_ctx(decision, warnings)
+
+    # THEN review_has_c7 es False y el bloque está vacío
+    assert ctx["review_has_c7"] is False
+    assert ctx["review_c7_block"] == ""

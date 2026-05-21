@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Callable, ContextManager
 
 import structlog
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,13 @@ _BUFFER_MIN = 15
 
 
 async def _fetch_candidates(session: AsyncSession, *, now: datetime) -> list[Decision]:
-    """Decisor decisions in (now-25h, now-15min) with no outcome or with PENDING."""
+    """Decisor decisions in (now-25h, now-15min) with no outcome, PENDING, or UNKNOWN
+    that has a trade associated (trade_id is set), so they can be re-evaluated once
+    the trade closes and pnl_pct becomes available.
+
+    UNKNOWN decisions without a trade_id (e.g. missing input fields) are intentionally
+    excluded to avoid infinite reprocessing of permanently un-classifiable decisions.
+    """
     since = now - timedelta(hours=_WINDOW_HOURS)
     upto = now - timedelta(minutes=_BUFFER_MIN)
     stmt = (
@@ -36,6 +42,10 @@ async def _fetch_candidates(session: AsyncSession, *, now: datetime) -> list[Dec
             or_(
                 DecisionOutcome.decision_id.is_(None),
                 DecisionOutcome.classification == "PENDING",
+                and_(
+                    DecisionOutcome.classification == "UNKNOWN",
+                    Decision.trade_id.isnot(None),
+                ),
             ),
         )
         .order_by(Decision.ts.asc())
