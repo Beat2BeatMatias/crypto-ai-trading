@@ -39,7 +39,7 @@ class DecisorOutput(BaseModel):
     @field_validator("expected_holding_min", mode="before")
     @classmethod
     def _coerce_null_holding(cls, v: Any) -> int:
-        return 1 if v is None else v
+        return 1 if (v is None or v == 0) else v
 
     @field_validator("reasoning", mode="before")
     @classmethod

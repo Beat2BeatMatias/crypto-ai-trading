@@ -106,6 +106,52 @@ def test_buy_without_take_profit_raises():
     assert "take_profit is required when action=BUY" in str(exc_info.value)
 
 
+def test_hold_with_expected_holding_min_zero_coerced_to_one():
+    # GIVEN un payload HOLD donde el LLM retorna expected_holding_min=0
+    # (caso real: Gemini 2.5 Flash env\u00eda 0 para decisiones HOLD)
+    payload = {
+        "regime": "TRENDING_DOWN",
+        "confluences": ["A", "H"],
+        "action": "HOLD",
+        "confidence_base": 0.0,
+        "confidence_adjustment": 0.0,
+        "confidence": 0.0,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "expected_holding_min": 0,
+        "reasoning": "HOLD. No se cumplen criterios de entrada.",
+    }
+
+    # WHEN parseado
+    output = DecisorOutput(**payload)
+
+    # THEN el validador coerciona 0 → 1 sin lanzar ValidationError
+    assert output.expected_holding_min == 1
+    assert output.action == DecisorAction.HOLD
+
+
+def test_hold_with_expected_holding_min_none_coerced_to_one():
+    # GIVEN un payload HOLD donde el LLM retorna expected_holding_min=null
+    payload = {
+        "regime": "RANGE",
+        "confluences": [],
+        "action": "HOLD",
+        "confidence": 0.0,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "expected_holding_min": None,
+        "reasoning": "HOLD sin confluencias.",
+    }
+
+    # WHEN parseado
+    output = DecisorOutput(**payload)
+
+    # THEN el validador coerciona None → 1 sin lanzar ValidationError
+    assert output.expected_holding_min == 1
+
+
 def test_reasoning_above_1000_chars_truncated():
     # GIVEN a payload with reasoning exceeding 1000 characters
     # the _truncate_reasoning validator silently truncates instead of raising

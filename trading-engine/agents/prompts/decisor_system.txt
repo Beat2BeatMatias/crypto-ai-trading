@@ -298,6 +298,6 @@ OUTPUT — JSON EXACTO, sin texto extra
   "stop_loss": float (OBLIGATORIO si BUY, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si BUY, null si HOLD/SELL),
   "position_size_pct": float en ({min_position_size}, {max_position_pct}] para BUY, 0.0 para HOLD/SELL,
-  "expected_holding_min": int ≥ 1 (coherente con perfil {block_a_profile}: {block_a_holding_range_min}–{block_a_holding_range_max} min),
+  "expected_holding_min": int ≥ 1 (usa 1 para HOLD/SELL; coherente con perfil {block_a_profile}: {block_a_holding_range_min}–{block_a_holding_range_max} min para BUY),
   "reasoning": "string — 5 secciones, una sola línea, max 1000 chars"
 }
