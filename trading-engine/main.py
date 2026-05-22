@@ -180,8 +180,19 @@ async def run() -> None:
     sched = EngineScheduler()
 
     async def decisor_tick() -> None:
+        # Sincronizar estado de pausa desde DB: permite que un reset manual desde la UI
+        # (que escribe ENGINE_PAUSED=false en la DB) sea efectivo sin reiniciar el proceso.
+        # Sin esta sincronización, el objeto cb queda pausado en memoria indefinidamente
+        # incluso después de un reset explícito del operador para pausas financieras.
         if cb.engine_paused:
-            if cb.maybe_auto_reset():
+            async with session_factory() as s:
+                store = ConfigStore(s)
+                db_paused = await store.get_typed(ConfigKey.ENGINE_PAUSED)
+            if not db_paused:
+                logger.warning("engine.manual_reset_detected", reason=str(cb._pause_reason))
+                cb.manual_reset()
+                await notify(TelegramEvent.ENGINE_RESUMED, {"motivo": "manual_reset"})
+            elif cb.maybe_auto_reset():
                 logger.warning("engine.auto_reset_after_cooldown")
                 async with session_factory() as s:
                     store = ConfigStore(s)

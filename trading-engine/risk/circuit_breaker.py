@@ -139,6 +139,23 @@ class CircuitBreaker:
     def record_exchange_success(self) -> None:
         self._exchange_consecutive_failures = 0
 
+    def manual_reset(self) -> None:
+        """Sincroniza el estado en memoria con un reset manual del operador (vía UI/DB).
+
+        Limpia todos los contadores y levanta la pausa, sea cual sea el motivo.
+        Se invoca cuando la DB indica ENGINE_PAUSED=false pero cb.engine_paused=True.
+        """
+        logger.warning(
+            "circuit.manual_reset",
+            previous_reason=str(self._pause_reason),
+        )
+        self.engine_paused = False
+        self._pause_reason = None
+        self._pause_ts = None
+        self._llm_consecutive_failures = 0
+        self._exchange_consecutive_failures = 0
+        self._drawdown_consecutive_breaches = 0
+
     def update_thresholds(self, *, daily_stop_pct: float, max_drawdown_pct: float) -> None:
         self.daily_stop_pct = daily_stop_pct
         self.max_drawdown_pct = max_drawdown_pct

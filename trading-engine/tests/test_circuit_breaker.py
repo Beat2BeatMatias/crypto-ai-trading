@@ -155,3 +155,53 @@ def test_financial_pause_not_overridden_by_operational():
         cb.record_llm_failure()
     # El motivo de pausa no se reemplaza por LLM_FAILURES
     assert cb._pause_reason == PauseReason.DRAWDOWN
+
+
+def test_manual_reset_clears_drawdown_pause():
+    # GIVEN: engine pausado por drawdown (pausa financiera, requiere intervención humana)
+    cb = CircuitBreaker(
+        daily_stop_pct=-0.03, max_drawdown_pct=-0.10,
+        drawdown_consecutive_threshold=1,
+    )
+    cb.evaluate(daily_pnl_pct=0.0, total_drawdown_pct=-0.11)
+    assert cb.engine_paused is True
+    assert cb._pause_reason == PauseReason.DRAWDOWN
+
+    # WHEN: operador hace reset manual (DB escribe ENGINE_PAUSED=false → main.py llama manual_reset)
+    cb.manual_reset()
+
+    # THEN: engine vuelve a estar activo con todos los contadores limpios
+    assert cb.engine_paused is False
+    assert cb._pause_reason is None
+    assert cb._pause_ts is None
+    assert cb._drawdown_consecutive_breaches == 0
+    assert cb._llm_consecutive_failures == 0
+    assert cb._exchange_consecutive_failures == 0
+
+
+def test_manual_reset_clears_daily_stop_pause():
+    # GIVEN: engine pausado por daily_stop
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)
+    cb.evaluate(daily_pnl_pct=-0.05, total_drawdown_pct=0.0)
+    assert cb.engine_paused is True
+    assert cb._pause_reason == PauseReason.DAILY_STOP
+
+    # WHEN
+    cb.manual_reset()
+
+    # THEN
+    assert cb.engine_paused is False
+    assert cb._pause_reason is None
+
+
+def test_manual_reset_on_active_engine_is_noop():
+    # GIVEN: engine no pausado
+    cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)
+    assert cb.engine_paused is False
+
+    # WHEN: llamar manual_reset no cambia nada
+    cb.manual_reset()
+
+    # THEN
+    assert cb.engine_paused is False
+    assert cb._pause_reason is None
