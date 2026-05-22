@@ -122,40 +122,52 @@ class Executor:
     ) -> tuple[str | None, str | None]:
         """Coloca una orden OCO (SL + TP simultáneos) con retry.
 
-        Binance OCO para Spot: create_oco_order(symbol, side, qty, price, stopPrice, stopLimitPrice).
-          - price       → límite del TP (LIMIT_MAKER)
-          - stopPrice   → precio de activación del SL
-          - stopLimitPrice → precio límite del SL (ligeramente por debajo del stopPrice)
+        Binance Spot usa el nuevo endpoint POST /api/v3/orderList/oco, mapeado en
+        CCXT como exchange.privatePostOrderListOco(). El endpoint deprecated
+        POST /api/v3/order/oco ya no acepta el tipo "OCO" para BTC/USDT.
 
-        Si la OCO falla (exchange no soporta, error transitorio), hace fallback
-        colocando SL solo — el TP Guardian del OrderTracker cubre el TP.
+        Parámetros del orderList OCO para el lado SELL:
+          - aboveType      → LIMIT_MAKER  (orden TP, ejecuta si precio sube)
+          - abovePrice     → take_profit
+          - belowType      → STOP_LOSS_LIMIT (orden SL, ejecuta si precio baja)
+          - belowStopPrice → stop_loss (precio de activación)
+          - belowPrice     → sl_limit_price (precio límite, ligeramente por debajo)
+
+        Si la OCO falla (error transitorio), hace fallback colocando SL solo.
+        El TP Guardian del OrderTracker cubre el TP mientras no haya OCO activa.
         """
         sl_limit_price = round(stop_loss * _SL_LIMIT_SLIPPAGE, 2)
+        # Binance rechaza notación científica (ej. "8e-05"); usar Decimal para
+        # obtener siempre representación decimal completa (ej. "0.00008").
+        qty_str = format(Decimal(str(filled_qty)), 'f')
 
         for attempt in range(1, _OCO_RETRIES + 1):
             try:
-                oco = await self.exchange.create_order(
-                    self.symbol, "OCO", "sell", filled_qty,
-                    price=take_profit,
-                    params={
-                        "stopPrice": stop_loss,
-                        "stopLimitPrice": sl_limit_price,
-                        "stopLimitTimeInForce": "GTC",
-                    },
-                )
-                # Binance retorna orderListId + dos órdenes hijas en "orders"
-                orders = oco.get("orders") or []
+                oco = await self.exchange.privatePostOrderListOco({
+                    "symbol": self.symbol.replace("/", ""),
+                    "side": "SELL",
+                    "quantity": qty_str,
+                    "aboveType": "LIMIT_MAKER",
+                    "abovePrice": str(take_profit),
+                    "belowType": "STOP_LOSS_LIMIT",
+                    "belowStopPrice": str(stop_loss),
+                    "belowPrice": str(sl_limit_price),
+                    "belowTimeInForce": "GTC",
+                })
+                # Binance retorna orderListId + lista "orderReports" con las dos órdenes hijas
+                order_reports = oco.get("orderReports") or oco.get("orders") or []
                 sl_id: str | None = None
                 tp_id: str | None = None
-                for o in orders:
+                for o in order_reports:
                     otype = (o.get("type") or "").upper()
+                    oid = str(o["orderId"]) if o.get("orderId") else None
                     if otype in ("STOP_LOSS_LIMIT", "STOP_LOSS"):
-                        sl_id = str(o["orderId"]) if o.get("orderId") else None
+                        sl_id = oid
                     elif otype in ("LIMIT_MAKER", "LIMIT"):
-                        tp_id = str(o["orderId"]) if o.get("orderId") else None
-                # Fallback: si la respuesta no tiene "orders", usar el id raíz
+                        tp_id = oid
+                # Fallback: si la respuesta no viene con orderReports parseables, usar el listId
                 if not sl_id and not tp_id:
-                    root_id = str(oco.get("id") or oco.get("orderListId") or "")
+                    root_id = str(oco.get("orderListId") or oco.get("id") or "")
                     sl_id = root_id or None
                     tp_id = root_id or None
                 logger.info("executor.oco_bracket_placed",
