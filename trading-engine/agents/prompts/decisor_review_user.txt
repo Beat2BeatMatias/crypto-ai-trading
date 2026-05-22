@@ -17,11 +17,17 @@ output y los indicadores del ciclo actual:
 
 {review_warnings_block}
 {review_c7_block}
+════════════════════════════════════════════
+NIVELES DE PRECIO DEL CICLO ACTUAL (Block D)
+════════════════════════════════════════════
+{review_block_d}
+
 ═══════════════════════════════════════════════════════════════
 QUÉ HACER AHORA (para inconsistencias C1/C2/C3)
 ═══════════════════════════════════════════════════════════════
 Revisá cada inconsistencia con el contexto técnico completo que tenés
-disponible (bloques B–F del prompt anterior).
+disponible (bloques B–F del prompt anterior) y los niveles de precio
+listados arriba.
 
 Tenés DOS opciones:
 

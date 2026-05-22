@@ -537,7 +537,7 @@ async def test_c7_two_pass_degrades_to_hold_when_llm_emits_hold(session: AsyncSe
 
 
 def test_build_review_ctx_includes_c7_block_when_c7_present():
-    # GIVEN warnings con C7
+    # GIVEN warnings con C7 y original_ctx con datos del ciclo
     from risk.coherence_checker import CoherenceWarning
     from agents.decisor import _build_review_ctx
     from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
@@ -559,17 +559,29 @@ def test_build_review_ctx_includes_c7_block_when_c7_present():
             "take_profit": 96000.0, "reward": 1000.0, "risk": 2000.0,
         },
     )]
+    original_ctx = {
+        "block_d_text": "  EMA50(1h): $93,500  EMA200(1h): $97,000",
+        "atr_ref": 500.0,
+        "sl_atr_multiplier": 0.4,
+    }
 
     # WHEN
-    ctx = _build_review_ctx(decision, warnings)
+    ctx = _build_review_ctx(decision, warnings, original_ctx)
 
     # THEN el contexto incluye el bloque C7 con el TP mínimo calculado
     assert ctx["review_has_c7"] is True
     assert "review_c7_block" in ctx
-    assert "97,000" in ctx["review_c7_block"]  # tp_min = 95000 + 2000 × 1.0 = 97000 (formato con separador)
-    assert "0.50" in ctx["review_c7_block"]    # rr_real reportado
+    # tp_min del LLM = 95000 + 2000 × 1.0 = 97000
+    assert "97,000" in ctx["review_c7_block"]
+    assert "0.50" in ctx["review_c7_block"]
     assert "OPCIÓN A" in ctx["review_c7_block"]
     assert "OPCIÓN B" in ctx["review_c7_block"]
+    # tp_min canónico = 95000 + (500 × 0.4) × 1.0 = 95200
+    assert "95,200" in ctx["review_c7_block"]
+    # Los niveles de precio del ciclo aparecen en el bloque C7
+    assert "EMA50(1h)" in ctx["review_c7_block"]
+    # El block_d también está disponible como variable de template
+    assert ctx["review_block_d"] == "  EMA50(1h): $93,500  EMA200(1h): $97,000"
 
 
 def test_build_review_ctx_no_c7_block_when_no_c7():
@@ -591,10 +603,12 @@ def test_build_review_ctx_no_c7_block_when_no_c7():
         message="RSI no oversold",
         evidence={},
     )]
+    original_ctx = {"block_d_text": "  EMA50(1h): $93,000"}
 
     # WHEN
-    ctx = _build_review_ctx(decision, warnings)
+    ctx = _build_review_ctx(decision, warnings, original_ctx)
 
     # THEN review_has_c7 es False y el bloque está vacío
     assert ctx["review_has_c7"] is False
     assert ctx["review_c7_block"] == ""
+    assert ctx["review_block_d"] == "  EMA50(1h): $93,000"

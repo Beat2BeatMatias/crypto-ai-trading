@@ -124,7 +124,7 @@ class Decisor:
                     action_pass1=validated.action,
                     confidence_pass1=validated.confidence,
                 )
-                review_ctx = _build_review_ctx(validated, trigger_warnings)
+                review_ctx = _build_review_ctx(validated, trigger_warnings, ctx)
                 review_template = self.prompt_manager.load_user_template("decisor_review")
                 review_prompt = review_template.format_map(_DefaultReviewDict(review_ctx))
 
@@ -260,8 +260,14 @@ def _parse_llm_output(text: str) -> DecisorOutput:
 # ---------------------------------------------------------------------------
 
 def _build_review_ctx(decision: DecisorOutput,
-                      warnings: list[CoherenceWarning]) -> dict[str, Any]:
-    """Arma el contexto para el template de auto-revisión."""
+                      warnings: list[CoherenceWarning],
+                      original_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Arma el contexto para el template de auto-revisión.
+
+    Recibe el ctx original del ciclo para inyectar niveles de precio (block_d_text)
+    y el rango canónico de SL/TP calculado por el código, de modo que el LLM
+    decida con información completa y no alucine resistencias por falta de contexto.
+    """
     warnings_lines = "\n".join(
         f"  [{w.rule_id}] {w.message}" for w in warnings
     )
@@ -278,6 +284,8 @@ def _build_review_ctx(decision: DecisorOutput,
         "review_warnings_block": warnings_lines,
         "review_has_c7": False,
         "review_c7_block": "",
+        # Niveles de precio del ciclo actual para que el LLM los consulte
+        "review_block_d": original_ctx.get("block_d_text", "  (sin datos)"),
     }
 
     # Si hay un warning C7, enriquecer con datos calculados en código
@@ -288,34 +296,58 @@ def _build_review_ctx(decision: DecisorOutput,
         price = ev.get("price", 0.0)
         risk = ev.get("risk", 0.0)
         min_rr = ev.get("min_rr_ratio", 1.0)
-        tp_min = price + risk * min_rr if price > 0 and risk > 0 else None
+        # TP mínimo calculado con el riesgo del SL que el LLM propuso en pass 1
+        tp_min_llm = price + risk * min_rr if price > 0 and risk > 0 else None
+
+        # TP mínimo canónico: calculado con el rango de SL que el código impone
+        # (ATR × sl_atr_multiplier). Esto le da al LLM la referencia "piso" real.
+        atr_ref = float(original_ctx.get("atr_ref") or 0)
+        sl_mult = float(original_ctx.get("sl_atr_multiplier") or 0)
+        canonical_risk = atr_ref * sl_mult if atr_ref > 0 and sl_mult > 0 else None
+        tp_min_canonical = (
+            price + canonical_risk * min_rr
+            if canonical_risk and price > 0 else None
+        )
 
         ctx["review_has_c7"] = True
         ctx["review_c7_block"] = (
             f"\n═══════════════════════════════════════════════════════════════\n"
             f"AJUSTE DE R:R REQUERIDO (C7)\n"
             f"═══════════════════════════════════════════════════════════════\n"
-            f"El código calculó:\n"
+            f"El código calculó el R:R de tu decisión pass-1:\n"
             f"  precio_actual = ${price:,.2f}\n"
             f"  reward (TP − precio) = ${ev.get('reward', 0):.2f}\n"
-            f"  risk   (precio − SL) = ${risk:.2f}\n"
+            f"  risk   (precio − SL) = ${risk:.2f}  ← SL que propusiste\n"
             f"  R:R real             = {ev.get('rr_real', 0):.2f}  ←  mínimo requerido: {min_rr}\n"
-            + (f"  TP mínimo necesario  = ${tp_min:,.2f}  (precio + risk × {min_rr})\n" if tp_min else "")
+            + (f"  TP mínimo con tu SL  = ${tp_min_llm:,.2f}\n" if tp_min_llm else "")
+            + (
+                f"\n"
+                f"Referencia de rango canónico de SL (ATR × {sl_mult}):\n"
+                f"  risk canónico (ATR={atr_ref:.0f} × {sl_mult}) = ${canonical_risk:.2f}\n"
+                f"  TP mínimo canónico   = ${tp_min_canonical:,.2f}  "
+                f"(precio + risk_canónico × {min_rr})\n"
+                if canonical_risk and tp_min_canonical else ""
+            )
             + f"\n"
+            f"Niveles de precio disponibles en este ciclo:\n"
+            f"{original_ctx.get('block_d_text', '  (sin datos)')}\n"
+            f"\n"
             f"Tenés DOS opciones:\n"
             f"\n"
             f"  OPCIÓN A — Ajustar el TP:\n"
-            f"    Buscá en los bloques C y D una resistencia técnica válida\n"
-            f"    ESTRICTAMENTE por encima de ${tp_min:,.2f}.\n"
-            f"    Si existe → emití BUY con ese nuevo TP (sin cambiar el SL).\n"
-            f"    Verificá que el nuevo R:R = (TP_nuevo − {price:,.2f}) / {risk:.2f} > {min_rr} antes de emitir.\n"
+            f"    Buscá en los niveles de precio listados arriba una resistencia técnica\n"
+            + (
+                f"    ESTRICTAMENTE por encima de ${tp_min_canonical:,.2f} (TP mínimo canónico).\n"
+                f"    Si tu SL es diferente al canónico, verificá que R:R = (TP_nuevo − {price:,.2f}) / risk > {min_rr}.\n"
+                if tp_min_canonical else
+                f"    que garantice un R:R > {min_rr} con tu SL actual.\n"
+            )
+            + f"    Si existe → emití BUY con ese nuevo TP (manteniendo o ajustando el SL dentro del rango canónico).\n"
             f"\n"
             f"  OPCIÓN B — Emitir HOLD:\n"
-            f"    Si no existe ninguna resistencia técnica por encima de ${tp_min:,.2f},\n"
+            f"    Si no existe ninguna resistencia técnica que cumpla el R:R,\n"
             f"    o si el precio ya está en zona de sobrecompra (BB%>95, Stoch>80, RSI>70),\n"
-            f"    emití HOLD con reasoning '[R:R INSUFICIENTE] No hay resistencia válida\n"
-            f"    por encima de ${tp_min:,.2f} en las condiciones actuales.'\n"
-            if tp_min else ""
+            f"    emití HOLD.\n"
         )
 
     return ctx
