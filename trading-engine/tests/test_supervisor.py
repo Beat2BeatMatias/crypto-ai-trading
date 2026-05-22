@@ -148,6 +148,8 @@ _balance_snapshots_table = Table(
     Column("ts", DateTime, nullable=False),
     Column("usdt", Numeric(18, 4), nullable=False),
     Column("btc", Numeric(18, 8), nullable=False),
+    Column("usdt_locked", Numeric(18, 4), nullable=False, server_default="0"),
+    Column("btc_locked", Numeric(18, 8), nullable=False, server_default="0"),
     Column("source", String(20), nullable=False, default="binance"),
 )
 

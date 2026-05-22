@@ -164,15 +164,29 @@ export function Dashboard() {
           ) : (
             <div className="space-y-1">
               <StatRow
-                label="USDT disponible"
+                label="USDT libre"
                 value={`$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 valueClass="text-emerald-400"
               />
+              {balance.usdt_locked > 0 && (
+                <StatRow
+                  label="USDT bloqueado (órdenes)"
+                  value={`$${balance.usdt_locked.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  valueClass="text-yellow-500"
+                />
+              )}
               <StatRow
-                label="BTC en exchange"
+                label="BTC libre en exchange"
                 value={`${balance.btc_exchange.toFixed(6)} BTC`}
                 valueClass="text-amber-400"
               />
+              {balance.btc_locked > 0 && (
+                <StatRow
+                  label="BTC bloqueado (órdenes)"
+                  value={`${balance.btc_locked.toFixed(6)} BTC`}
+                  valueClass="text-yellow-500"
+                />
+              )}
               <StatRow
                 label="BTC en posiciones"
                 value={`${balance.btc_in_positions.toFixed(6)} BTC`}
@@ -180,9 +194,9 @@ export function Dashboard() {
               />
               {ticker?.price != null && (
                 <StatRow
-                  label="Total en USD"
-                  value={`$${((balance.usdt + balance.btc_exchange * ticker.price)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                  valueClass="text-white"
+                  label="Total en USD (real)"
+                  value={`$${(balance.usdt_total + balance.btc_exchange_total * ticker.price).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  valueClass="text-white font-semibold"
                 />
               )}
               <div className="pt-2 text-xs text-zinc-600">

@@ -84,7 +84,11 @@ export interface DailyStats {
 
 export interface Balance {
   usdt: number;
+  usdt_locked: number;
+  usdt_total: number;
   btc_exchange: number;
+  btc_locked: number;
+  btc_exchange_total: number;
   btc_in_positions: number;
   open_positions: number;
   balance_ts: string | null;

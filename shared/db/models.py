@@ -258,6 +258,9 @@ class BalanceSnapshot(Base):
     )
     usdt: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     btc: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    # Saldos bloqueados en órdenes activas (OCO, SL, TP, etc.)
+    usdt_locked: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, server_default=text("0"))
+    btc_locked: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, server_default=text("0"))
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="binance")
 
     __table_args__ = (

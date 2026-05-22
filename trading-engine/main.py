@@ -256,16 +256,24 @@ async def run() -> None:
             try:
                 balance = await exchange.fetch_balance()
                 usdt = float(balance.get("free", {}).get("USDT", 0.0))
-                btc = float(balance.get("free", {}).get("BTC", 0.0))
+                btc  = float(balance.get("free", {}).get("BTC",  0.0))
+                usdt_locked = float(balance.get("used", {}).get("USDT", 0.0))
+                btc_locked  = float(balance.get("used", {}).get("BTC",  0.0))
                 cb.record_exchange_success()
                 from shared.db.models import BalanceSnapshot
-                s.add(BalanceSnapshot(usdt=usdt, btc=btc, source="binance"))
+                s.add(BalanceSnapshot(
+                    usdt=usdt, btc=btc,
+                    usdt_locked=usdt_locked, btc_locked=btc_locked,
+                    source="binance",
+                ))
                 await s.commit()
             except Exception as e:
                 logger.warning("engine.balance_unavailable_using_db_fallback", error=str(e))
                 balance_fetch_ok = False
                 # Exchange down: no USDT (prevents new BUYs), BTC from open positions in DB
                 usdt = 0.0
+                usdt_locked = 0.0
+                btc_locked  = 0.0
                 from sqlalchemy import select as _sel
                 from shared.db.models import Position as _Pos
                 _open = (await s.execute(
@@ -463,6 +471,26 @@ async def run() -> None:
                 logger.error("supervisor.error", error=str(e))
                 cb.record_llm_failure()
 
+    async def balance_tick() -> None:
+        """Persiste el snapshot de balance (free + locked) cada 60 s independientemente
+        del ciclo del decisor, para mantener la UI actualizada en todo momento."""
+        try:
+            bal = await exchange.fetch_balance()
+            usdt_free   = float(bal.get("free", {}).get("USDT", 0.0))
+            btc_free    = float(bal.get("free", {}).get("BTC",  0.0))
+            usdt_locked = float(bal.get("used", {}).get("USDT", 0.0))
+            btc_locked  = float(bal.get("used", {}).get("BTC",  0.0))
+            from shared.db.models import BalanceSnapshot
+            async with session_factory() as s:
+                s.add(BalanceSnapshot(
+                    usdt=usdt_free, btc=btc_free,
+                    usdt_locked=usdt_locked, btc_locked=btc_locked,
+                    source="binance",
+                ))
+                await s.commit()
+        except Exception as e:
+            logger.warning("balance_tick.failed", error=str(e))
+
     async def fees_tick() -> None:
         async with session_factory() as s:
             await FeeManager(exchange, s, symbol=settings.symbol).refresh()
@@ -510,6 +538,7 @@ async def run() -> None:
     sched.add_decisor(decisor_tick, interval_min=interval_min)
     sched.add_supervisor(supervisor_tick, cron=cron)
     sched.add_fee_refresh(fees_tick, hours=24)
+    sched.add_balance_refresh(balance_tick, seconds=60)
     sched.add_position_refresh(positions_tick, seconds=30)
     sched.add_order_tracker(order_tracker_tick, seconds=30)
     sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=outcome_interval_min)
