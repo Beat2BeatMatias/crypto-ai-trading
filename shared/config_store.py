@@ -79,6 +79,10 @@ class ConfigKey(str, Enum):
     OUTCOME_ATTRIBUTION_INTERVAL_MIN = "outcome_attribution_interval_min"
     OUTCOME_ATTRIBUTION_HORIZON_MIN = "outcome_attribution_horizon_min"
     OUTCOME_COVERAGE_THRESHOLD_PCT = "outcome_coverage_threshold_pct"
+    POSTMORTEM_ENABLED = "postmortem_enabled"
+    POSTMORTEM_MAX_PER_TICK = "postmortem_max_per_tick"
+    POSTMORTEM_PROVIDER = "postmortem_provider"
+    POSTMORTEM_INTERVAL_MIN = "postmortem_interval_min"
 
 
 @dataclass(frozen=True)
@@ -259,6 +263,22 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Porcentaje máximo de velas 1m faltantes en la ventana antes de clasificar como UNKNOWN. "
         "Con 30 (default), si más del 30 % de las velas están ausentes la clasificación es UNKNOWN. "
         "Rango 5–50.",
+    ),
+    ConfigKey.POSTMORTEM_ENABLED: _Default(
+        "true", "bool",
+        "Si true, el job de post-mortem analiza decisiones con outcome negativo vía LLM.",
+    ),
+    ConfigKey.POSTMORTEM_MAX_PER_TICK: _Default(
+        "5", "int",
+        "Máximo de post-mortems LLM por tick del job. Rango 1–20.",
+    ),
+    ConfigKey.POSTMORTEM_PROVIDER: _Default(
+        "gemini-2.5-flash", "string",
+        "Provider LLM para post-mortem (gemini-2.5-flash | groq-llama-3.3-70b | …).",
+    ),
+    ConfigKey.POSTMORTEM_INTERVAL_MIN: _Default(
+        "60", "int",
+        "Cada cuántos minutos corre el job de post-mortem (offset implícito post attribution). Rango 15–240.",
     ),
 }
 

@@ -59,7 +59,7 @@ function rrRatio(entry: number, sl: number | null, tp: number | null): string {
 
 function exportCSV(trades: Trade[]) {
   const cols = [
-    "id", "ts_open", "ts_close", "side", "status",
+    "id", "decision_id", "ts_open", "ts_close", "side", "status",
     "quantity_btc", "entry_price", "exit_price",
     "stop_loss", "take_profit",
     "pnl_usdt", "pnl_pct", "fees_usdt", "close_reason",
@@ -356,12 +356,25 @@ export function Trades() {
 
               <button
                 type="button"
-                title={`ID: ${t.id}\nClick para copiar`}
+                title={`Trade: ${t.id}\nClick para copiar`}
                 onClick={() => navigator.clipboard.writeText(t.id)}
                 className="font-mono text-xs text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer select-none"
               >
-                #{t.id.slice(0, 8)}
+                trade #{t.id.slice(0, 8)}
               </button>
+
+              {t.decision_id ? (
+                <button
+                  type="button"
+                  title={`Decisión: ${t.decision_id}\nClick para copiar`}
+                  onClick={() => navigator.clipboard.writeText(t.decision_id!)}
+                  className="font-mono text-xs text-violet-400/80 hover:text-violet-300 transition-colors cursor-pointer select-none"
+                >
+                  decisión #{t.decision_id.slice(0, 8)}
+                </button>
+              ) : (
+                <span className="text-xs text-zinc-600 italic">sin decisión</span>
+              )}
 
               <span className="text-xs text-zinc-500">
                 {new Date(t.ts_open).toLocaleString("es-AR", { hour12: false })}

@@ -98,6 +98,10 @@ class DecisionOutcome(Base):
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()"),
     )
+    postmortem_status: Mapped[str | None] = mapped_column(String(16))
+    lesson_raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    lesson_normalized: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    postmortem_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     decision: Mapped["Decision"] = relationship("Decision", foreign_keys=[decision_id])
 

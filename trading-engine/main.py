@@ -540,11 +540,36 @@ async def run() -> None:
             coverage_threshold_pct=coverage_threshold_pct,
         )
 
+    async def outcome_postmortem_tick_wrapper() -> None:
+        from agents.postmortem_job import outcome_postmortem_tick
+
+        enabled = True
+        max_per_tick = 5
+        provider_name = "gemini-2.5-flash"
+        interval_min = 60
+        try:
+            async with session_factory() as s:
+                store = ConfigStore(s)
+                enabled = bool(await store.get_typed(ConfigKey.POSTMORTEM_ENABLED))
+                max_per_tick = int(await store.get_typed(ConfigKey.POSTMORTEM_MAX_PER_TICK))
+                provider_name = str(await store.get(ConfigKey.POSTMORTEM_PROVIDER))
+        except Exception as e:
+            logger.warning("postmortem.config_read_failed", error=str(e))
+        if not enabled:
+            return
+        await outcome_postmortem_tick(
+            session_factory=session_factory,
+            llm=llm,
+            max_per_tick=max_per_tick,
+            provider_name=provider_name,
+        )
+
     async with session_factory() as s:
         store = ConfigStore(s)
         interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
         cron = await store.get(ConfigKey.SUPERVISOR_CRON)
         outcome_interval_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_INTERVAL_MIN))
+        postmortem_interval_min = int(await store.get_typed(ConfigKey.POSTMORTEM_INTERVAL_MIN))
 
     sched.add_decisor(decisor_tick, interval_min=interval_min)
     sched.add_supervisor(supervisor_tick, cron=cron)
@@ -553,7 +578,9 @@ async def run() -> None:
     sched.add_position_refresh(positions_tick, seconds=30)
     sched.add_order_tracker(order_tracker_tick, seconds=30)
     sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=outcome_interval_min)
+    sched.add_outcome_postmortem(outcome_postmortem_tick_wrapper, interval_min=postmortem_interval_min)
     logger.info("scheduler.outcome_attribution_registered", interval_min=outcome_interval_min)
+    logger.info("scheduler.postmortem_registered", interval_min=postmortem_interval_min)
     sched.start()
 
     stop_event = asyncio.Event()

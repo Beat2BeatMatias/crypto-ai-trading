@@ -254,6 +254,10 @@ class DecisionOutcomeOut(BaseModel):
     tp_target_pct: float | None
     classification: str
     computed_at: datetime
+    postmortem_status: str | None = None
+    lesson_raw: dict | None = None
+    lesson_normalized: dict | None = None
+    postmortem_at: datetime | None = None
 
 
 @router.get("/decisions/outcomes", response_model=list[DecisionOutcomeOut])
@@ -262,6 +266,7 @@ async def list_outcomes(
     since_hours: int = Query(24, ge=1, le=168),
     classification: str | None = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    include_lessons: bool = Query(False),
 ) -> list[DecisionOutcomeOut]:
     since = datetime.now(tz=timezone.utc) - timedelta(hours=since_hours)
     stmt = (
@@ -295,5 +300,9 @@ async def list_outcomes(
             tp_target_pct=float(o.tp_target_pct) if o.tp_target_pct is not None else None,
             classification=o.classification,
             computed_at=o.computed_at,
+            postmortem_status=o.postmortem_status if include_lessons else None,
+            lesson_raw=o.lesson_raw if include_lessons else None,
+            lesson_normalized=o.lesson_normalized if include_lessons else None,
+            postmortem_at=o.postmortem_at if include_lessons else None,
         ))
     return out

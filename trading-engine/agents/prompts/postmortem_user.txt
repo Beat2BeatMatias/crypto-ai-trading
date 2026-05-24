@@ -1,0 +1,58 @@
+Analizá esta decisión con outcome negativo.
+
+CLASSIFICATION: {classification}
+SEVERITY_SCORE (precomputado): {severity_score}
+
+DECISION_TS: {decision_ts}
+DECISION_OUTPUT:
+{decision_output_json}
+
+DECISION_INPUT (snapshot al momento T — única fuente de indicadores):
+{decision_input_json}
+
+OUTCOME_METRICS:
+  forward_return_pct={forward_return_pct}
+  mfe_pct={mfe_pct}
+  mae_pct={mae_pct}
+  time_to_mfe_min={time_to_mfe_min}
+  time_to_mae_min={time_to_mae_min}
+  sl_dist_pct={sl_dist_pct}
+  tp_target_pct={tp_target_pct}
+
+TRADE (si ejecutada): {trade_summary}
+
+Emití JSON con esta estructura exacta:
+{{
+  "version": 1,
+  "classification": "{classification}",
+  "severity_score": {severity_score},
+  "root_cause_tag": "snake_case corto",
+  "summary": "1-3 oraciones",
+  "decision_snapshot": {{
+    "regime_declared": "...",
+    "action": "...",
+    "confidence": 0.0,
+    "confluences_declared": [],
+    "reasoning_excerpt": "..."
+  }},
+  "forward_evidence": {{
+    "mfe_pct": null,
+    "mae_pct": null,
+    "forward_return_pct": null,
+    "time_to_mae_min": null,
+    "time_to_mfe_min": null
+  }},
+  "misread_indicators": [],
+  "ignored_signals": [],
+  "confluence_analysis": {{
+    "misapplied_codes": [],
+    "should_have_used": [],
+    "notes": ""
+  }},
+  "proposed_pattern": null,
+  "would_change": {{
+    "action": "HOLD|BUY|SELL|null",
+    "rationale": ""
+  }},
+  "hindsight_guardrails_passed": true
+}}
