@@ -292,7 +292,12 @@ def test_classify_executed_sell_with_positive_trade_pnl_as_good_sell():
         ts=t0,
         executed=True,
     )
-    trade = SimpleNamespace(pnl_pct=Decimal("0.8"))
+    trade = SimpleNamespace(
+        pnl_pct=Decimal("0.8"),
+        entry_price=Decimal("99.0"),
+        stop_loss=Decimal("98.5"),
+        take_profit=Decimal("101.0"),
+    )
     candles = _dense_candles(t0, horizon_min=240, peaks=[
         {"min": 1, "high": 100.1, "low": 99.9, "close": 100.0},
     ])
@@ -301,6 +306,58 @@ def test_classify_executed_sell_with_positive_trade_pnl_as_good_sell():
         horizon_min=240, now=t0 + timedelta(hours=5),
     )
     assert result.classification == "GOOD_SELL"
+
+
+def test_classify_executed_sell_loss_cut_better_than_waiting_for_sl():
+    """SELL con PnL negativo pero mejor que el SL del bracket → GOOD_SELL."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 99.6, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "SELL"},
+        ts=t0,
+        executed=True,
+    )
+    trade = SimpleNamespace(
+        pnl_pct=Decimal("-0.4"),
+        entry_price=Decimal("100.0"),
+        stop_loss=Decimal("99.2"),
+        take_profit=Decimal("101.0"),
+    )
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 15, "high": 99.8, "low": 99.1, "close": 99.15},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=trade,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "GOOD_SELL"
+
+
+def test_classify_executed_sell_as_bad_when_tp_would_have_been_reached():
+    """SELL prematuro: el precio hubiera alcanzado el TP si se hubiera holdeado."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 99.6, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "SELL"},
+        ts=t0,
+        executed=True,
+    )
+    trade = SimpleNamespace(
+        pnl_pct=Decimal("-0.4"),
+        entry_price=Decimal("100.0"),
+        stop_loss=Decimal("99.0"),
+        take_profit=Decimal("102.0"),
+    )
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 8, "high": 102.5, "low": 99.8, "close": 102.0},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=trade,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "BAD_SELL"
 
 
 def test_classify_pending_when_window_not_matured_and_no_resolution():
@@ -317,6 +374,122 @@ def test_classify_pending_when_window_not_matured_and_no_resolution():
     ])
     result = attribute(
         decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(minutes=30),
+    )
+    assert result.classification == "PENDING"
+    assert result.matured is False
+
+
+def test_classify_hold_stays_pending_when_mfe_exceeds_tp_before_maturity():
+    """No finalizar contrafactual antes de madurar: spike temprano → PENDING, no MISSED."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "HOLD"},
+        ts=t0,
+    )
+    candles = _dense_candles(t0, horizon_min=60, peaks=[
+        {"min": 10, "high": 100.5, "low": 99.95, "close": 100.5},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(minutes=60),
+    )
+    assert result.classification == "PENDING"
+    assert result.matured is False
+    assert result.mfe_pct == pytest.approx(0.5, abs=1e-3)
+
+
+def test_classify_blocked_buy_uses_output_sl_tp_when_declared():
+    """BUY bloqueado: umbrales del SL/TP declarados por el Decisor, no solo config."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={
+            "action": "BUY",
+            "stop_loss": 99.7,
+            "take_profit": 100.25,
+        },
+        ts=t0,
+        executed=False,
+    )
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 5, "high": 100.3, "low": 99.95, "close": 100.25},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.tp_target_pct == pytest.approx(0.25, abs=1e-3)
+    assert result.classification == "BLOCKED_GOOD_TRADE"
+
+
+def test_classify_hold_uses_output_sl_tp_when_declared():
+    """HOLD con SL/TP en output: contrafactual usa esos niveles, no solo config."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={
+            "action": "HOLD",
+            "stop_loss": 99.7,
+            "take_profit": 100.25,
+        },
+        ts=t0,
+    )
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 5, "high": 100.3, "low": 99.95, "close": 100.25},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.tp_target_pct == pytest.approx(0.25, abs=1e-3)
+    assert result.sl_dist_pct == pytest.approx(0.3, abs=1e-3)
+    assert result.classification == "MISSED_OPPORTUNITY"
+
+
+def test_classify_blocked_buy_falls_back_to_config_without_output_levels():
+    """Sin stop_loss/take_profit en output, config da TP=0.39% — MFE 0.3% no alcanza."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 100.0, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "BUY"},
+        ts=t0,
+        executed=False,
+    )
+    candles = _dense_candles(t0, horizon_min=240, peaks=[
+        {"min": 5, "high": 100.3, "low": 99.95, "close": 100.25},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=240, now=t0 + timedelta(hours=5),
+    )
+    assert result.tp_target_pct == pytest.approx(0.39, abs=1e-3)
+    assert result.classification == "CORRECTLY_BLOCKED"
+
+
+def test_classify_executed_sell_stays_pending_before_horizon_matures():
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={"price": 99.6, "atr_ref_pct": 1.0,
+               "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "SELL"},
+        ts=t0,
+        executed=True,
+    )
+    trade = SimpleNamespace(
+        pnl_pct=Decimal("-0.4"),
+        entry_price=Decimal("100.0"),
+        stop_loss=Decimal("99.2"),
+        take_profit=Decimal("101.0"),
+    )
+    candles = _dense_candles(t0, horizon_min=30, peaks=[])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=trade,
         horizon_min=240, now=t0 + timedelta(minutes=30),
     )
     assert result.classification == "PENDING"

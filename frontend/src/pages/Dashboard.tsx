@@ -4,6 +4,8 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
 import type { Position, Decision, DailyStats, Balance } from "../types";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { PnlRow } from "../components/PnlRow";
+import { computePnlPct, computePnlUsdt } from "../lib/pnl";
 
 interface EngineHealth {
   ok: boolean;
@@ -212,21 +214,52 @@ export function Dashboard() {
         <Card title="Posiciones abiertas">
           {positions.length === 0
             ? <p className="text-zinc-500 text-sm">Ninguna posición abierta.</p>
-            : positions.map(p => (
-                <div key={p.id} className="rounded-lg bg-zinc-800 p-3 mb-2">
-                  <div className="flex justify-between text-sm">
-                    <span>{p.symbol}</span>
-                    <span className={p.unrealized_pnl && p.unrealized_pnl > 0 ? "text-emerald-400" : "text-red-400"}>
-                      {p.unrealized_pnl != null ? `$${p.unrealized_pnl.toFixed(2)}` : "—"}
-                      {p.unrealized_pct != null ? ` (${p.unrealized_pct.toFixed(2)}%)` : ""}
-                    </span>
+            : positions.map(p => {
+                const liveCurrentPrice = ticker?.price ?? p.current_price;
+                const currentPnlUsdt = liveCurrentPrice != null
+                  ? computePnlUsdt(p.entry_price, p.quantity_btc, liveCurrentPrice)
+                  : p.unrealized_pnl;
+                const currentPnlPct = liveCurrentPrice != null
+                  ? computePnlPct(p.entry_price, liveCurrentPrice)
+                  : p.unrealized_pct;
+
+                return (
+                  <div key={p.id} className="rounded-lg bg-zinc-800 p-3 mb-2 last:mb-0">
+                    <div className="flex justify-between text-sm mb-2">
+                      <span>{p.symbol}</span>
+                      <span className="text-xs text-zinc-500">
+                        qty {p.quantity_btc.toFixed(6)} · entry ${p.entry_price.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-zinc-500 mb-2">
+                      {liveCurrentPrice != null
+                        ? `Precio actual $${liveCurrentPrice.toFixed(2)}`
+                        : "Precio actual —"}
+                      {p.stop_loss != null && ` · SL $${p.stop_loss.toFixed(2)}`}
+                      {p.take_profit != null && ` · TP $${p.take_profit.toFixed(2)}`}
+                    </div>
+                    <div className="space-y-1.5 pt-2 border-t border-zinc-700">
+                      <PnlRow
+                        label="P&L al precio actual"
+                        pnlUsdt={currentPnlUsdt}
+                        pnlPct={currentPnlPct}
+                      />
+                      <PnlRow
+                        label="P&L si cierra en SL"
+                        pnlUsdt={p.sl_pnl_usdt}
+                        pnlPct={p.sl_pnl_pct}
+                        labelClass="text-red-400/70"
+                      />
+                      <PnlRow
+                        label="P&L si cierra en TP"
+                        pnlUsdt={p.tp_pnl_usdt}
+                        pnlPct={p.tp_pnl_pct}
+                        labelClass="text-emerald-400/70"
+                      />
+                    </div>
                   </div>
-                  <div className="text-xs text-zinc-500 mt-1">
-                    qty {p.quantity_btc.toFixed(6)} | entry ${p.entry_price.toFixed(2)}
-                    {p.current_price ? ` | actual $${p.current_price.toFixed(2)}` : ""}
-                  </div>
-                </div>
-              ))
+                );
+              })
           }
         </Card>
 
@@ -295,7 +328,7 @@ export function Dashboard() {
 
               <div>
                 <p className="text-xs text-zinc-500 uppercase mb-1">Trades</p>
-                <StatRow label="Abiertos / Cerrados" value={`${stats.trades_open} / ${stats.trades_closed}`} />
+                <StatRow label="Abiertos ahora / Cerrados hoy" value={`${stats.trades_open} / ${stats.trades_closed}`} />
                 {stats.trades_closed > 0 && (
                   <StatRow
                     label="Win / Loss"

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import select, func, case
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Decision, Position
 
@@ -38,8 +38,22 @@ async def _session(request: Request) -> AsyncSession:
 async def daily_stats(session: Annotated[AsyncSession, Depends(_session)]):
     today = datetime.now(tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    trades = (await session.execute(
-        select(Trade).where(Trade.ts_open >= today)
+    closed_today = (await session.execute(
+        select(Trade).where(
+            Trade.status == "closed",
+            Trade.ts_close.isnot(None),
+            Trade.ts_close >= today,
+        )
+    )).scalars().all()
+
+    open_trades = (await session.execute(
+        select(Trade).where(Trade.status == "open")
+    )).scalars().all()
+
+    trades_today = (await session.execute(
+        select(Trade).where(
+            or_(Trade.ts_open >= today, Trade.ts_close >= today)
+        )
     )).scalars().all()
 
     decisions = (await session.execute(
@@ -50,13 +64,12 @@ async def daily_stats(session: Annotated[AsyncSession, Depends(_session)]):
         select(Position).where(Position.status == "open")
     )).scalars().all()
 
-    closed = [t for t in trades if t.status == "closed"]
-    won = [t for t in closed if t.pnl_usdt and float(t.pnl_usdt) > 0]
-    lost = [t for t in closed if t.pnl_usdt and float(t.pnl_usdt) < 0]
+    won = [t for t in closed_today if t.pnl_usdt and float(t.pnl_usdt) > 0]
+    lost = [t for t in closed_today if t.pnl_usdt and float(t.pnl_usdt) < 0]
 
-    pnl_realized = sum(float(t.pnl_usdt or 0) for t in closed)
+    pnl_realized = sum(float(t.pnl_usdt or 0) for t in closed_today)
     pnl_unrealized = sum(float(p.unrealized_pnl or 0) for p in open_positions)
-    fees_total = sum(float(t.fees_usdt or 0) for t in trades)
+    fees_total = sum(float(t.fees_usdt or 0) for t in trades_today)
 
     buys = [d for d in decisions if d.output.get("action") == "BUY"]
     sells = [d for d in decisions if d.output.get("action") == "SELL"]
@@ -65,8 +78,8 @@ async def daily_stats(session: Annotated[AsyncSession, Depends(_session)]):
     blocked = [d for d in decisions if not d.executed and d.rejected_reason]
 
     return DailyStatsOut(
-        trades_open=len([t for t in trades if t.status == "open"]),
-        trades_closed=len(closed),
+        trades_open=len(open_trades),
+        trades_closed=len(closed_today),
         trades_won=len(won),
         trades_lost=len(lost),
         pnl_realized=round(pnl_realized, 2),

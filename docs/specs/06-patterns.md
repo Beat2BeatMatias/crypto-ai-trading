@@ -1,7 +1,7 @@
 # Patrones de Implementación — Crypto AI Trading
 
 > Audiencia: Devs / Tech leads.
-> Versión: 1.0 — 2026-05-14.
+> Versión: 1.1 — 2026-05-23.
 
 Catálogo de **16 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
 
@@ -381,29 +381,20 @@ def get_settings() -> EngineSettings:
 
 ---
 
-## P-15 — Override determinístico post-LLM antes de persistir
+## P-15 — CoherenceChecker post-LLM (reemplaza overrides deterministas)
 
 **Categoría**: LLM safety
 
-**Evidencia**: `trading-engine/agents/decisor.py:127-160` (overrides BUY → HOLD, sizing por confidence).
+**Evidencia**: `trading-engine/risk/coherence_checker.py`, `trading-engine/agents/decisor.py` (two-pass).
 
 ```python
-def _apply_deterministic_overrides(output: DecisorOutput, context: dict) -> DecisorOutput:
-    if output.action == DecisorAction.BUY:
-        if output.regime == MarketRegime.TRENDING_DOWN:
-            return _hold(output, reason="override_TRENDING_DOWN_buy_blocked")
-        if output.confidence < 0.60:
-            return _hold(output, reason="override_low_confidence")
-
-        if output.confidence >= 0.70:
-            size = context["max_position_pct"]
-        else:
-            size = max(0.01, min(0.03, output.position_size_pct))
-        return output.model_copy(update={"position_size_pct": size})
-    return output
+warnings = coherence_checker.evaluate(output, indicators_ctx)
+if warnings and strict_mode and any(w.rule_id in ("C1", "C2", "C3") for w in warnings):
+    return _hold_decision("coherence_strict")
+output = output.model_copy(update={"coherence_warnings": [w.__dict__ for w in warnings]})
 ```
 
-**Cuándo usar**: cuando el LLM puede emitir outputs estructuralmente válidos pero peligrosos. Override **después** de validar pero **antes** de persistir/ejecutar. Documentar la razón del override en `output.reasoning` o en logs estructurados para futura auditoría.
+**Cuándo usar**: auditar inconsistencias lógicas del LLM (declaración vs datos) **sin reescribir silenciosamente** la decisión. Los warnings se persisten y se inyectan al ciclo siguiente (Bloque G). En `strict_mode`, C1/C2/C3 fuerzan HOLD. Reemplaza el patrón legacy de overrides deterministas (eliminado en v1.3).
 
 ---
 
@@ -411,7 +402,7 @@ def _apply_deterministic_overrides(output: DecisorOutput, context: dict) -> Deci
 
 **Categoría**: Database
 
-> Patrón **declarado en el ORM pero pendiente de migración Alembic** (ver `07-discrepancies-and-gaps.md` D-006). Documentado aquí como la forma recomendada para nuevos campos JSONB que se vayan a querear por contenido.
+> Índices GIN materializados en Postgres vía migración **006** (`006_add_gin_indexes_and_missing_fk.py`).
 
 ```python
 class Indicators(Base):
@@ -469,10 +460,11 @@ Lista corta de patrones presentes en el código que **no deben replicarse** y co
 
 | Anti-pattern | Evidencia | Por qué evitarlo |
 |--------------|-----------|------------------|
-| Pasar `0.0` constante a un validador que se chequea contra threshold | `trading-engine/main.py:213-216` pasa `daily_pnl_pct=0.0` y `total_drawdown_pct=0.0` siempre al `RiskGate` (ver D-001) | La regla R9 (daily stop) y la de drawdown total **nunca disparan** → falsa sensación de seguridad. |
-| Declarar índice/FK sólo en ORM sin migración Alembic | `shared/db/models.py` vs `001_initial_schema.py` (ver D-006) | El schema productivo no los tiene; performance y consistencia comprometidas. |
-| Dependencia npm declarada y no usada (`recharts`) | `frontend/package.json` vs grep en `src/` | Bundle bloat + confusión sobre features prometidas. |
-| Tests con `pd.Series` que omiten columnas esperadas | `backtesting/tests/test_runner.py::test_signal_buy_requires_min_confluences` (ver D-019) | El test falla por `KeyError`, no por la validación de negocio que intenta probar — false-pass disfrazado de pass. |
+| ~~Pasar `0.0` constante al Risk Gate~~ | ✅ Resuelto (D-001): `_compute_risk_metrics()` en `main.py` | — |
+| ~~Declarar índice/FK sólo en ORM~~ | ✅ Resuelto (D-006): migración 006 | — |
+| ~~Dependencia npm no usada (`recharts`)~~ | ✅ Resuelto (D-017): eliminada; chart usa `lightweight-charts` | — |
+| Tests con `pd.Series` que omiten columnas esperadas | `backtesting/tests/test_runner.py` (D-019 resuelto) | Verificar fixtures completas al mockear indicadores. |
+| Reescribir silenciosamente decisiones del LLM | Overrides deterministas (eliminados v1.3) | Oculta la intención real del LLM; usar CoherenceChecker + Risk Gate con `rejected_reason` explícito. |
 
 ---
 

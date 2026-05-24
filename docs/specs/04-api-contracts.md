@@ -1,7 +1,7 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.0 — 2026-05-14.
+> Versión: 1.2 — 2026-05-23.
 
 Servicio: **`web`** (FastAPI). Base URL local: `http://localhost:8100`. Todas las rutas REST viven bajo el prefijo `/api`. WebSocket en `/ws` (sin prefijo).
 
@@ -37,7 +37,9 @@ CORS configurable via `ALLOWED_ORIGINS` (default `http://localhost:3100`).
   "take_profit": 96400.00,                    // null si action != BUY (requerido si BUY)
   "position_size_pct": 0.10,                  // 0.0..0.25
   "expected_holding_min": 90,                 // entero ≥ 1
-  "reasoning": "Régimen TRENDING_UP …"        // ≤ 800 caracteres, español
+  "reasoning": "…",                           // ≤ 1000 caracteres, español, formato 5 secciones
+  "coherence_warnings": [],                   // lista de {rule_id, message, severity, evidence}
+  "two_pass_triggered": false
 }
 ```
 
@@ -46,7 +48,26 @@ Reglas:
 - `confidence` se **recomputa** server-side desde `confidence_base + confidence_adjustment` (no se confía en el LLM).
 - `position_size_pct` con `null` se coerciona a `0.0`. `expected_holding_min` con `null` → `1`.
 
-### 1.4 `TradeOutcome` (reservado en `decisions.outcome`)
+### 1.4 `DecisionOutcomeOut` (tabla `decision_outcomes`)
+
+```jsonc
+{
+  "decision_id": "uuid",
+  "decision_ts": "2026-05-23T12:00:00Z",
+  "action": "HOLD",
+  "classification": "MISSED_OPPORTUNITY",
+  "horizon_min": 240,
+  "matured": true,
+  "forward_return_pct": 1.25,
+  "mfe_pct": 2.10,
+  "mae_pct": -0.45,
+  "time_to_mfe_min": 45,
+  "time_to_mae_min": 12,
+  "computed_at": "2026-05-23T16:00:01Z"
+}
+```
+
+### 1.5 `TradeOutcome` (legacy en `decisions.outcome`)
 
 ```jsonc
 {
@@ -72,14 +93,43 @@ Reglas:
 {
   "ok": true,
   "db": "up",
+  "kill_switch": false,
+  "circuit_breaker": { "triggered": false, "reason": null },
   "engine": {
     "ok": true,
     "detail": "última decisión hace 3m",
-    "last_decision_age_min": 3
+    "last_decision_age_min": 3,
+    "decisor_interval_min": 5,
+    "next_execution_in_min": 2
   },
   "binance": {
     "ok": true,
-    "detail": "último precio hace 0m"
+    "detail": "último precio hace 0m",
+    "ws": { "ok": true, "detail": "último 1m hace 45s" }
+  },
+  "llm": {
+    "ok": true,
+    "decisor_total_24h": 288,
+    "decisor_executed_24h": 12,
+    "parse_errors_24h": 0,
+    "llm_errors_24h": 1,
+    "supervisor_runs_24h": 1,
+    "latency_ms": { "p50": 820, "p95": 2100, "p99": 3500 }
+  },
+  "playbook": { "version": 12, "ts_generated": "…", "model": "gemini-2.5-pro", "win_rate": 56.5 },
+  "recent_rejections_1h": 2,
+  "risk_gate": { "rejection_rate_24h": 0.03, "total_rejections_24h": 8, "by_rule_24h": { "R1": 3, "R9": 2 } },
+  "coherence": { "warning_rate_24h": 0.12, "two_pass_triggered_24h": 5, "by_rule_24h": { "C3": 4 } },
+  "outcome_attribution": {
+    "ok": true,
+    "last_run_age_min": 15,
+    "interval_min": 60,
+    "stats_24h": { "total": 280, "missed_opportunity": 12, "good_hold": 200, "pending": 8 }
+  },
+  "postgres": {
+    "table_counts": { "decisions": 5000, "trades": 120, "ohlcv": 800000, "indicators": 5000, "balance_snapshots": 2000 },
+    "db_size": "256 MB",
+    "db_bytes": 268435456
   }
 }
 ```
@@ -121,7 +171,11 @@ Parámetros query:
   "take_profit": 80900.00,
   "close_reason": "tp_triggered",
   "fees_usdt": 0.05,
-  "close_requested": false
+  "close_requested": false,
+  "order_id_open": "12345",
+  "order_id_close": "67890",
+  "order_id_sl": "11111",
+  "order_id_tp": "22222"
 }
 ```
 
@@ -166,32 +220,25 @@ Parámetros query:
 }
 ```
 
-> Para decisiones del Supervisor, `output` siempre incluye `mode`, `ratified` y los campos de configuración. La forma cambia según el veredicto de ratificación (ver `01-functional-spec.md §F5.bis.5` y `02-technical-spec.md §2.7.4`):
->
-> ```jsonc
-> // ratify (sin nuevo playbook)
-> {
->   "ratified": true,
->   "ratify_reason": "Mercado estable; WR dentro de rango baseline.",
->   "force_regen_reason": null,
->   "mode": "normal",
->   "config_suggestions": { ... },
->   "config_applied": [ ... ],
->   "config_rejected": [ ... ]
-> }
->
-> // regenerate (con nuevo playbook)
-> {
->   "ratified": false,
->   "ratify_reason": null,
->   "force_regen_reason": "playbook_age_days=8 >= max_playbook_age_days=7",  // null si vino del LLM
->   "playbook": "# Playbook v13 — ...",
->   "mode": "normal",
->   "config_suggestions": { ... },
->   "config_applied": [ ... ],
->   "config_rejected": [ ... ]
-> }
-> ```
+> Para decisiones del Supervisor, `output` siempre incluye `mode`, `ratified` y los campos de configuración. Ver `01-functional-spec.md §F5.bis.5`.
+
+#### `GET /api/decisions/stats?window=`
+
+Parámetro `window`: horas 1–168 (default 24).
+
+200 OK: breakdown de rechazos Risk Gate por `rule_id`, warnings CoherenceChecker, histogramas de `confidence` y `position_size_pct`, tasa `two_pass_triggered`.
+
+#### `GET /api/decisions/outcomes?classification=&limit=`
+
+Parámetros:
+- `classification` opcional: filtra por clasificación (`GOOD_BUY`, `MISSED_OPPORTUNITY`, etc.).
+- `limit`: 1..500 (default 100).
+
+200 OK: `DecisionOutcomeOut[]`, `decision_ts DESC`.
+
+#### `GET /api/supervisor/runs?limit=`
+
+200 OK: historial de ejecuciones del Supervisor (ratificaciones y regeneraciones).
 
 ---
 
@@ -376,6 +423,22 @@ Body: vacío `{}`.
 
 Efecto: setea `supervisor_run_now=true`. El engine consume el flag en el próximo ciclo del Decisor.
 
+#### `POST /api/circuit-breaker/reset`
+
+Body: vacío `{}`.
+
+200 OK: `{ "ok": true }`.
+
+Efecto: resetea pausa **operacional** (LLM/exchange failures). No aplica a pausas por `daily_stop` o `max_drawdown`.
+
+#### `POST /api/drawdown/reset`
+
+Body: vacío `{}`.
+
+200 OK: `{ "ok": true }`.
+
+Efecto: setea `drawdown_reset_ts=now()` para re-anclar el high-water mark del portfolio.
+
 ---
 
 ### 2.9 Stats
@@ -413,7 +476,7 @@ Endpoint: `ws://localhost:8100/ws` (o `wss://` en producción).
 El servidor empuja mensajes; no espera mensajes del cliente. Formato:
 
 ```jsonc
-{ "event": "ticker" | "decision" | "positions", "data": ... }
+{ "event": "ticker" | "decision" | "positions" | "trade_opened" | "trade_closed" | "playbook_updated" | "supervisor_ran" | "kill_switch_triggered", "data": ... }
 ```
 
 ### 3.1 Event `ticker` (cada 5 s)
@@ -464,17 +527,37 @@ Fuente: Binance REST `/api/v3/ticker/price` (testnet o mainnet según `BINANCE_T
       "unrealized_pct": 0.41,
       "status": "open",
       "opened_at": "2026-05-14T12:00:00Z",
-      "updated_at": "2026-05-14T12:05:30Z"
+      "updated_at": "2026-05-14T12:05:30Z",
+      "stop_loss": 79900.00,
+      "take_profit": 80900.00,
+      "sl_pnl_usdt": -2.67,
+      "sl_pnl_pct": -0.28,
+      "tp_pnl_usdt": 9.32,
+      "tp_pnl_pct": 0.97
     }
   ]
 }
 ```
 
-> El array puede estar vacío.
+### 3.4 Event `trade_opened`
 
-### 3.4 Event `supervisor_ran` (cada ejecución del Supervisor)
+Emitido cuando un trade nuevo pasa a `status=open`.
 
-Emitido **siempre** que el Supervisor corre (ratifique o regenere). Permite a la UI mostrar el timeline completo de ejecuciones, incluso cuando no hay nueva versión de playbook.
+### 3.5 Event `trade_closed`
+
+Emitido cuando un trade pasa a `status=closed` (incluye `pnl_usdt`, `close_reason`).
+
+### 3.6 Event `kill_switch_triggered`
+
+Emitido cuando `config.kill_switch` cambia de valor.
+
+```jsonc
+{ "event": "kill_switch_triggered", "data": { "enabled": true, "ts": "…" } }
+```
+
+### 3.7 Event `supervisor_ran`
+
+Emitido **siempre** que el Supervisor corre (ratifique o regenere).
 
 ```jsonc
 {
@@ -490,28 +573,11 @@ Emitido **siempre** que el Supervisor corre (ratifique o regenere). Permite a la
 }
 ```
 
-- Si `ratified=false`, `new_version` contiene el `version` recién creado y `force_regen_reason` puede tener el motivo determinístico (o `null` si vino del LLM).
-- Si `ratified=true`, `new_version` es `null` y no se emite `playbook_updated`.
+### 3.8 Event `playbook_updated`
 
-### 3.5 Event `playbook_updated` (sólo en regeneraciones)
+Emitido cuando el Supervisor (o rollback manual) genera/activa una versión nueva en `playbook_versions`.
 
-Emitido únicamente cuando el Supervisor (o un rollback manual) genera/activa una versión nueva en `playbook_versions`.
-
-```jsonc
-{
-  "event": "playbook_updated",
-  "data": {
-    "version": 13,
-    "ts_generated": "2026-05-14T00:00:01Z",
-    "model": "gemini-2.5-pro",
-    "active": true,
-    "trades_analyzed": 23,
-    "win_rate": 0.6087
-  }
-}
-```
-
-### 3.6 Manejo de cliente recomendado
+### 3.9 Manejo de cliente recomendado
 
 - Reconectar con backoff exponencial si el socket cierra.
 - Mantener última señal `connected` para mostrar status en UI.

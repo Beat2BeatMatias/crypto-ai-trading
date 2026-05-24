@@ -16,6 +16,13 @@ export interface Trade {
   order_id_close: string | null;
   order_id_sl: string | null;
   order_id_tp: string | null;
+  current_price?: number | null;
+  unrealized_pnl_usdt?: number | null;
+  unrealized_pnl_pct?: number | null;
+  sl_pnl_usdt?: number | null;
+  sl_pnl_pct?: number | null;
+  tp_pnl_usdt?: number | null;
+  tp_pnl_pct?: number | null;
 }
 
 export interface Position {
@@ -24,6 +31,12 @@ export interface Position {
   current_price: number | null; unrealized_pnl: number | null;
   unrealized_pct: number | null; status: string;
   opened_at: string; updated_at: string | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
+  sl_pnl_usdt?: number | null;
+  sl_pnl_pct?: number | null;
+  tp_pnl_usdt?: number | null;
+  tp_pnl_pct?: number | null;
 }
 
 export interface Decision {

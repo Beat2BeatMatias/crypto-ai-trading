@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { api } from "../api/client";
 import type { Trade } from "../types";
+import { PnlRow } from "../components/PnlRow";
+import { computePnlPct, computePnlUsdt } from "../lib/pnl";
 
 // ── Close reason labels ───────────────────────────────────────────────────────
 
@@ -162,12 +164,33 @@ export function Trades() {
   const [dateTo, setDateTo] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ts_open");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [livePrice, setLivePrice] = useState<number | null>(null);
   const { closing, requestClose } = useCloseTrade(setAllTrades);
 
   useEffect(() => {
     const status = statusFilter === "all" ? undefined : statusFilter;
     api.trades(status).then(setAllTrades).catch(() => {});
+    const id = setInterval(() => {
+      api.trades(status).then(setAllTrades).catch(() => {});
+    }, 30_000);
+    return () => clearInterval(id);
   }, [statusFilter]);
+
+  useEffect(() => {
+    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.event === "ticker" && msg.data?.price != null) {
+          setLivePrice(msg.data.price);
+        }
+      } catch {
+        // ignore malformed WS payloads
+      }
+    };
+    return () => ws.close();
+  }, []);
 
   const trades = useMemo(() => {
     let list = [...allTrades];
@@ -298,9 +321,20 @@ export function Trades() {
       {/* ── Listado ── */}
       {trades.map(t => {
         const valueUsdt = t.quantity_btc * t.entry_price;
-        const pnlPositive = (t.pnl_usdt ?? 0) >= 0;
-        const pnlColor = t.pnl_usdt == null ? "text-zinc-400" : pnlPositive ? "text-emerald-400" : "text-red-400";
         const isOpen = t.status === "open";
+        const currentPrice = isOpen ? (livePrice ?? t.current_price ?? null) : null;
+        const unrealizedPnlUsdt = isOpen
+          ? (livePrice != null
+            ? computePnlUsdt(t.entry_price, t.quantity_btc, livePrice, t.side)
+            : t.unrealized_pnl_usdt)
+          : t.pnl_usdt;
+        const unrealizedPnlPct = isOpen
+          ? (livePrice != null
+            ? computePnlPct(t.entry_price, livePrice, t.side)
+            : t.unrealized_pnl_pct)
+          : t.pnl_pct;
+        const pnlPositive = (unrealizedPnlUsdt ?? 0) >= 0;
+        const pnlColor = unrealizedPnlUsdt == null ? "text-zinc-400" : pnlPositive ? "text-emerald-400" : "text-red-400";
 
         return (
           <div key={t.id} className="rounded-xl bg-zinc-900 p-4">
@@ -356,7 +390,12 @@ export function Trades() {
               </div>
               <div>
                 <div className="text-xs text-zinc-500 mb-1">Precio salida</div>
-                <div className="font-mono text-sm">{fmt(t.exit_price)}</div>
+                <div className="font-mono text-sm">
+                  {isOpen && currentPrice != null ? fmt(currentPrice) : fmt(t.exit_price)}
+                </div>
+                {isOpen && currentPrice != null && (
+                  <div className="text-xs text-zinc-600 mt-0.5">precio actual</div>
+                )}
               </div>
             </div>
 
@@ -405,16 +444,38 @@ export function Trades() {
             </div>
 
             {/* ── P&L ── */}
-            {(t.pnl_usdt != null || isOpen) && (
-              <div className="mt-3 pt-3 border-t border-zinc-800 flex items-center justify-between">
-                <span className="text-xs text-zinc-500">
-                  {isOpen ? "P&L no realizado estimado" : "P&L realizado"}
-                </span>
-                <span className={`font-mono font-semibold text-sm ${pnlColor}`}>
-                  {t.pnl_usdt != null
-                    ? `${t.pnl_usdt >= 0 ? "+" : ""}${fmt(t.pnl_usdt)}${pct(t.pnl_pct)}`
-                    : isOpen ? "pendiente" : "—"}
-                </span>
+            {(unrealizedPnlUsdt != null || isOpen) && (
+              <div className="mt-3 pt-3 border-t border-zinc-800 space-y-2">
+                {isOpen ? (
+                  <>
+                    <PnlRow
+                      label="P&L al precio actual"
+                      pnlUsdt={unrealizedPnlUsdt}
+                      pnlPct={unrealizedPnlPct}
+                    />
+                    <PnlRow
+                      label="P&L si cierra en SL"
+                      pnlUsdt={t.sl_pnl_usdt}
+                      pnlPct={t.sl_pnl_pct}
+                      labelClass="text-red-400/70"
+                    />
+                    <PnlRow
+                      label="P&L si cierra en TP"
+                      pnlUsdt={t.tp_pnl_usdt}
+                      pnlPct={t.tp_pnl_pct}
+                      labelClass="text-emerald-400/70"
+                    />
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500">P&L realizado</span>
+                    <span className={`font-mono font-semibold text-sm ${pnlColor}`}>
+                      {unrealizedPnlUsdt != null
+                        ? `${unrealizedPnlUsdt >= 0 ? "+" : ""}${fmt(unrealizedPnlUsdt)}${pct(unrealizedPnlPct)}`
+                        : "—"}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 

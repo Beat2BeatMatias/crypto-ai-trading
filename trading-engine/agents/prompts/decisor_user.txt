@@ -17,8 +17,13 @@ BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
 {block_c_text}
 
 ════════════════════════════════════════════
-BLOQUE D — NIVELES CLAVE
+BLOQUE D — NIVELES CLAVE (referencia para anclar SL/TP — elección libre)
 ════════════════════════════════════════════
+Usá estos niveles como anclas según tu tesis; podés combinarlos, ajustarlos
+(±0.1% antes de un wall) o proyectar más allá con [TP_PROYECTADO] si la tesis
+(breakout F, extensión de rango, etc.) lo justifica. Siempre citá el nivel o
+fórmula en [NIVELES] y verificá R4/R5 antes de emitir BUY.
+
 {block_d_text}
 
 ════════════════════════════════════════════

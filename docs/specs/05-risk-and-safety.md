@@ -1,9 +1,9 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.3 — 2026-05-17.
+> Versión: 1.4 — 2026-05-23.
 >
-> Cambios v1.3: Actualización LLM-centric. Se elimina la Capa 2 (override determinístico). Se agrega CoherenceChecker como Capa 2 nueva (auditoría de inconsistencias del LLM). Se actualiza §1 (modelo de defensa), §1.bis (garantías — GA-1 y GA-2 revisadas), §1.bis.4 (nueva sección CoherenceChecker). El Risk Gate (Capa 3) pasa a ser la **única** barrera hard-blocking sobre la `action`.
+> Cambios v1.4: Reglas R0 (drawdown/kill_switch) y R11 (notional mínimo Binance). Circuit breaker bifurcado (operacional auto-reset vs financiero manual). Endpoints `/circuit-breaker/reset` y `/drawdown/reset`. Elimina §3 overrides (removidos en v1.3). Se elimina la Capa 2 (override determinístico). Se agrega CoherenceChecker como Capa 2 nueva (auditoría de inconsistencias del LLM). Se actualiza §1 (modelo de defensa), §1.bis (garantías — GA-1 y GA-2 revisadas), §1.bis.4 (nueva sección CoherenceChecker). El Risk Gate (Capa 3) pasa a ser la **única** barrera hard-blocking sobre la `action`.
 >
 > Cambios v1.2: R4/R5 con thresholds reales; §12 ítem daily_pnl marcado ✅ RESUELTO.
 > Cambios v1.1: §1.bis agregado.
@@ -35,17 +35,17 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 3: Risk Gate (reglas R1-R10) — ÚNICA BARRERA HARD  │
+│ Capa 3: Risk Gate (reglas R0–R11) — ÚNICA BARRERA HARD  │
 │  - Bloqueo absoluto antes de emitir orden al exchange   │
-│  - Cada rechazo lleva rule_id estructurado (R1...R10)   │
+│  - Cada rechazo lleva rule_id estructurado              │
 │  - Persiste rejected_reason en la decisión              │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 4: Circuit Breaker (fallas en cadena)              │
-│  - 5 fallas LLM/exchange consecutivas → engine_paused   │
-│  - daily_stop / max_drawdown → flag pause               │
+│ Capa 4: Circuit Breaker (fallas en cadena + breaches)   │
+│  - Pausa operacional (LLM/exchange): auto-reset ~10 min  │
+│  - Pausa financiera (daily_stop/drawdown): reset manual  │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -122,76 +122,71 @@ Toda decisión queda en `decisions` con:
 - `input`: snapshot completo del contexto en bloques A–K inyectado al LLM.
 - `output`: JSON resultante + `coherence_warnings` (lista C1–C6) + `two_pass_triggered` (bool).
 - `executed` + `rejected_reason` (si correspondiere).
-- `rule_id` en el rejected_reason (Risk Gate): `"R1"`... `"R10"` para identificar la regla exacta.
+- `rule_id` en el rejected_reason (Risk Gate): `"R0_drawdown"`, `"R0_kill_switch"`, `"R1"`…`"R11"`.
 
 El operador puede auditar la calidad del LLM via `GET /api/decisions/stats?window=24` que desglosa rechazos por `rule_id` y warnings por regla de coherencia.
 
 ---
 
-## 2. Reglas absolutas R1–R10 (Risk Gate)
+## 2. Reglas absolutas R0–R11 (Risk Gate)
 
 Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siempre pasa automáticamente.
 
 | ID | Regla | Comportamiento si falla |
 |----|-------|------------------------|
+| **R0_drawdown** | `total_drawdown_pct > max_drawdown_pct` (drawdown no superado) | Reject `max_drawdown breached`. Evaluado antes de checks BUY/SELL. |
+| **R0_kill_switch** | Con `kill_switch=true`, solo SELL-to-close permitido | Reject `kill_switch active — only SELL-to-close allowed`. |
 | **R1** | `position_size_pct ≤ max_position_pct + 1e-9` | Reject `position_size_pct X > max Y`. |
 | **R2** | `action=BUY` requiere `stop_loss` no nulo y `stop_loss < current_price` | Reject `BUY requires stop_loss` / `stop_loss must be < current_price`. |
 | **R3** | `action=BUY` requiere `take_profit` no nulo y `take_profit > current_price` | Reject `BUY requires take_profit` / `take_profit must be > current_price`. |
-| **R4** | Distancia SL entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR` (timeframe `atr_timeframe`). Defaults operativos: **0.3×ATR (mín)** y **1.5×ATR (máx)**; ambos configurables vía `ConfigKey`. | Reject `SL distance X < ...` o `SL distance X > ...`. |
-| **R5** | `R:R = (take_profit - current_price) / (current_price - stop_loss) > min_rr_ratio`. Default operativo: **1.3** (configurable vía `ConfigKey.MIN_RR_RATIO`). El design doc original indicaba 1.5; el valor actual de 1.3 reduce rechazos excesivos en mercados con spreads amplios. | Reject `R:R ratio X ≤ min`. |
+| **R4** | Distancia SL entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR`. Defaults: **0.3×ATR (mín)**, **1.5×ATR (máx)**. | Reject `SL distance X < ...` o `SL distance X > ...`. |
+| **R5** | `R:R > min_rr_ratio`. Default operativo: **1.3**. | Reject `R:R ratio X ≤ min`. |
 | **R6** | `action=SELL` requiere `btc_held > 0` y al menos 1 posición abierta | Reject `SELL requested but no open position to close`. |
-| **R7** | Nunca shortear: la única semántica de SELL es cerrar una posición LONG previamente abierta | Asegurado estructuralmente: `execute_buy` es la única ruta de apertura. |
+| **R7** | Nunca shortear: SELL solo cierra LONG existente | Asegurado estructuralmente en `execute_buy`. |
 | **R8** | `open_positions < max_simultaneous_trades` | Reject `max_simultaneous_trades reached: N`. |
 | **R9** | `daily_pnl_pct > daily_stop_pct` | Reject `daily P&L breach: X`. |
-| **R10** | Movimiento al TP cubre fees round-trip: `(TP - price)/price × 100 ≥ min_fees_to_tp_ratio × roundtrip_fee_pct` | Reject `R10: TP move (X%) < N×fees (Y%)`. **No aplica** si `roundtrip_fee_pct == 0` (testnet). |
+| **R10** | Movimiento al TP cubre fees round-trip | Reject `R10: TP move (X%) < N×fees (Y%)`. No aplica si `roundtrip_fee_pct == 0`. |
+| **R11** | Notional mínimo Binance (NOTIONAL filter) para MARKET BUY, SL y TP del bracket OCO | Reject `notional X USDT < min_notional 5.00 USDT`. Default `min_notional_usdt=5.0`. |
 
-Además del bloque R1–R10, el Risk Gate valida:
-
-- **Drawdown total**: si `total_drawdown_pct ≤ max_drawdown_pct` ⇒ Reject `max_drawdown breached`.
-- **Kill switch**: si `kill_switch=true` y la decisión no es SELL para cerrar ⇒ Reject `kill_switch active — only SELL-to-close allowed`.
-
-> ✅ `main.py` calcula `daily_pnl_pct` y `total_drawdown_pct` reales en cada tick mediante `_compute_risk_metrics()` y los pasa al Risk Gate y al `CircuitBreaker.evaluate()` (resuelto en 2026-05-17).
+> ✅ `main.py` calcula `daily_pnl_pct` y `total_drawdown_pct` reales en cada tick mediante `_compute_risk_metrics()` (portfolio USDT + BTC×precio, anclado a `drawdown_reset_ts`).
 
 ---
 
-## 3. Override determinístico (Capa 2)
+## 3. Overrides determinísticos — ELIMINADOS (v1.3)
 
-`trading-engine/agents/decisor.py:_apply_deterministic_overrides`. Se ejecuta **después** de la validación Pydantic del output del LLM y **antes** de persistir.
-
-| Condición | Acción |
-|-----------|--------|
-| `action != BUY` | Sin cambios. |
-| `regime == TRENDING_DOWN` ∨ `confidence < 0.60` | Reescribe a `action=HOLD`, `stop_loss=null`, `take_profit=null`, `position_size_pct=0.0`, `reasoning="[override] confidence X < 0.60 …"`. |
-| `confidence ≥ 0.70` | `position_size_pct = min(max_position_pct, 0.25)` clipeado a piso 0.01. |
-| `confidence 0.60–0.69` | `position_size_pct = min(0.03, max_position_pct)` clipeado a piso 0.01. |
-
-> Este código es la **última línea de defensa antes del Risk Gate**. Aunque el system prompt instruye lo mismo, se reaplica para evitar divergencias.
+Desde el rediseño LLM-centric (2026-05-17), **`_apply_deterministic_overrides` fue eliminado**. El LLM tiene autonomía total sobre `action` y `position_size_pct`. La defensa post-LLM es exclusivamente CoherenceChecker (auditoría) + Risk Gate (bloqueo).
 
 ---
 
 ## 4. Circuit Breaker
 
-`trading-engine/risk/circuit_breaker.py`. Estado global en memoria del engine.
+`trading-engine/risk/circuit_breaker.py`. Estado persistido en `config.engine_paused` + `config.engine_pause_reason`.
 
-### 4.1 Pausa automática del engine
+### 4.1 Pausa operacional (auto-reset)
 
-- 5 fallas **consecutivas** de LLM → `engine_paused = True`.
-- 5 fallas **consecutivas** de exchange (orden o balance) → `engine_paused = True`.
+Motivos: `llm_failures`, `exchange_failures`.
 
-Cuando `engine_paused = True`, cada tick del Decisor sale tempranamente con `log "engine.paused"`. La pausa se libera **manualmente** reiniciando el proceso (no hay reset automático aún).
+- 5 fallas **consecutivas** de LLM → pausa con `PauseReason.LLM_FAILURES`.
+- 5 fallas **consecutivas** de exchange → pausa con `PauseReason.EXCHANGE_FAILURES`.
+- **Auto-reset**: tras `operational_cooldown_sec` (default 600 s = 10 min) sin nuevas fallas, el engine retoma automáticamente.
+- Reset manual: `POST /api/circuit-breaker/reset`.
 
-### 4.2 Daily stop y max drawdown
+### 4.2 Pausa financiera (reset manual)
 
-`CircuitBreaker.evaluate` puede llamarse en cualquier momento para detectar:
+Motivos: `daily_stop`, `drawdown`.
 
-- `daily_pnl_pct ≤ daily_stop_pct` (default −3%) ⇒ log `circuit.daily_stop_triggered`.
-- `total_drawdown_pct ≤ max_drawdown_pct` (default −10%) ⇒ log `circuit.kill_switch_triggered`.
+- `daily_pnl_pct ≤ daily_stop_pct` → pausa con `PauseReason.DAILY_STOP`. Se resetea naturalmente al cambiar de fecha UTC.
+- `total_drawdown_pct ≤ max_drawdown_pct` (2 breaches consecutivos) → pausa con `PauseReason.DRAWDOWN`. Requiere intervención del operador.
+- Reset drawdown: `POST /api/drawdown/reset` (re-ancla high-water mark via `drawdown_reset_ts`).
+- Reset pausa: `POST /api/circuit-breaker/reset` (solo si la causa es operacional; pausas financieras requieren acción explícita del operador).
 
-> Estos triggers también se reflejan en el Risk Gate (rechazo de BUYs). El reset del daily stop ocurre naturalmente al cambiar de fecha (cálculo de `daily_pnl_pct` desde 00:00 UTC).
+### 4.3 Comportamiento cuando pausado
 
-### 4.3 Actualización de umbrales
+Cuando `engine_paused = True`, cada tick del Decisor sale tempranamente con log `engine.paused`. El OrderTracker y balance refresh continúan operando.
 
-`update_thresholds(daily_stop_pct, max_drawdown_pct)` se invoca en cada tick para leer la última config (caso de cambios en caliente desde la UI).
+### 4.4 Actualización de umbrales
+
+`update_thresholds(daily_stop_pct, max_drawdown_pct)` se invoca en cada tick para leer la última config.
 
 ---
 

@@ -1,7 +1,7 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.0 — 2026-05-14.
+> Versión: 1.1 — 2026-05-23.
 
 Base de datos: **Postgres 17** (imagen `postgres:17-alpine`).
 SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migraciones en `trading-engine/alembic/versions/`.
@@ -23,29 +23,28 @@ SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migracio
    │     ohlcv      │     │     decisions    │ ◄─trade_id─►│     trades     │
    │ PK(time, tf)   │     │ id (uuid)        │         │ id (uuid)       │
    └────────────────┘     │ ts, agent, model │         │ ts_open/close   │
-                          │ input  JSONB     │         │ side, qty, prices│
-   ┌────────────────┐     │ output JSONB     │         │ pnl, fees       │
-   │  indicators    │     │ outcome JSONB    │         │ status, sl, tp  │
-   │ PK(time)       │     │ executed bool    │         │ close_requested │
-   │ data JSONB+GIN │     │ rejected_reason  │         └────────┬────────┘
-   └────────────────┘     └──────────────────┘                  │
-                                                                 │ trade_id
-                                                                 ▼
-   ┌────────────────┐      ┌─────────────┐              ┌────────────────┐
-   │ config         │      │ config_hist │              │   positions    │
-   │ PK key         │      │ id (uuid)   │              │ id (uuid)      │
-   │ value, type    │      │ ts, key     │              │ qty, entry,    │
-   │ description    │      │ old/new val │              │ unrealized_*   │
-   └────────────────┘      │ changed_by  │              │ status         │
-                           └─────────────┘              └────────────────┘
+                          │ input  JSONB     │         │ order_id_sl/tp  │
+   ┌────────────────┐     │ output JSONB     │         │ close_requested │
+   │  indicators    │     │ outcome JSONB    │         └────────┬────────┘
+   │ PK(time)       │     │ executed bool    │                  │
+   │ data JSONB+GIN │     └────────┬─────────┘                  │
+   └────────────────┘              │ 1:1                         │ trade_id
+                                   ▼                             ▼
+                          ┌──────────────────┐            ┌────────────────┐
+                          │ decision_outcomes│            │   positions    │
+                          │ PK decision_id   │            │ id (uuid)      │
+                          │ MFE/MAE, class.  │            └────────────────┘
+                          └──────────────────┘
+
+   ┌────────────────┐      ┌─────────────┐
+   │ config         │      │ config_hist │
+   │ PK key         │      │ id (uuid)   │
+   └────────────────┘      └─────────────┘
 
    ┌─────────────────┐    ┌──────────────────┐    ┌────────────────────┐
    │ fee_snapshots   │    │ balance_snapshots │    │     daily_stats    │
-   │ id, ts, symbol  │    │ id, ts, usdt, btc │    │ date PK            │
-   │ maker_fee       │    │ source            │    │ decisions, trades  │
-   │ taker_fee       │    └──────────────────┘    │ wins, losses, pnl  │
-   │ raw JSONB       │                            │ breakdown JSONB    │
-   └─────────────────┘                            └────────────────────┘
+   │                 │    │ usdt/btc + locked │    │ date PK            │
+   └─────────────────┘    └──────────────────┘    └────────────────────┘
 ```
 
 Notas:
@@ -101,12 +100,33 @@ Log inmutable de cada llamada al LLM (Decisor o Supervisor).
 | `latency_ms` | INT | YES | |
 | `input` | JSONB | NO | Contexto serializado |
 | `output` | JSONB | NO | Decisión validada (DecisorOutput) o `{playbook, mode, config_suggestions, config_applied, config_rejected}` para supervisor |
-| `outcome` | JSONB | YES | Reservado para outcome ex-post (sin uso aún) |
+| `outcome` | JSONB | YES | Reservado legacy; la atribución contrafactual vive en `decision_outcomes`. |
 | `trade_id` | UUID | YES | FK (deferred) a `trades.id` |
 | `executed` | BOOLEAN | YES | `true` cuando se materializó orden |
 | `rejected_reason` | VARCHAR(200) | YES | Motivo del Risk Gate o `parse_error: …` |
 
 - Índices: `idx_decisions_ts (ts)`, GIN `idx_decisions_output (output)`, GIN `idx_decisions_input (input)`.
+
+### 2.3.bis `decision_outcomes` (migration 008)
+
+Atribución contrafactual 1:1 con `decisions.id`. Poblada por `outcome_attribution_job`.
+
+| Columna | Tipo | Nullable | Notas |
+|---------|------|----------|-------|
+| `decision_id` | UUID | NO | PK, FK `decisions.id ON DELETE CASCADE` |
+| `horizon_min` | INT | NO | Ventana forward evaluada |
+| `matured` | BOOLEAN | NO | `false` mientras la ventana no cerró |
+| `forward_return_pct` | NUMERIC(10,5) | YES | Retorno % al horizonte |
+| `mfe_pct` | NUMERIC(10,5) | YES | Maximum Favorable Excursion |
+| `mae_pct` | NUMERIC(10,5) | YES | Maximum Adverse Excursion |
+| `time_to_mfe_min` | INT | YES | Minutos hasta MFE |
+| `time_to_mae_min` | INT | YES | Minutos hasta MAE |
+| `sl_dist_pct` | NUMERIC(10,5) | YES | Distancia SL declarada (%) |
+| `tp_target_pct` | NUMERIC(10,5) | YES | Distancia TP declarada (%) |
+| `classification` | VARCHAR(32) | NO | `GOOD_BUY`, `BAD_BUY`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN` |
+| `computed_at` | TIMESTAMPTZ | NO | `now()` |
+
+- Índices: `idx_decision_outcomes_classification (classification, computed_at)`, `idx_decision_outcomes_pending (matured) WHERE matured = false`.
 
 ### 2.4 `trades`
 
@@ -127,9 +147,11 @@ Operación concreta (BUY → SELL).
 | `status` | VARCHAR(12) | NO | `open` \| `closed` \| `cancelled` |
 | `stop_loss` | NUMERIC(18,8) | YES | |
 | `take_profit` | NUMERIC(18,8) | YES | |
-| `close_reason` | VARCHAR(20) | YES | `decisor_sell` \| `manual_close` \| `sl_triggered` \| `tp_triggered` \| `bracket_fill` |
+| `close_reason` | VARCHAR(30) | YES | `decisor_sell` \| `manual_close` \| `sl_triggered` \| `tp_triggered` \| `bracket_fill` |
 | `order_id_open` | VARCHAR(50) | YES | id Binance |
 | `order_id_close` | VARCHAR(50) | YES | id Binance |
+| `order_id_sl` | VARCHAR(50) | YES | id orden SL del bracket OCO (migration 007) |
+| `order_id_tp` | VARCHAR(50) | YES | id orden TP del bracket OCO (migration 007) |
 | `fees_usdt` | NUMERIC(18,4) | YES | Sum apertura + cierre |
 | `close_requested` | BOOLEAN | NO (default false) | Flag UI → engine (migration 002) |
 
@@ -237,6 +259,8 @@ Snapshot agregado por fecha (UTC).
 | `ts` | TIMESTAMPTZ |
 | `usdt` | NUMERIC(18,4) |
 | `btc` | NUMERIC(18,8) |
+| `usdt_locked` | NUMERIC(18,4) | default 0 (migration 010) |
+| `btc_locked` | NUMERIC(18,8) | default 0 (migration 010) |
 | `source` | VARCHAR(20) (default `binance`) |
 
 - Índice `idx_balance_snapshots_ts (ts)`.
@@ -253,6 +277,12 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 002 | `002_add_trade_close_requested.py` | `ALTER TABLE trades ADD close_requested BOOLEAN NOT NULL DEFAULT false`. |
 | 003 | `003_add_balance_snapshots.py` | Crea `balance_snapshots` + índice por `ts`. |
 | 004 | `004_add_decisor_v2_config.py` | Idempotente: inserta 6 filas en `config` con `INSERT … SELECT NOT EXISTS`. |
+| 005 | `005_align_conf_base_defaults.py` | Alineación defaults `conf_base_*`. |
+| 006 | `006_add_gin_indexes_and_missing_fk.py` | Índices GIN + índice parcial playbook + FK `trades.decision_id`. |
+| 007 | `007_add_bracket_order_ids.py` | `trades.order_id_sl`, `trades.order_id_tp`. |
+| 008 | `008_add_decision_outcomes.py` | Tabla `decision_outcomes` + índices. |
+| 009 | `009_expand_close_reason_length.py` | `close_reason` VARCHAR(20) → VARCHAR(30). |
+| 010 | `010_add_balance_locked_fields.py` | `balance_snapshots.usdt_locked`, `btc_locked`. |
 
 Comandos:
 
@@ -262,7 +292,7 @@ alembic current             # ver revisión actual
 alembic downgrade -1        # rollback granular
 ```
 
-> **No** existe migración que cree el índice GIN `idx_decisions_input` ni la unique parcial `idx_playbook_active`. Ambos están declarados en el modelo SQLAlchemy y se materializan en entornos nuevos cuando `Base.metadata.create_all` corre (sqlite tests). En Postgres productivo deberán añadirse con una migración 005 si aún no están creados.
+> Los índices GIN y el índice parcial `idx_playbook_active` están materializados en Postgres productivo vía migración **006**.
 
 ---
 
@@ -278,6 +308,7 @@ alembic downgrade -1        # rollback granular
 | Insert `Indicators` | 1/tick | UPSERT por `time`. |
 | Insert `Decision` | 1/tick + 1/día | Sin update salvo `rejected_reason`. |
 | Read `Decision` últimos 3 | 1/tick | `WHERE agent='decisor' ORDER BY ts DESC LIMIT 3`. |
+| Insert/UPSERT `DecisionOutcome` | 1/h (configurable) | UPSERT por `decision_id`. |
 | Read `Position WHERE status='open'` | 1/tick + 2/min (WS) | Pequeño. |
 | Insert `Position` | en cada BUY | |
 | Update `Position` | 1×/30s (refresh_unrealized) | Pequeño número de filas. |

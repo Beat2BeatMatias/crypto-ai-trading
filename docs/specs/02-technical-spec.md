@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.4 — 2026-05-17.
+> Versión: 1.5 — 2026-05-23.
+>
+> Cambios v1.5: Outcome attribution (`decision_outcomes`, job scheduler, API). Migraciones 005–010. R0/R11 en Risk Gate. Circuit breaker bifurcado (operacional vs financiero). Health enriquecido. WS 8 eventos. Telegram. Balance locked. OCO brackets (`order_id_sl/tp`). Elimina referencias obsoletas a overrides y recharts.
 >
 > Cambios v1.4: Rediseño LLM-centric del Decisor. Se eliminan overrides deterministas (TRENDING_DOWN, confidence-floor, sizing escalón). Se agregan CoherenceChecker (§2.6.bis.5), two-pass (§2.6.bis.6), etiquetas interpretativas (`labelers.py`, §2.6.bis.7). Se actualiza §2.6.bis (capas de defensa ahora son 5+1 sin Capa 3) y §2.6.bis.3 (garantías invariantes revisadas). Nuevas claves de config (§6): `min_position_size`, `coherence_strict_mode`, `two_pass_enabled`. Nueva API (§3): `GET /api/decisions/stats`. Indicadores extendidos (§2.2).
 >
@@ -18,9 +20,9 @@ Tres servicios en contenedores Docker que comparten una única base de datos Pos
 ```
                   ┌────────────────────────────────────────────────┐
                   │                  Postgres 17                  │
-                  │ (decisions, trades, positions, ohlcv,         │
-                  │  indicators, playbook_versions, config,       │
-                  │  config_history, fee_snapshots, balance_*…)   │
+                  │ (decisions, decision_outcomes, trades,        │
+                  │  positions, ohlcv, indicators, playbook,      │
+                  │  config, config_history, fee/balance snaps)   │
                   └─────────▲──────────────────────────▲──────────┘
                             │                          │
                  RW (todo)  │                          │ R (todo) + W (config*)
@@ -31,18 +33,18 @@ Tres servicios en contenedores Docker que comparten una única base de datos Pos
         │                          │         │                       │
         │ • PriceCollector (CCXT)  │         │ • REST API (/api/*)   │
         │ • OrderBookCollector (WS)│         │ • WebSocket /ws       │
-        │ • Decisor LLM            │         │ • Ticker broadcaster  │
-        │ • RiskGate + Override    │         │                       │
-        │ • Executor (CCXT)        │         └───────────▲───────────┘
-        │ • OrderTracker           │                     │
+        │ • Decisor + Coherence    │         │ • Ticker broadcaster  │
+        │ • RiskGate + CircuitBr.  │         │                       │
+        │ • Executor + OrderTracker│         └───────────▲───────────┘
+        │ • OutcomeAttribution     │                     │
         │ • Supervisor LLM         │                     │ HTTP/WS
-        │ • CircuitBreaker         │                     │
-        │ • APScheduler            │              ┌──────┴──────┐
-        └─────────▲──────────────┬─┘              │  frontend   │
-                  │              │                │ React + Vite│
-       CCXT REST/WS           Gemini/Groq         │ Tailwind v4 │
-                  │              │                └─────────────┘
-            ┌─────┴───────┐ ┌────┴──────┐
+        │ • Telegram (opcional)    │              ┌──────┴──────┐
+        │ • APScheduler            │              │  frontend   │
+        └─────────▲──────────────┬─┘              │ React + Vite│
+                  │              │                │ Tailwind v4 │
+       CCXT REST/WS           Gemini/Groq         │ lightweight-│
+                  │              │                │   charts    │
+            ┌─────┴───────┐ ┌────┴──────┐         └─────────────┘
             │   Binance   │ │ LLM Provs │
             │ (testnet/   │ │ Gemini    │
             │  mainnet)   │ │ Groq      │
@@ -63,7 +65,7 @@ Tres servicios en contenedores Docker que comparten una única base de datos Pos
 | Validación | Pydantic v2 + pydantic-settings |
 | Logging | `structlog` con `JSONRenderer` |
 | Indicadores técnicos | pandas (sin libs externas de TA) |
-| Frontend | React 19, React Router 7, Vite 6, Tailwind 4, recharts, react-markdown |
+| Frontend | React 19, React Router 7, Vite 6, Tailwind 4, lightweight-charts, react-markdown |
 | HTTP frontend → API | fetch (proxy nginx en Docker) |
 | Realtime | WebSocket nativo |
 | Contenedores | Docker Compose v2 (Postgres 17-alpine + 3 servicios) |
@@ -104,8 +106,10 @@ run():
       - add_decisor       interval = decisor_interval_min
       - add_supervisor    cron     = supervisor_cron (UTC)
       - add_fee_refresh   24 h
+      - add_balance_refresh    60 s
       - add_position_refresh   30 s
       - add_order_tracker      30 s
+      - add_outcome_attribution  interval = outcome_attribution_interval_min
   • signal handler SIGINT/SIGTERM → shutdown ordenado
 ```
 
@@ -128,8 +132,12 @@ run():
 | `agents/llm_client.py` | `LLMClient` con cascade de providers (Gemini Flash/Pro + 8 modelos Groq). Retry con backoff exponencial salvo rate-limit (salta al siguiente provider). |
 | `agents/prompt_manager.py` | Carga `prompts/*.txt`, sustitución de placeholders, persiste `PlaybookVersion`. |
 | `agents/context_builder.py` | Construye el dict de contexto unificado para el Decisor a partir de BD + orderbook. |
-| `agents/decisor.py` | Renderiza system+user prompts, llama LLM, valida `DecisorOutput`, aplica override determinístico, persiste Decision. |
-| `agents/supervisor.py` | Compute métricas 24h, llamada LLM al playbook, llamada LLM #2 para config suggestions, persistencia. |
+| `agents/decisor.py` | Renderiza system+user prompts, llama LLM, valida `DecisorOutput`, CoherenceChecker + two-pass, persiste Decision. |
+| `agents/supervisor.py` | Métricas 24h, ratificación/regeneración playbook, config suggestions, persistencia. |
+| `agents/outcome_attribution.py` | Función pura `attribute()` — clasificación contrafactual MFE/MAE (sin I/O). |
+| `agents/outcome_attribution_job.py` | Job scheduler: query candidates → OHLCV → UPSERT `decision_outcomes`. |
+| `risk/coherence_checker.py` | Reglas C1–C6: auditoría consistencia declaración vs indicadores. |
+| `notifications/telegram.py` | Alertas push opcionales (kill switch, pausas, trades). |
 
 ### 2.3 Diagrama de secuencia — Decisor tick
 
@@ -152,7 +160,7 @@ APScheduler ──▶ decisor_tick()
    │    │     ├─ ContextBuilder.build(...)
    │    │     ├─ LLM.call(provider + fallbacks)
    │    │     ├─ json.loads + DecisorOutput.model_validate
-   │    │     ├─ _apply_deterministic_overrides
+   │    │     ├─ CoherenceChecker.evaluate + two-pass opcional
    │    │     └─ INSERT Decision (input + output + metrics)
    │    ├─ RiskGate.validate(...)
    │    │     └─ Si rechazado: UPDATE Decision.rejected_reason → return
@@ -463,7 +471,7 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 
 | Método | Path | Resp | Descripción |
 |--------|------|------|-------------|
-| GET | `/api/health` | `{ok, db, engine{ok,detail,last_decision_age_min}, binance{ok,detail}}` | Health check + frescura del engine (último decision <15 min) y de Binance (último OHLCV 1m <15 min). |
+| GET | `/api/health` | Health enriquecido: engine, binance (+ ws), llm (latency p50/p95/p99), risk_gate, coherence, outcome_attribution, postgres (counts + size), circuit_breaker, playbook, kill_switch. |
 | GET | `/api/ping` | `{pong:true}` | Liveness. |
 | GET | `/api/trades?status=&limit=` | `TradeOut[]` | Listado paginable (default 100, max 500). |
 | POST | `/api/trades/{trade_id}/close` | `TradeOut` | Solicita cierre (`close_requested=true`). 409 si no está abierto. |
@@ -482,14 +490,18 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 | GET | `/api/stats/daily` | `DailyStatsOut` | Métricas del día desde 00:00 UTC. |
 | GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | **(v1.4)** Rechazos por `rule_id` (R1–R10), warnings C1–C6, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
 | GET | `/api/supervisor/runs` | `SupervisorRunOut[]` | Historial de ratificaciones/regeneraciones del Supervisor. |
+| GET | `/api/decisions/outcomes?classification=&limit=` | `DecisionOutcomeOut[]` | Outcomes contrafactuales con MFE/MAE y clasificación. |
+| GET | `/api/ohlcv?timeframe=&limit=` | `CandleOut[]` | Velas OHLCV para chart (ascendente). |
+| POST | `/api/circuit-breaker/reset` | `{ok}` | Reset pausa operacional (LLM/exchange); no aplica a daily_stop/drawdown. |
+| POST | `/api/drawdown/reset` | `{ok}` | Reset ancla high-water mark (`drawdown_reset_ts`). |
+
 | GET | `/api/config/suggestions` | `{ generated_at, suggestions, summary, ... } \| null` | Última sugerencia del Supervisor (`Decision.output.config_suggestions`). |
 
 ### 3.3 WebSocket `/ws`
 
-- Loop cada 2 s consulta:
-  - `Decision` con `ts > last_decision_ts` → emite evento `decision`.
-  - `Position WHERE status='open'` → emite snapshot `positions`.
-- Tarea de fondo `ticker_broadcaster` cada 5 s consulta REST público `https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT` (o testnet) y emite `ticker`.
+- Loop cada 2 s consulta DB y emite hasta **8 tipos de evento**:
+  - `decision`, `supervisor_ran`, `positions`, `trade_opened`, `trade_closed`, `playbook_updated`, `kill_switch_triggered`.
+- Tarea de fondo `ticker_broadcaster` cada 5 s → evento `ticker`.
 - Formato de mensaje:
   ```json
   { "event": "decision"|"ticker"|"positions", "data": { ... } }
@@ -516,13 +528,14 @@ frontend/src/
 ├── main.tsx             ← bootstrap React 19
 ├── api/client.ts        ← wrapper fetch (BASE = "/api")
 ├── hooks/useWebSocket.ts
+├── components/chart/PriceChart.tsx  ← lightweight-charts (Dashboard)
 ├── pages/
-│   ├── Dashboard.tsx    ← balance, posiciones, última decisión, P&L día
+│   ├── Dashboard.tsx    ← balance, posiciones, chart, última decisión, P&L día
 │   ├── Trades.tsx       ← listado + cerrar
 │   ├── Decisions.tsx    ← historial con input/output JSON
 │   ├── Playbook.tsx     ← markdown + rollback + edit
 │   ├── Config.tsx       ← 60+ parámetros tipados + kill switch + modo
-│   └── Health.tsx       ← estado motor/DB/Binance
+│   └── Health.tsx       ← estado motor/DB/Binance/LLM/outcome attribution
 └── types/index.ts       ← interfaces TS espejo de los Pydantic
 ```
 
@@ -548,7 +561,8 @@ Ver `03-data-model.md` para detalle de columnas, índices y migraciones.
 | `ohlcv` | engine | Velas (time, timeframe) PK compuesto, upsert idempotente. |
 | `indicators` | engine | JSONB con indicadores por timeframe + GIN. |
 | `decisions` | engine | Log de cada decisión LLM. Input+output JSONB con índice GIN. |
-| `trades` | engine | Operaciones (BUY/SELL). Estados open/closed. |
+| `decision_outcomes` | engine | Atribución contrafactual 1:1 con `decisions` (MFE/MAE, clasificación). |
+| `trades` | engine | Operaciones (BUY/SELL). Estados open/closed. Incluye `order_id_sl/tp`. |
 | `positions` | engine | Estado en tiempo real, con P&L no realizado. |
 | `playbook_versions` | engine (Supervisor) y web (rollback) | Versionado con índice único parcial sobre `active=true`. |
 | `config` | engine (seed/auto-apply) + web | Clave/valor tipado con descripciones. |
@@ -582,6 +596,9 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | Fórmula de confianza | `conf_base_*`, `peso_timeframe_*`, `peso_regime_*`, `adj_*`, `factor_conf_*`, `factor_regime_non_trending`. |
 | Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
+| Coherence / two-pass | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`. |
+| Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_coverage_threshold_pct`. |
+| Engine interno | `engine_paused`, `engine_pause_reason`, `drawdown_reset_ts`. |
 
 Comportamiento:
 
@@ -640,6 +657,8 @@ docker-compose run --rm web pytest
 | `TRADING_MODE` | `PAPER_TRADING` | Sólo informativo en .env; la verdad es `config.mode`. |
 | `LOG_LEVEL` | `INFO` | structlog. |
 | `WEB_HOST` / `WEB_PORT` | `0.0.0.0` / `8000` | uvicorn. |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Notificaciones opcionales. |
+
 | `ALLOWED_ORIGINS` | `http://localhost:3100` | CORS. |
 
 ### 8.2 Despliegue (Docker Compose)
@@ -660,6 +679,12 @@ docker-compose logs -f trading-engine
 | 002 | `trades.close_requested boolean default false` |
 | 003 | Tabla `balance_snapshots`. |
 | 004 | Seed de 6 keys Decisor v2 (`min_fees_to_tp_ratio`, `min_confluences_buy`, …). |
+| 005 | Alineación defaults `conf_base_*`. |
+| 006 | Índices GIN (`indicators`, `decisions` input/output), índice parcial único playbook, FK `trades.decision_id`. |
+| 007 | `trades.order_id_sl`, `trades.order_id_tp`. |
+| 008 | Tabla `decision_outcomes` + índices. |
+| 009 | `trades.close_reason` ampliado a VARCHAR(30). |
+| 010 | `balance_snapshots.usdt_locked`, `balance_snapshots.btc_locked`. |
 
 ### 8.4 Operaciones rutinarias
 
@@ -670,11 +695,9 @@ docker-compose logs -f trading-engine
 
 ### 8.5 Health & observabilidad
 
-- `/api/health`:
-  - `engine.ok = (última decisión <15 min)`.
-  - `binance.ok = (último OHLCV 1m <15 min)`.
+- `/api/health`: engine freshness, binance REST + WS proxy, LLM stats (latency p50/p95/p99, parse/llm errors), risk_gate/coherence breakdown 24h, outcome_attribution stats, postgres table counts + DB size, circuit_breaker state, playbook activo.
 - `/api/ping` para liveness.
-- Logs JSON pueden ingerirse en cualquier stack (no hay APM acoplado).
+- Logs JSON (`structlog`) pueden ingerirse en cualquier stack (no hay APM acoplado).
 
 ---
 
@@ -683,8 +706,8 @@ docker-compose logs -f trading-engine
 | Decisión | Justificación |
 |----------|---------------|
 | **Postgres como único canal entre engine y web** | Elimina necesidad de bus de mensajes; permite restart independiente; trazabilidad total. |
-| **Risk Gate determinístico post-LLM** | El LLM puede alucinar; las reglas R1–R10 son no-negociables y verificadas en código. |
-| **Override determinístico de sizing / threshold** | Aunque el LLM aplica las mismas reglas, se reaplican en `_apply_deterministic_overrides` para evitar divergencia silenciosa. |
+| **Risk Gate determinístico post-LLM** | El LLM puede alucinar; las reglas R0–R11 son no-negociables y verificadas en código. |
+| **CoherenceChecker + two-pass** | Audita inconsistencias lógicas del LLM sin reescribir silenciosamente (salvo `strict_mode`). |
 | **TR winsorizado en ATR** | Velas anómalas del testnet inflaban ATR 4–5× durante horas. |
 | **Playbook como markdown versionado en BD** | El Supervisor escribe lenguaje natural que el Decisor lee como prompt; permite auditoría y rollback. |
 | **Configuración 100% en BD** | Cambios en caliente sin redeploy; auditados en `config_history`. |
@@ -705,7 +728,9 @@ Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0
 | Decisor | Agent | `trading-engine/agents/decisor.py`, `trading-engine/agents/prompts/decisor_system.txt`, `trading-engine/agents/prompts/decisor_user.txt` | `agents/context_builder.py`, `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/schemas.py`, `shared/db/models.py` |
 | Supervisor | Agent | `trading-engine/agents/supervisor.py`, `agents/prompts/supervisor_system.txt`, `agents/prompts/supervisor_user.txt`, `agents/prompts/playbook_v0.md` | `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/config_store.py`, `shared/db/models.py` |
 | Risk Gate | Risk | `trading-engine/risk/risk_gate.py` | — | `shared/schemas.py` |
-| Circuit Breaker | Risk | `trading-engine/risk/circuit_breaker.py` | — | (integración pendiente en `main.py`) |
+| Circuit Breaker | Risk | `trading-engine/risk/circuit_breaker.py` | — | Integrado en `main.py`; pausas operacionales auto-reset ~10 min vs financieras manuales. |
+| CoherenceChecker | Risk | `trading-engine/risk/coherence_checker.py` | `agents/decisor.py` | `shared/schemas.py` |
+| Outcome Attribution | Agent | `agents/outcome_attribution.py`, `agents/outcome_attribution_job.py` | — | `shared/db/models.py` |
 | PriceCollector | Data | `collectors/price_collector.py`, `collectors/indicators.py` | — | `shared/db/models.py` |
 | OrderBookCollector | Data | `collectors/orderbook_collector.py` | — | — |
 | FeeManager | Execution | `execution/fee_manager.py` | — | `shared/db/models.py` |
@@ -733,8 +758,7 @@ Convenciones del mapa:
 ## 11. Roadmap técnico (extracto)
 
 - [ ] Tests de integración end-to-end con un fake exchange determinístico.
-- [ ] Persistir `daily_pnl_pct` y `total_drawdown_pct` para que el Risk Gate los reciba con datos reales (actualmente se pasan 0.0 desde `main.py`).
 - [ ] Telemetría/metrics (OpenTelemetry) — hoy solo logs JSON.
 - [ ] Backtesting con LLM real (hoy es indicator-only baseline).
-- [ ] Notificaciones (telegram/email) ante eventos críticos (kill switch, daily stop, supervisor rollback).
+- [ ] Cron job para pre-computar `daily_stats` cuando el histórico supere ~90 días.
 - [ ] Hardening del frontend (auth, RBAC) — actualmente sin login.

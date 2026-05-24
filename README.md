@@ -2,7 +2,22 @@
 
 Bot autónomo de day trading BTC/USDT en Binance Spot, impulsado por dos agentes LLM (Decisor + Supervisor) con risk gate determinístico.
 
-Diseño completo: `docs/superpowers/specs/2026-05-02-crypto-ai-trading-design.md`
+## Documentación
+
+**Fuente canónica del proyecto:** [`docs/specs/`](docs/specs/README.md) — especificaciones funcionales y técnicas alineadas con el código (última revisión 2026-05-23).
+
+| Documento | Para qué |
+|-----------|----------|
+| [Índice de specs](docs/specs/README.md) | Mapa completo de la documentación |
+| [Especificación funcional](docs/specs/01-functional-spec.md) | Negocio, flujos, criterios de aceptación |
+| [Especificación técnica](docs/specs/02-technical-spec.md) | Arquitectura, servicios, scheduler, despliegue |
+| [Contratos de API](docs/specs/04-api-contracts.md) | REST, WebSocket, schemas JSON |
+| [Riesgo y seguridad](docs/specs/05-risk-and-safety.md) | Reglas R0–R11, circuit breakers, gates LIVE |
+| [Discrepancias y gaps](docs/specs/07-discrepancies-and-gaps.md) | Estado prometido vs entregado |
+
+Referencias históricas de diseño (no canónicas): [`docs/superpowers/specs/`](docs/superpowers/specs/2026-05-02-crypto-ai-trading-design.md).
+
+---
 
 ## Quick start con Docker Compose
 
@@ -32,10 +47,6 @@ GROQ_API_KEY=...
 
 ```bash
 docker-compose build && docker-compose up -d
-```
-
-```bash
-docker-compose build
 ```
 
 Esto construye los tres servicios: `trading-engine`, `web` y `frontend`. Postgres usa la imagen oficial y no requiere build.
@@ -343,6 +354,40 @@ docker-compose logs trading-engine | grep fee
 [ ] Paso 5: API keys mainnet creadas con permisos mínimos, IP restringida
 [ ] Paso 6: .env actualizado, BINANCE_TESTNET=false, LIVE activado desde dashboard
 ```
+
+---
+
+## Pendientes conocidos
+
+Lista consolidada de trabajo pendiente (detalle en [`docs/specs/07-discrepancies-and-gaps.md`](docs/specs/07-discrepancies-and-gaps.md) §10). Nada de esto bloquea paper trading con API keys configuradas.
+
+### Frontend / UX (media prioridad)
+
+| ID | Item | Descripción |
+|----|------|-------------|
+| D-026 | Filtros `/trades` | Date range, resultado win/loss, close reason, sort por columna, export CSV, footer con resumen. |
+| D-026 | Filtros `/decisions` | Filtro por action (BUY/SELL/HOLD), rango de confidence, date range. |
+| D-014 | Modal trade → decisión | Click en fila de `/trades` abre modal con la decisión LLM que originó el trade. |
+| D-015 | Diff viewer playbook | Comparar dos versiones lado a lado; hoy solo hay rollback y edición inline. |
+| D-015 | Word-diff playbook | Diff a nivel de palabra dentro de cada línea (hoy es por línea completa). |
+| D-015 | Reset playbook a v0 | Botón explícito para volver al playbook inicial (hoy se hace activando versión 0 manualmente). |
+
+### Backend / datos (baja prioridad)
+
+| ID | Item | Descripción | Trigger sugerido |
+|----|------|-------------|------------------|
+| D-028 / D-011 | Cron `daily_stats` | La tabla `daily_stats` existe pero `GET /api/stats/daily` agrega on-the-fly. Job batch cuando el histórico supere ~90 días o `GET /stats/daily` > 500 ms. | Monitorear latencia en producción |
+| D-029 | Telemetría del engine | `/health` no expone uptime del proceso, memory RSS ni conteo de fallback LLM triggers. Requiere endpoint de telemetría en el engine (sin HTTP hoy). | Antes de LIVE prolongado |
+
+### v2 — Seguridad operativa (fuera de scope v1)
+
+| ID | Item | Descripción |
+|----|------|-------------|
+| D-005 | Auto-rollback Supervisor | Si 7 días post-update muestran drawdown > 2× vs 7 días previos, revertir playbook automáticamente + alerta. Hoy solo rollback manual vía `/playbook`. |
+| — | Auth / RBAC frontend | Dashboard sin login; cualquiera con acceso al puerto 3100 controla el bot. |
+| — | Backtesting con LLM | `backtesting/runner.py` es indicator-only (sin LLM); no está en docker-compose. |
+| — | Observabilidad externa | Sin Prometheus/Sentry; solo logs JSON de `structlog`. |
+| — | Backup Postgres automatizado | `pg_dump` documentado en operaciones pero sin job programado ni retención definida. |
 
 ---
 

@@ -295,6 +295,7 @@ class Executor:
             d = await self.session.get(Decision, decision_id)
             if d:
                 d.executed = True
+                d.trade_id = trade.id
         await self.session.commit()
         await self.session.refresh(trade)
         logger.info("executor.sell_executed", trade_id=str(trade.id))

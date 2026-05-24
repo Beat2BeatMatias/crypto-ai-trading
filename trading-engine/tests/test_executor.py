@@ -440,6 +440,44 @@ async def test_execute_sell_closes_trade_and_computes_pnl(session):
     assert float(closed.pnl_usdt) == pytest.approx(0.862, rel=1e-3)
 
 
+async def test_execute_sell_sets_decision_trade_id(session):
+    sell_decision_id = uuid.uuid4()
+    session.add(Decision(
+        id=sell_decision_id,
+        ts=datetime.now(tz=timezone.utc),
+        agent="decisor",
+        model="test",
+        input={},
+        output={"action": "SELL"},
+        executed=False,
+    ))
+    await session.commit()
+
+    buy_decision_id = uuid.uuid4()
+    await _insert_decision(session, buy_decision_id)
+    buy_exchange = _make_exchange(order_id="ORD-BUY-4", avg_price=67000.0, filled=0.001, fee=0.07)
+    executor = Executor(buy_exchange, session, symbol="BTC/USDT")
+    trade = await executor.execute_buy(
+        decision=_make_buy_decision(), decision_id=buy_decision_id, usdt_balance=10000.0,
+    )
+
+    sell_order = {
+        "id": "ORD-SELL-4",
+        "average": 68000.0,
+        "filled": 0.001,
+        "fee": {"cost": 0.068},
+    }
+    executor.exchange.create_market_order = AsyncMock(return_value=sell_order)
+    await executor.execute_sell(
+        trade_id=trade.id, decision_id=sell_decision_id, close_reason="decisor_sell",
+    )
+
+    sell_d = await session.get(Decision, sell_decision_id)
+    assert sell_d is not None
+    assert sell_d.executed is True
+    assert sell_d.trade_id == trade.id
+
+
 async def test_execute_buy_exchange_error_can_be_persisted_as_rejected_reason(session):
     # GIVEN una decisión insertada y un exchange que falla con NOTIONAL al ejecutar
     decision_id = uuid.uuid4()

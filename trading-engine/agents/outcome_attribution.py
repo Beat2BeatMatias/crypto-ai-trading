@@ -62,8 +62,7 @@ def attribute(
     if not _coverage_ok(ohlcv_1m, horizon_min, now, decision.ts, coverage_threshold_pct):
         return _unknown(decision, horizon_min, now)
 
-    sl_dist_pct = inputs["sl_atr_mult"] * inputs["atr_pct_t"]
-    tp_target_pct = inputs["min_rr_ratio"] * sl_dist_pct
+    sl_dist_pct, tp_target_pct = _resolve_risk_thresholds(decision, inputs)
 
     mfe, mae, t_mfe, t_mae = _compute_mfe_mae(
         price_t=inputs["price_t"], candles=ohlcv_1m, ts0=decision.ts,
@@ -76,6 +75,7 @@ def attribute(
         decision=decision, mfe=mfe, mae=mae, t_mfe=t_mfe, t_mae=t_mae,
         sl_dist_pct=sl_dist_pct, tp_target_pct=tp_target_pct,
         matured=matured, associated_trade=associated_trade,
+        candles=ohlcv_1m, horizon_min=horizon_min, ts0=decision.ts,
     )
 
     return DecisionAttribution(
@@ -153,6 +153,9 @@ def _classify(
     tp_target_pct: float,
     matured: bool,
     associated_trade: Any | None,
+    candles: list[Any],
+    horizon_min: int,
+    ts0: datetime,
 ) -> Classification:
     action = (decision.output or {}).get("action")
     if mfe is None or mae is None:
@@ -177,15 +180,23 @@ def _classify(
             pnl = float(associated_trade.pnl_pct)
         except (TypeError, ValueError):
             return "UNKNOWN"
-        return "GOOD_SELL" if pnl > 0 else "BAD_SELL"
+        return _classify_executed_sell(
+            actual_pnl=pnl,
+            trade=associated_trade,
+            candles=candles,
+            matured=matured,
+            horizon_min=horizon_min,
+            ts0=ts0,
+            sl_dist_pct=sl_dist_pct,
+        )
     if action == "HOLD":
-        if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
+        if not matured:
             return "PENDING"
         if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
             return "MISSED_OPPORTUNITY"
         return "GOOD_HOLD"
     if action == "BUY" and not decision.executed:
-        if not matured and mfe < tp_target_pct and mae > -sl_dist_pct:
+        if not matured:
             return "PENDING"
         if mfe >= tp_target_pct and mae > -sl_dist_pct and mfe_hits_first:
             return "BLOCKED_GOOD_TRADE"
@@ -249,3 +260,144 @@ def _extract_decision_inputs(decision: Any) -> dict[str, float] | None:
         "sl_atr_mult": sl_mult,
         "min_rr_ratio": rr,
     }
+
+
+def _resolve_risk_thresholds(
+    decision: Any, inputs: dict[str, float],
+) -> tuple[float, float]:
+    """Return (sl_dist_pct, tp_target_pct) for contrafactual evaluation.
+
+    If the decision output already declares stop_loss and take_profit, use those
+    levels (the bracket the Decisor had in mind). Otherwise fall back to the config
+    snapshot in decision.input (atr × sl_mult, min_rr).
+    """
+    config_sl = inputs["sl_atr_mult"] * inputs["atr_pct_t"]
+    config_tp = inputs["min_rr_ratio"] * config_sl
+
+    out = decision.output or {}
+    sl_raw, tp_raw = out.get("stop_loss"), out.get("take_profit")
+    if sl_raw is None or tp_raw is None:
+        return config_sl, config_tp
+
+    try:
+        price = inputs["price_t"]
+        sl = float(sl_raw)
+        tp = float(tp_raw)
+    except (TypeError, ValueError):
+        return config_sl, config_tp
+
+    if sl >= price or tp <= price:
+        return config_sl, config_tp
+
+    sl_dist = (price - sl) / price * 100
+    tp_target = (tp - price) / price * 100
+    if sl_dist <= 0 or tp_target <= 0:
+        return config_sl, config_tp
+    return sl_dist, tp_target
+
+
+def _classify_executed_sell(
+    *,
+    actual_pnl: float,
+    trade: Any,
+    candles: list[Any],
+    matured: bool,
+    horizon_min: int,
+    ts0: datetime,
+    sl_dist_pct: float,
+) -> Classification:
+    """Classify an executed SELL against the forward path if the position had been held.
+
+    GOOD_SELL: profitable exit, or loss smaller than waiting for the bracket SL.
+    BAD_SELL: sold too early (TP would have been reached), or held would have done better.
+    """
+    if not matured:
+        return "PENDING"
+
+    if actual_pnl > 0:
+        return "GOOD_SELL"
+
+    entry = _optional_float(getattr(trade, "entry_price", None))
+    stop_loss = _optional_float(getattr(trade, "stop_loss", None))
+    take_profit = _optional_float(getattr(trade, "take_profit", None))
+
+    if entry is not None and entry > 0 and stop_loss is None:
+        stop_loss = entry * (1 - sl_dist_pct / 100)
+
+    sl_pnl_pct: float | None = None
+    tp_pnl_pct: float | None = None
+    if entry is not None and entry > 0:
+        if stop_loss is not None:
+            sl_pnl_pct = (stop_loss - entry) / entry * 100
+        if take_profit is not None:
+            tp_pnl_pct = (take_profit - entry) / entry * 100
+
+    bracket = _first_bracket_outcome(candles, stop_loss=stop_loss, take_profit=take_profit)
+
+    if bracket == "tp" and tp_pnl_pct is not None and actual_pnl < tp_pnl_pct:
+        return "BAD_SELL"
+
+    if bracket == "sl" and sl_pnl_pct is not None:
+        return "GOOD_SELL" if actual_pnl > sl_pnl_pct else "BAD_SELL"
+
+    if sl_pnl_pct is not None and actual_pnl > sl_pnl_pct:
+        return "GOOD_SELL"
+
+    hold_pnl = _forward_hold_pnl_pct(entry, candles, horizon_min, ts0)
+    if hold_pnl is not None and hold_pnl > actual_pnl:
+        return "BAD_SELL"
+
+    if sl_pnl_pct is not None:
+        return "GOOD_SELL" if actual_pnl > sl_pnl_pct else "BAD_SELL"
+
+    return "BAD_SELL"
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_bracket_outcome(
+    candles: list[Any],
+    *,
+    stop_loss: float | None,
+    take_profit: float | None,
+) -> Literal["sl", "tp", "neither"]:
+    """First bracket level touched on the forward path (chronological candle order)."""
+    for c in candles:
+        low = float(c.low)
+        high = float(c.high)
+        sl_hit = stop_loss is not None and low <= stop_loss
+        tp_hit = take_profit is not None and high >= take_profit
+        if sl_hit and tp_hit:
+            return "sl"
+        if sl_hit:
+            return "sl"
+        if tp_hit:
+            return "tp"
+    return "neither"
+
+
+def _forward_hold_pnl_pct(
+    entry: float | None,
+    candles: list[Any],
+    horizon_min: int,
+    ts0: datetime,
+) -> float | None:
+    """PnL % if the position had been held until horizon close (from entry)."""
+    if entry is None or entry <= 0 or not candles:
+        return None
+    target_ts = ts0 + _minutes(horizon_min)
+    last_close: float | None = None
+    for c in reversed(candles):
+        if c.time <= target_ts:
+            last_close = float(c.close)
+            break
+    if last_close is None:
+        return None
+    return (last_close - entry) / entry * 100

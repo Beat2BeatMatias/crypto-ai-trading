@@ -1,8 +1,8 @@
 # Discrepancias y Gaps de Documentación — Crypto AI Trading
 
 > Audiencia: Tech leads / SRE / Risk.
-> Versión: 1.0 — 2026-05-14.
-> Base de comparación: design doc 2026-05-02 vs. código en HEAD (2026-05-14).
+> Versión: 1.1 — 2026-05-23.
+> Base de comparación: design doc 2026-05-02 vs. código en HEAD (2026-05-23).
 
 Este documento consolida el resultado del cross-validation entre la documentación de diseño existente y la implementación real. La **regla de oro**: cuando un campo difiere entre design doc y código, **el código manda**. Las discrepancias se registran para que el equipo decida si actualizar el código a la spec o la spec al código.
 
@@ -29,7 +29,22 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | 🟢 INFO | 5 | D-012, D-016, D-017, D-018, D-020 |
 | **Total** | **21** | |
 
-### 1.3 Estado de resolución (actualizado 2026-05-17)
+### 1.3 Estado de resolución (actualizado 2026-05-23)
+
+Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desde la revisión 2026-05-17 se incorporaron features nuevas no cubiertas por el design doc original:
+
+| ID | Severidad | Estado | Descripción |
+|----|-----------|--------|-------------|
+| D-022 | 🟢 INFO | ✅ ENTREGADO | Outcome attribution contrafactual (`decision_outcomes`, job, API `/decisions/outcomes`). |
+| D-023 | 🟢 INFO | ✅ ENTREGADO | Telegram notifications opcionales (`notifications/telegram.py`). |
+| D-024 | 🟢 INFO | ✅ ENTREGADO | Bracket OCO con `order_id_sl/tp` (migration 007). |
+| D-025 | 🟢 INFO | ✅ ENTREGADO | Balance snapshots con `usdt_locked`/`btc_locked` (migration 010). |
+| D-026 | 🟡 MEDIO | ⏳ PENDIENTE | Filtros avanzados frontend `/trades` y `/decisions` (date range, export CSV). |
+| D-027 | 🟡 MEDIO | ⏳ PENDIENTE | Diff viewer playbook a nivel de palabra. |
+| D-028 | 🟡 MEDIO | 📋 DOCUMENTADA | `daily_stats` sigue sin job batch; query on-the-fly OK para volúmenes actuales. |
+| D-029 | 🟢 INFO | 📋 DOCUMENTADA | Health no expone uptime RSS del proceso engine (requiere endpoint de telemetría en engine). |
+
+### 1.3.bis Estado de resolución (histórico 2026-05-17)
 
 | ID | Severidad | Estado | Resolución |
 |----|-----------|--------|------------|
@@ -372,12 +387,12 @@ Resultado del cross-validation entre documentación de diseño y código.
 
 | Capa | % docs vs código | Comentario |
 |------|-------------------|------------|
-| Arquitectura | 95% | Topología 3 contenedores y Postgres como bus coinciden con design doc. |
-| Modelo de datos | 90% | Gaps: índices GIN no en migración, FK `trades.decision_id`, `balance_snapshots` y `close_requested` no en design doc. |
-| Componentes runtime | 80% | 3 críticos: OrderBook WS no inicia, RG con inputs 0.0, CircuitBreaker no integrado. |
-| REST API | 85% | API existe; filtros documentados (date range, result, CSV) faltan. |
-| WebSocket | 50% | Sólo 3 de 7 eventos del design doc. |
-| Frontend páginas | 70% | Features avanzadas (diff viewer, charts, export CSV, métricas LLM) no entregadas. |
+| Arquitectura | 98% | Topología 4 contenedores + Postgres; outcome attribution y Telegram agregados post-design. |
+| Modelo de datos | 95% | 11 tablas activas incl. `decision_outcomes`; migraciones 001–010 aplicadas. |
+| Componentes runtime | 95% | OrderBook WS, Risk Gate con métricas reales, CircuitBreaker integrado, outcome job. |
+| REST API | 92% | API completa; filtros avanzados de trades/decisions en backlog. |
+| WebSocket | 95% | 8 eventos implementados (incl. supervisor_ran, kill_switch_triggered). |
+| Frontend páginas | 75% | Chart en Dashboard entregado; filtros avanzados y diff viewer pendientes. |
 | Prompts LLM | 100% | Todos los archivos `prompts/*` presentes y coherentes. |
 
 ---
@@ -426,7 +441,104 @@ Resultado del cross-validation entre documentación de diseño y código.
 
 ---
 
-## 10. Estado final de gaps (2026-05-17)
+## 10. Estado final de gaps (2026-05-23)
+
+Todos los gaps críticos y altos (D-001–D-021) están resueltos o documentados como decisiones de diseño. El sistema está operativo para paper trading con las API keys configuradas.
+
+### Pendientes técnicos de baja/media prioridad
+
+#### D-026 — Filtros frontend `/trades` y `/decisions`
+
+**`/trades`** — faltan:
+
+| Filtro | Estado |
+|--------|--------|
+| Date range picker | ❌ |
+| Status (open/closed/cancelled) | ✅ (`?status=`) |
+| Result (win/loss/all) | ❌ |
+| Close reason | ❌ |
+| Sortable por columna | ❌ |
+| Export CSV | ❌ |
+| Summary footer (P&L agregado) | ❌ |
+
+**`/decisions`** — faltan:
+
+| Filtro | Estado |
+|--------|--------|
+| Agent (decisor/supervisor) | ✅ (`?agent=`) |
+| Action (BUY/SELL/HOLD) | ❌ |
+| Confidence range slider | ❌ |
+| Executed (yes/no/rejected) | 🟡 parcial (`?executed=`) |
+| Date range | ❌ |
+| Click row → panel con input/output | ✅ |
+
+**Acción sugerida**: extender query params en `web/api/trades.py` y `web/api/decisions.py`; UI en `frontend/src/pages/Trades.tsx` y `Decisions.tsx`.
+
+#### D-027 — Diff viewer y reset playbook (extiende D-015)
+
+| Feature | Estado |
+|---------|--------|
+| Renderizado markdown activo | ✅ |
+| Historial con badge "active" | ✅ |
+| Diff viewer entre 2 versiones | ❌ |
+| Edición manual markdown | ✅ |
+| Reset to v0 (botón) | ❌ |
+| Rollback one-click | ✅ |
+
+**Acción sugerida**: componente diff en `Playbook.tsx`; endpoint opcional `GET /api/playbook/diff?v1=&v2=` o diff client-side.
+
+#### D-028 — Cron job `daily_stats` (extiende D-011)
+
+| Fuente | Comportamiento actual |
+|--------|----------------------|
+| Tabla `daily_stats` | Existe; **vacía** en operación normal |
+| `GET /api/stats/daily` | Agrega on-the-fly sobre `trades` + `decisions` del día UTC |
+
+**Trigger**: monitorear duración de `GET /stats/daily`; implementar job nocturno en engine cuando supere ~500 ms o histórico > 10.000 trades.
+
+#### D-029 — Telemetría del proceso engine
+
+Items aún **fuera** de `/api/health`:
+
+| Métrica | Estado |
+|---------|--------|
+| Uptime del proceso engine | ❌ |
+| Memory RSS | ❌ |
+| Conteo de fallback LLM triggers (24 h) | ❌ |
+
+**Acción sugerida**: endpoint interno o escritura periódica a `config`/tabla de métricas desde `main.py` (el engine no expone HTTP).
+
+### Funcionalidades para v2
+
+#### D-005 — Auto-rollback del Supervisor
+
+| Aspecto | Design doc | Código |
+|---------|------------|--------|
+| Auto-rollback | Si 7 días post-update muestran >2× drawdown vs prior 7 días → revertir + alert | ❌ No implementado |
+| Rollback manual | UI botón | ✅ `POST /api/playbook/{v}/activate` |
+
+**Precondición sugerida**: ≥ 4 semanas de histórico con ≥ 5 trades/semana antes de automatizar.
+
+#### D-014 (modal) — Trade → decisión origen
+
+Click en fila de `/trades` debería abrir modal con `decisions` vinculada vía `trades.decision_id`. Datos ya existen en BD; falta UI.
+
+#### D-015 (word-diff) — Diff fino del playbook
+
+El diff actual (cuando exista) será por línea; se pide diff a nivel de palabra para revisar cambios del Supervisor con más granularidad.
+
+#### Backlog adicional (sin ID)
+
+| Item | Notas |
+|------|-------|
+| Auth / RBAC frontend | Sin login; acceso = quien llegue al puerto 3100 |
+| Backtesting con LLM | `backtesting/` es baseline determinístico; no en docker-compose |
+| Observabilidad externa | Prometheus, Sentry — roadmap |
+| Backup Postgres automatizado | Solo manual vía `pg_dump` en README |
+
+---
+
+## 10.bis Estado final de gaps (2026-05-17, histórico)
 
 Todos los gaps D-001–D-020 han sido resueltos o documentados como decisiones de diseño explícitas.
 

@@ -1,7 +1,9 @@
 # Especificación Funcional — Crypto AI Trading
 
 > Audiencia: Product, Risk, Trading, Stakeholders.
-> Versión: 1.3 — 2026-05-17.
+> Versión: 1.4 — 2026-05-23.
+>
+> Cambios v1.4: Outcome attribution contrafactual (§F9), notificaciones Telegram, endpoints de reset (`/drawdown/reset`, `/circuit-breaker/reset`), balance con saldos locked, flujo del Decisor sin overrides (corrige §5.1), WebSocket completo (8 eventos).
 >
 > Cambios v1.3: Rediseño LLM-centric del Decisor. El LLM decide `action` y `position_size_pct` con autonomía total (se eliminan los overrides deterministas de TRENDING_DOWN, confidence-floor y sizing). Se agrega CoherenceChecker (§F2.bis.5) y two-pass (§F2.bis.6). Se enriquecen indicadores en §F1. Se actualiza §F2.bis, §6.3, §6.5, §F6, AC-02 y AC-11. El Risk Gate (R1–R10) permanece como única barrera hard-blocking.
 
@@ -60,6 +62,8 @@ Persona responsable del bot. Sus tareas diarias son:
 | Position Refresher | cada 30 s | Actualizar P&L no realizado de posiciones abiertas. |
 | Price/OHLCV Collector | en cada tick del Decisor | Persistir velas y recomputar indicadores. |
 | Fee Manager | cada 24 h | Refrescar maker/taker fees desde Binance. |
+| Balance Refresher | cada 60 s | Persistir snapshot USDT/BTC (free + locked) desde Binance. |
+| Outcome Attribution | cada `outcome_attribution_interval_min` (default 60 min) | Clasificar decisiones del Decisor con MFE/MAE forward → `decision_outcomes`. |
 
 ---
 
@@ -275,6 +279,11 @@ Persistencia según el veredicto:
 | Kill Switch | `POST /api/kill-switch` | Operador |
 | Cambiar modo PAPER ↔ LIVE | `POST /api/mode` (requiere frase `CONFIRMO TRADING REAL`) | Operador |
 | Disparar Supervisor manualmente | `POST /api/supervisor/run` | Operador |
+| Reset circuit breaker operacional | `POST /api/circuit-breaker/reset` | Operador |
+| Reset ancla de drawdown (high-water mark) | `POST /api/drawdown/reset` | Operador |
+| Outcomes contrafactuales del Decisor | `GET /api/decisions/outcomes` | Operador |
+| Historial ratificaciones Supervisor | `GET /api/supervisor/runs` | Operador |
+| Velas OHLCV (chart) | `GET /api/ohlcv?timeframe=&limit=` | Operador |
 | Sugerencias de configuración pendientes | `GET /api/config/suggestions` | Operador |
 
 ### F7. Dashboard en vivo
@@ -291,8 +300,25 @@ Páginas (React + Tailwind):
 WebSocket `/ws` empuja:
 - `ticker` (precio BTC/USDT cada 5 s vía REST público).
 - `decision` (nueva decisión persistida).
-- `positions` (snapshot de posiciones abiertas cada 2 s).
+- `positions` (snapshot de posiciones abiertas cada 2 s, incluye SL/TP y P&L proyectado).
 - `trade_opened` / `trade_closed` (evento por cada cambio de estado de un trade).
+- `playbook_updated` (nueva versión en `playbook_versions`).
+- `supervisor_ran` (cada ejecución del Supervisor, ratifique o regenere).
+- `kill_switch_triggered` (cambio de estado del kill switch).
+
+### F9. Outcome attribution (aprendizaje contrafactual)
+
+Job periódico que evalúa **ex post** cada decisión del Decisor usando velas OHLCV 1m y el trade asociado (si existe). No modifica decisiones pasadas; alimenta al Supervisor y al operador con señales de calidad.
+
+- **Horizonte**: `outcome_attribution_horizon_min` (default 240 min). Decisiones más recientes quedan `PENDING` hasta madurar.
+- **Métricas forward**: `forward_return_pct`, `mfe_pct`, `mae_pct`, `time_to_mfe_min`, `time_to_mae_min`.
+- **Clasificaciones**: `GOOD_BUY`, `BAD_BUY`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN`.
+- **Persistencia**: tabla `decision_outcomes` (1:1 con `decisions.id`, UPSERT idempotente).
+- **Exposición**: `GET /api/decisions/outcomes` y bloque `outcome_attribution` en `GET /api/health`.
+
+### F10. Notificaciones Telegram (opcional)
+
+Si `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` están configurados, el engine envía alertas push ante eventos críticos: kill switch activado/desactivado, pausa del engine (circuit breaker), rachas de rechazos del Risk Gate, y trades cerrados con P&L significativo.
 
 ### F8. Gráfico de precios en vivo (Chart BTC/USDT)
 
@@ -343,11 +369,11 @@ Componente full-width integrado en la página principal del Dashboard (ruta `/`)
 6. fetch_balance → BalanceSnapshot (fallback DB si exchange caído).
 7. ContextBuilder.build(orderbook, balances, playbook, calibración, …).
 8. Decisor.decide → LLM → parseo JSON → DecisorOutput validado.
-9. Override determinístico (TRENDING_DOWN/conf<0.60/sizing).
-10. Persistir Decision (input + output + tokens + latencia + rejected_reason).
-11. RiskGate.validate(decision, current_price, atr_ref, balances, kill_switch, …).
+9. CoherenceChecker.evaluate → two-pass opcional si C1/C2/C3.
+10. Persistir Decision (input + output + coherence_warnings + two_pass_triggered).
+11. RiskGate.validate(decision, current_price, atr_ref, balances, kill_switch, daily_pnl, drawdown, …).
 12. Si rechazado → update rejected_reason y return.
-13. Si BUY → Executor.execute_buy (market + bracket SL/TP).
+13. Si BUY → Executor.execute_buy (market + OCO bracket SL/TP).
     Si SELL → Executor.execute_sell sobre la primera posición abierta.
     Si HOLD → nada.
 ```
@@ -490,8 +516,9 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | AC-09 | Toda escritura en `config` queda registrada en `config_history` con `changed_by`. |
 | AC-10 | El operador puede activar una versión anterior del playbook con un click (rollback). |
 | AC-11 | Un BUY del LLM con `position_size_pct > max_position_pct` es **rechazado** por el Risk Gate (R1) con `rejected_reason="risk_gate: R1"`. No hay reescritura silenciosa; el LLM debe aprender del rechazo vía el Bloque G del ciclo siguiente. |
-| AC-15 | `GET /api/decisions/stats?window=24` retorna rechazos desglosados por `rule_id` (R1–R10), warnings del CoherenceChecker por regla (C1–C6), histogramas de distribución de `confidence` y `position_size_pct`, y tasa de `two_pass_triggered`. |
-| AC-16 | `GET /api/health` incluye los bloques `risk_gate` (rejection_rate_24h, by_rule) y `coherence` (warning_rate_24h, by_rule, two_pass_triggered) para monitoreo del rollout. |
+| AC-15 | `GET /api/decisions/stats?window=24` retorna rechazos desglosados por `rule_id` (R0–R11), warnings del CoherenceChecker por regla (C1–C6), histogramas de distribución de `confidence` y `position_size_pct`, y tasa de `two_pass_triggered`. |
+| AC-16 | `GET /api/health` incluye los bloques `risk_gate`, `coherence`, `outcome_attribution`, `postgres` (table counts + DB size), `llm` (latency p50/p95/p99) y `circuit_breaker`. |
+| AC-17 | El job de outcome attribution persiste una fila en `decision_outcomes` por decisión madura; `GET /api/decisions/outcomes` expone clasificación y métricas MFE/MAE. |
 | AC-12 | El Supervisor en modo `diagnostic` (con `closed_trades < min_trades`) puede ratificar el playbook activo. Cuando regenera, el nuevo `PlaybookVersion` conserva la estructura obligatoria de secciones y **no** introduce confluencias fuera del catálogo A–H ni valores de parámetros del sistema. |
 | AC-13 | El Supervisor fuerza la regeneración del playbook (sin consultar al LLM en la fase 1) cuando se cumple alguno de los guardrails determinísticos: `days_since_active >= max_playbook_age_days`, `abs(wr_24h − wr_baseline) > playbook_force_regen_wr_delta_pct`, cambio de régimen estructural, o kill switch activado en el período. `force_regen_reason` queda registrado en la `Decision`. |
 | AC-14 | Cada ejecución del Supervisor (ratifique o regenere) inserta exactamente **una** fila en `decisions` con `agent="supervisor"`. El operador puede auditar la actividad vía `GET /api/decisions?agent=supervisor` aunque no haya nuevas versiones de playbook. |
@@ -513,7 +540,7 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 
 | Riesgo | Impacto | Mitigación |
 |--------|---------|------------|
-| LLM "alucina" un valor numérico fuera de R1–R10 | Pérdida potencial > límite | Risk Gate determinístico bloquea; override fuerza HOLD si `confidence < 0.60`. |
+| LLM "alucina" un valor numérico fuera de R0–R11 | Pérdida potencial > límite | Risk Gate determinístico bloquea; CoherenceChecker audita inconsistencias lógicas. |
 | Supervisor cambia parámetros críticos | Estrategia degradada | `_SAFE_BOUNDS` excluye `daily_stop_pct` y `max_drawdown_pct`; rollback de playbook a un click. |
 | Supervisor "se acomoda" ratificando indefinidamente | Playbook stale en mercado cambiante | Guardrails determinísticos (§F5.bis.5): `max_playbook_age_days` (techo de edad) y `playbook_force_regen_wr_delta_pct` (delta WR) fuerzan regeneración sin opinión del LLM. |
 | Velas anómalas en testnet (flash low) inflan ATR | SL/TP irreales | TR winsorizado a 3× mediana móvil. |

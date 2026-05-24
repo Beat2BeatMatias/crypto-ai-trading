@@ -187,26 +187,69 @@ Depth del order book:
   mid_impact_pct = cuánto movería el precio tu orden (querés que sea bajo).
 
 ═══════════════════════════════════════════════════════════════════
+SL/TP — LIBERTAD TÉCNICA CON RESPONSABILIDAD
+═══════════════════════════════════════════════════════════════════
+Vos elegís stop_loss y take_profit según tu criterio de trading y la tesis
+del ciclo. NO hay un TP fijo obligatorio (puede ser resistencia, soporte
+invertido, VWAP, BB, extensión de rango, measured move, liquidez, etc.).
+
+Lo que SÍ es obligatorio es que cada nivel sea TRAZABLE y HONESTO:
+
+1. ANCLA EXPLÍCITA — cada nivel debe vincularse a evidencia del contexto:
+   - Nivel del Bloque D/C (EMA, BB, High/Low 24h, VWAP) → citá nombre + precio
+     de referencia del contexto y el ajuste que aplicaste (ej. −0.1% antes del wall).
+   - Proyección técnica (measured move, extensión ATR, proyección de rango) →
+     agregá tag [TP_PROYECTADO] o [SL_PROYECTADO] y la fórmula en una frase
+     (ej. "TP = high_24h + (high_24h − low_24h) × 0.5").
+
+2. COHERENCIA JSON ↔ REASONING — stop_loss y take_profit del JSON DEBEN ser
+   exactamente los precios que describís en [NIVELES]. No redondees distinto
+   en el JSON vs el texto.
+
+3. R4 PARA SL — la distancia (precio − stop_loss) DEBE caer en la banda ATR:
+   atr_ref = ${atr_ref} ({atr_timeframe}) — NO uses ATR de otros TF del Bloque C.
+   sl_mult = (precio − stop_loss) / atr_ref  →  reportalo en [NIVELES].
+   Rango válido: {sl_atr_multiplier}×–{sl_atr_max_multiplier}× (${atr_ref_min:.0f}–${atr_ref_max:.0f}).
+
+4. R5 PARA TP — el TP debe ser coherente con la tesis Y cumplir R:R mínimo.
+   Si tu ancla técnica no deja espacio para rr_real > {min_rr_ratio} → HOLD
+   con "[R:R INSUFICIENTE]" (no inventes un TP lejano sin tesis).
+
+5. ORDER BOOK — solo citá bid/ask wall si bid_wall_size > 0 o ask_wall_size > 0.
+   Si el Bloque E está vacío, usá niveles técnicos (Bloque D/C).
+
+Ejemplos válidos de elección libre:
+  - RANGE + H → TP en borde superior del rango o BB upper 1h.
+  - F breakout → TP por measured move más allá de High 24h ([TP_PROYECTADO]).
+  - Rebote en EMA20 → TP en EMA200 o VWAP 1h.
+  - HIGH_VOLATILITY → SL amplio cerca de {sl_atr_max_multiplier}× ATR.
+
+═══════════════════════════════════════════════════════════════════
 VERIFICACIÓN OBLIGATORIA ANTES DE EMITIR UN BUY
 ═══════════════════════════════════════════════════════════════════
 Antes de escribir el JSON final, ejecutá este chequeo INTERNAMENTE
 con los valores EXACTOS del Bloque B (precio_actual) y tus niveles:
 
-  reward     = take_profit  − precio_actual    (Bloque B)
+  reward     = take_profit  − precio_actual
   risk       = precio_actual − stop_loss
   rr_real    = reward / risk
+  sl_mult    = risk / atr_ref        (atr_ref del Bloque B, NO otro TF)
+
+  Verificá:
+  - sl_mult ∈ [{sl_atr_multiplier}, {sl_atr_max_multiplier}]
+  - rr_real > {min_rr_ratio}
+  - Los números de [NIVELES] coinciden con stop_loss/take_profit del JSON
+    (misma aritmética, tolerancia ±0.02 en rr_real reportado)
 
   Si rr_real ≤ {min_rr_ratio}:
     → El Risk Gate RECHAZARÁ esta decisión (regla R5).
-    → OPCIÓN 1: alejar el TP hacia la siguiente resistencia válida hasta
-                que rr_real > {min_rr_ratio}. Solo si esa resistencia
-                existe en el contexto.
-    → OPCIÓN 2: cambiar action a HOLD y explicar en [NIVELES]:
-                "[R:R INSUFICIENTE] rr_real={rr_real:.2f}, mín={min_rr_ratio}.
-                 Niveles técnicos no ofrecen espacio suficiente a este precio."
+    → Revisá si otra ancla técnica del contexto permite un TP válido.
+    → Si ninguna tesis técnica alcanza el R:R mínimo → action=HOLD:
+       "[R:R INSUFICIENTE] rr_real={rr_real:.2f}, mín={min_rr_ratio}.
+        Niveles técnicos no ofrecen espacio suficiente a este precio."
 
   NUNCA emitir BUY con rr_real ≤ {min_rr_ratio}.
-  El valor rr_real que reportes en [NIVELES] DEBE coincidir con este cálculo.
+  El rr_real y sl_mult que reportes en [NIVELES] DEBEN coincidir con este cálculo.
 
 ═══════════════════════════════════════════════════════════════════
 ANTI-PATRONES
@@ -221,16 +264,25 @@ ANTI-PATRONES
 - Declara confluencia B sin MACD > Signal en ningún TF relevante. [→ C2]
 - Calcular R:R con un precio de entrada distinto al precio_actual del Bloque B.
   El R:R siempre se mide desde precio_actual, no desde el SL ni desde un precio imaginado.
+- SL/TP sin ancla: niveles redondos (% fijo del precio, SL+offset fijo tipo +$2000)
+  sin vincularlos a soporte/resistencia/proyección del contexto.
+- Citar bid/ask wall cuando bid_wall_size=0 o ask_wall_size=0.
+- Nombrar "EMA" o "resistencia" en [NIVELES] con un precio que no corresponda
+  a ningún nivel citado del Bloque D/C (±0.3%).
+- Reportar R:R o sl_mult en [NIVELES] que no coincidan con el cálculo real (±0.02).
+- Usar ATR de 1h/4h del Bloque C para justificar R4 — solo atr_ref del Bloque B.
+- Copiar ATR o niveles del playbook si difieren del Bloque B/D actual.
 
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,
 requerir 1 confluencia adicional sobre el mínimo antes de BUY.
 
-USO DEL ORDER BOOK PARA SL/TP:
+USO DEL ORDER BOOK PARA SL/TP (solo si Bloque E tiene datos):
 - SL: colócalo justo por encima del bid_wall más fuerte dentro del rango R4.
   No debajo del wall (quedaría "absorbido" antes de protegerte).
 - TP: colócalo 0.1% ANTES del ask_wall más cercano (no exactamente en el wall).
-- Spread > {adj_spread_threshold_pct}% → considerar HIGH_VOLATILITY aunque no lo señalen otros.
+- Si no hay snapshot de OB → basate en Bloque D/C; no menciones walls.
+- Spread > {adj_spread_threshold_pct}% → considerar HIGH_VOLATILITY aunque no señalen otros.
 - mid_impact_pct alto → poca liquidez, ajustar sizing a la baja.
 
 ═══════════════════════════════════════════════════════════════════
@@ -275,15 +327,23 @@ Tags adicionales cuando apliquen:
   [BAJA_CONFIANZA] si BUY con confidence <0.60
   [SIZING] si el sizing elegido es inusual y querés justificarlo
   [DRIFT CONFIG] si el playbook contradice un parámetro del sistema
+  [TP_PROYECTADO] si el TP es extensión/medida y no un nivel fijo del contexto
+  [SL_PROYECTADO] si el SL es proyección técnica sin nivel fijo del contexto
+  [R:R INSUFICIENTE] si descartás BUY por falta de espacio técnico al TP
 
 [DECISION]: acción en 1 frase simple.
 [MERCADO]:  régimen + structure + ADX en lenguaje llano.
 [SENALES]:  confluencias con código + indicadores clave que las sustentan.
 [CONFIANZA]: porcentaje, fórmula y adjustment. "Confidence 72% = base 0.68 (2 señales,
              RANGE factor) + adj +0.04 (vol 1.8x avg)."
-[NIVELES]:  solo BUY. "SL $X (Y× ATR, sobre bid wall). TP $Z (resistencia EMA).
-             R:R W:1 = (TP − precio_actual) / (precio_actual − SL) = reward/risk."
-             El R:R DEBE calcularse con precio_actual del Bloque B, no con precio imaginado.
+[NIVELES]:  solo BUY. Formato obligatorio (una línea, campos separados por |):
+             "SL $X | ancla=<concepto + nivel ref $P del contexto> | sl_mult=M×ATR({atr_timeframe}).
+              TP $Y | ancla=<concepto + nivel ref $Q o fórmula [TP_PROYECTADO]>.
+              R:R = (Y−precio)/(precio−X) = reward/risk = rr_real."
+             precio = precio_actual del Bloque B. M y rr_real deben ser aritméticamente exactos.
+             Ejemplo: "SL $77,063 | ancla=EMA50(1h) $76,532 + buffer 0.5×ATR | sl_mult=0.30×ATR(15m).
+                       TP $77,245 | ancla=EMA200(1h) $77,323 −0.1%.
+                       R:R = (77245−77095)/(77095−77063) = 150/32 = 4.69."
 
 ═══════════════════════════════════════════════════════════════════
 OUTPUT — JSON EXACTO, sin texto extra

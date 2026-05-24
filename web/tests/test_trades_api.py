@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 import pytest
-from shared.db.models import Trade
+from shared.db.models import Trade, Position
 
 
 async def _create_trade(session_factory, **kwargs):
@@ -80,3 +80,39 @@ async def test_trade_response_bracket_ids_null_when_not_placed(client, app_with_
     assert "order_id_tp" in data[0]
     assert data[0]["order_id_sl"] is None
     assert data[0]["order_id_tp"] is None
+
+
+async def test_open_trade_includes_scenario_pnl(client, app_with_db):
+    trade_id = uuid.uuid4()
+    await _create_trade(
+        app_with_db.state.session_factory,
+        id=trade_id,
+        status="open",
+        entry_price=Decimal("80000.00"),
+        quantity_btc=Decimal("0.001"),
+        stop_loss=Decimal("79000.00"),
+        take_profit=Decimal("82000.00"),
+    )
+    async with app_with_db.state.session_factory() as s:
+        s.add(Position(
+            id=uuid.uuid4(),
+            trade_id=trade_id,
+            symbol="BTC/USDT",
+            quantity_btc=Decimal("0.001"),
+            entry_price=Decimal("80000.00"),
+            current_price=Decimal("80500.00"),
+            unrealized_pnl=Decimal("0.5"),
+            unrealized_pct=Decimal("0.625"),
+            status="open",
+            opened_at=datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc),
+        ))
+        await s.commit()
+
+    r = await client.get("/api/trades?status=open")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["current_price"] == pytest.approx(80500.0)
+    assert data[0]["unrealized_pnl_usdt"] == pytest.approx(0.5, rel=1e-4)
+    assert data[0]["sl_pnl_usdt"] == pytest.approx(-1.0, rel=1e-4)
+    assert data[0]["tp_pnl_usdt"] == pytest.approx(2.0, rel=1e-4)

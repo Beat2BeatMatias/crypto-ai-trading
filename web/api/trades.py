@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared.db.models import Trade
+from shared.db.models import Trade, Position
+from shared.pnl import compute_pnl_usdt, compute_pnl_pct
 
 router = APIRouter()
 
@@ -30,12 +31,39 @@ class TradeOut(BaseModel):
     order_id_close: str | None
     order_id_sl: str | None
     order_id_tp: str | None
+    current_price: float | None = None
+    unrealized_pnl_usdt: float | None = None
+    unrealized_pnl_pct: float | None = None
+    sl_pnl_usdt: float | None = None
+    sl_pnl_pct: float | None = None
+    tp_pnl_usdt: float | None = None
+    tp_pnl_pct: float | None = None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
         yield s
 
-def _to_out(r: Trade) -> TradeOut:
+def _open_trade_pnl(r: Trade, current_price: float | None) -> dict[str, float | None]:
+    entry = float(r.entry_price)
+    qty = float(r.quantity_btc)
+    side = r.side
+    sl = float(r.stop_loss) if r.stop_loss else None
+    tp = float(r.take_profit) if r.take_profit else None
+    return {
+        "current_price": current_price,
+        "unrealized_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=current_price, side=side),
+        "unrealized_pnl_pct": compute_pnl_pct(entry=entry, exit_price=current_price, side=side),
+        "sl_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=sl, side=side),
+        "sl_pnl_pct": compute_pnl_pct(entry=entry, exit_price=sl, side=side),
+        "tp_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=tp, side=side),
+        "tp_pnl_pct": compute_pnl_pct(entry=entry, exit_price=tp, side=side),
+    }
+
+def _to_out(r: Trade, *, current_price: float | None = None) -> TradeOut:
+    open_pnl: dict[str, float | None] = {}
+    if r.status == "open":
+        open_pnl = _open_trade_pnl(r, current_price)
+
     return TradeOut(
         id=r.id, decision_id=r.decision_id, ts_open=r.ts_open, ts_close=r.ts_close,
         side=r.side, quantity_btc=float(r.quantity_btc), entry_price=float(r.entry_price),
@@ -50,6 +78,7 @@ def _to_out(r: Trade) -> TradeOut:
         order_id_close=r.order_id_close,
         order_id_sl=r.order_id_sl,
         order_id_tp=r.order_id_tp,
+        **open_pnl,
     )
 
 @router.get("/trades", response_model=list[TradeOut])
@@ -59,7 +88,21 @@ async def list_trades(session: Annotated[AsyncSession, Depends(_session)],
     if status:
         stmt = stmt.where(Trade.status == status)
     rows = (await session.execute(stmt)).scalars().all()
-    return [_to_out(r) for r in rows]
+
+    open_trade_ids = [r.id for r in rows if r.status == "open"]
+    position_prices: dict[UUID, float | None] = {}
+    if open_trade_ids:
+        positions = (await session.execute(
+            select(Position).where(
+                Position.trade_id.in_(open_trade_ids),
+                Position.status == "open",
+            )
+        )).scalars().all()
+        for p in positions:
+            if p.trade_id is not None:
+                position_prices[p.trade_id] = float(p.current_price) if p.current_price else None
+
+    return [_to_out(r, current_price=position_prices.get(r.id)) for r in rows]
 
 @router.post("/trades/{trade_id}/close", response_model=TradeOut)
 async def request_trade_close(trade_id: UUID, session: Annotated[AsyncSession, Depends(_session)]):
@@ -71,4 +114,12 @@ async def request_trade_close(trade_id: UUID, session: Annotated[AsyncSession, D
     trade.close_requested = True
     await session.commit()
     await session.refresh(trade)
-    return _to_out(trade)
+
+    current_price = None
+    pos = (await session.execute(
+        select(Position).where(Position.trade_id == trade.id, Position.status == "open")
+    )).scalar_one_or_none()
+    if pos and pos.current_price:
+        current_price = float(pos.current_price)
+
+    return _to_out(trade, current_price=current_price)
