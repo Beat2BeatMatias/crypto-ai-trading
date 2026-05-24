@@ -409,5 +409,4 @@ docker-compose run --rm web pytest
 
 # Backup de la DB
 docker-compose exec postgres pg_dump -U trader crypto_ai_trading > backup_$(date +%Y%m%d).sql
-
 ```
