@@ -8,12 +8,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import (
     MetaData, Table, Column, String, Integer, Boolean, DateTime,
-    Numeric, Text, event,
+    Numeric, Text, event, ForeignKey,
 )
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from shared.db.models import Indicators, Ohlcv, Position, Decision
+from shared.db.models import Indicators, Ohlcv, Position, Decision, DecisionOutcome
 from agents.context_builder import ContextBuilder
 from collectors.orderbook_collector import OrderBookSnapshot, DepthLevel
 
@@ -96,6 +96,26 @@ _trades_table = Table(
     Column("order_id_tp", String(50)),   # migration 007
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),  # migration 002
+)
+
+_decision_outcomes_table = Table(
+    "decision_outcomes", _sqlite_metadata,
+    Column("decision_id", String(36), ForeignKey("decisions.id"), primary_key=True),
+    Column("horizon_min", Integer, nullable=False),
+    Column("matured", Boolean, nullable=False),
+    Column("forward_return_pct", Numeric(10, 5)),
+    Column("mfe_pct", Numeric(10, 5)),
+    Column("mae_pct", Numeric(10, 5)),
+    Column("time_to_mfe_min", Integer),
+    Column("time_to_mae_min", Integer),
+    Column("sl_dist_pct", Numeric(10, 5)),
+    Column("tp_target_pct", Numeric(10, 5)),
+    Column("classification", String(32), nullable=False),
+    Column("computed_at", DateTime, nullable=False),
+    Column("postmortem_status", String(16)),
+    Column("lesson_raw", JSON),
+    Column("lesson_normalized", JSON),
+    Column("postmortem_at", DateTime),
 )
 
 
@@ -693,3 +713,38 @@ async def test_price_falls_back_to_last_close_when_no_orderbook(session: AsyncSe
     assert ctx["price"] == pytest.approx(95000.0), (
         "Sin orderbook el precio debe venir del last_close del indicador como fallback"
     )
+
+
+@pytest.mark.asyncio
+async def test_block_k_lessons_injected_from_decision_outcomes(session: AsyncSession):
+    now = datetime.now(tz=timezone.utc)
+    decision = Decision(
+        ts=now - timedelta(hours=2),
+        agent="decisor",
+        model="test",
+        input={"price": 100.0},
+        output={"action": "BUY"},
+        executed=True,
+    )
+    session.add(decision)
+    await session.commit()
+    session.add(DecisionOutcome(
+        decision_id=decision.id,
+        horizon_min=240,
+        matured=True,
+        classification="BAD_BUY",
+        computed_at=now - timedelta(hours=1),
+        postmortem_status="completed",
+        lesson_normalized={
+            "route": "remap",
+            "confidence": 0.9,
+            "block_k_line": "[2026-05-23T14:30Z] BAD_BUY: no operar rebote RSI sin volumen.",
+            "dedupe_key": "remap:test:H",
+        },
+    ))
+    await session.commit()
+
+    ctx = await _build(session)
+
+    assert "no operar rebote RSI sin volumen" in ctx["block_k_lessons"]
+    assert "ninguna confluencia promovida" in ctx["confluence_registry_block"]

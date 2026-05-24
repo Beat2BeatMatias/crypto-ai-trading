@@ -273,6 +273,11 @@ ANTI-PATRONES
 - Usar ATR de 1h/4h del Bloque C para justificar R4 — solo atr_ref del Bloque B.
 - Copiar ATR o niveles del playbook si difieren del Bloque B/D actual.
 
+BLOQUE K — LECCIONES POST-MORTEM:
+- Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.
+- Si una lección contradice el Playbook (J), prevalece el Playbook.
+- No emitir confluencias I–Z hasta que aparezcan listadas en el bloque de registry.
+
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,
 requerir 1 confluencia adicional sobre el mínimo antes de BUY.

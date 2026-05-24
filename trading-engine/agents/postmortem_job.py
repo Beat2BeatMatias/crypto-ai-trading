@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.llm_client import LLMClient
+from agents.lesson_normalizer import normalize
 from agents.postmortem_agent import PostMortemAgent, provider_from_config
 from agents.postmortem_schemas import (
     POSTMORTEM_ELIGIBLE_CLASSIFICATIONS,
@@ -90,8 +91,14 @@ async def outcome_postmortem_tick(
                     trade=trade,
                     severity_score=severity,
                 )
+                normalized = normalize(
+                    lesson,
+                    decision_ts=decision.ts.strftime("%Y-%m-%dT%H:%MZ"),
+                    decision_input=decision.input or {},
+                )
                 outcome.postmortem_status = "completed"
                 outcome.lesson_raw = lesson.model_dump()
+                outcome.lesson_normalized = normalized.model_dump()
                 outcome.postmortem_at = now
             except Exception as e:
                 logger.error(

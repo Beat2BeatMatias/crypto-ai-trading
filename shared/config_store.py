@@ -83,6 +83,8 @@ class ConfigKey(str, Enum):
     POSTMORTEM_MAX_PER_TICK = "postmortem_max_per_tick"
     POSTMORTEM_PROVIDER = "postmortem_provider"
     POSTMORTEM_INTERVAL_MIN = "postmortem_interval_min"
+    BLOCK_K_MAX_LINES = "block_k_max_lines"
+    BLOCK_K_WINDOW_HOURS = "block_k_window_hours"
 
 
 @dataclass(frozen=True)
@@ -280,6 +282,14 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "60", "int",
         "Deprecated: post-mortem corre encadenado tras outcome attribution "
         "(mismo intervalo que outcome_attribution_interval_min). Se conserva por compatibilidad.",
+    ),
+    ConfigKey.BLOCK_K_MAX_LINES: _Default(
+        "5", "int",
+        "Máximo de líneas de lecciones post-mortem inyectadas en Bloque K del Decisor. Rango 1–10.",
+    ),
+    ConfigKey.BLOCK_K_WINDOW_HOURS: _Default(
+        "72", "int",
+        "Ventana horaria de lecciones post-mortem visibles en Bloque K. Rango 24–168.",
     ),
 }
 

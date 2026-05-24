@@ -104,3 +104,4 @@ async def test_get_outcomes_include_lessons_when_requested(client, app_with_db):
     body = resp.json()
     assert body[0]["postmortem_status"] == "completed"
     assert body[0]["lesson_raw"]["summary"] == "test lesson"
+    assert body[0]["lesson_normalized"] is None

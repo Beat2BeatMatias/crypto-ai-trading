@@ -42,6 +42,16 @@ BLOQUE G — ÚLTIMAS DECISIONES
 {last_decisions_block}
 
 ════════════════════════════════════════════
+BLOQUE K — LECCIONES RECIENTES (post-mortem, últimas 72 h)
+════════════════════════════════════════════
+Contexto operativo de errores recientes. Si contradice el Playbook (J), gana el Playbook.
+
+{block_k_lessons}
+
+Confluencias promovidas activas (I–Z):
+{confluence_registry_block}
+
+════════════════════════════════════════════
 BLOQUE H — PORTFOLIO
 ════════════════════════════════════════════
 Capital total: ${capital_total:,.2f} USDT  |  Disponible: ${usdt_available:,.2f}  |  BTC held: {btc_held:.6f}

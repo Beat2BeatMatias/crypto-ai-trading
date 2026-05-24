@@ -185,6 +185,8 @@ async def test_postmortem_tick_persists_lesson(session):
     assert outcome.postmortem_status == "completed"
     assert outcome.lesson_raw is not None
     assert outcome.lesson_raw["root_cause_tag"] == "test"
+    assert outcome.lesson_normalized is not None
+    assert outcome.lesson_normalized["route"] in ("remap", "candidate", "guidance")
     assert outcome.postmortem_at is not None
 
 

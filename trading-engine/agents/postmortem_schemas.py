@@ -61,6 +61,37 @@ class WouldChange(BaseModel):
     rationale: str = ""
 
 
+class RemapPayload(BaseModel):
+    misapplied_confluences: list[str] = Field(default_factory=list)
+    correction: str = ""
+    maps_to_existing_only: bool = True
+
+
+class CandidatePayload(BaseModel):
+    title: str
+    definition_md: str
+    verify_spec: dict[str, Any] = Field(default_factory=dict)
+    proposed_code_letter: str = "I"
+
+
+class GuidancePayload(BaseModel):
+    type: str = "general"
+    message: str
+    applies_when: dict[str, Any] = Field(default_factory=dict)
+
+
+class LessonNormalized(BaseModel):
+    version: int = 1
+    route: Literal["remap", "candidate", "guidance"]
+    pattern_tag: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    remap: RemapPayload | None = None
+    candidate: CandidatePayload | None = None
+    guidance: GuidancePayload | None = None
+    block_k_line: str
+    dedupe_key: str
+
+
 class LessonRaw(BaseModel):
     version: int = 1
     classification: str

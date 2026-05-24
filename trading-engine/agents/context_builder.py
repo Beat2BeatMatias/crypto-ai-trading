@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.db.models import Indicators, Ohlcv, Position, Decision, Trade
+from shared.db.models import Indicators, Ohlcv, Position, Decision, Trade, DecisionOutcome
 from collectors.orderbook_collector import OrderBookSnapshot
 from agents.labelers import (
     get_operational_profile,
@@ -23,6 +23,7 @@ from agents.labelers import (
     structure_label,
     imbalance_label,
 )
+from agents.lesson_normalizer import format_block_k_lessons
 
 
 _ALL_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
@@ -70,6 +71,13 @@ class ContextBuilder:
             select(Decision).where(Decision.agent == "decisor")
             .order_by(desc(Decision.ts)).limit(3)
         )).scalars().all()
+
+        block_k_max = int(cal.get("block_k_max_lines", 5))
+        block_k_window = int(cal.get("block_k_window_hours", 72))
+        block_k_lessons = await self._fetch_recent_lessons(
+            window_hours=block_k_window,
+            max_lines=block_k_max,
+        )
 
         today_start = datetime.combine(
             date.today(), datetime.min.time()
@@ -327,6 +335,10 @@ class ContextBuilder:
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
             "last_decision_ago": self._format_time_ago(last_decisions[0].ts) if last_decisions else "n/a",
 
+            # ---- Block K: Post-mortem lessons ----
+            "block_k_lessons": block_k_lessons,
+            "confluence_registry_block": "  (ninguna confluencia promovida activa.)",
+
             # ---- Block H: Portfolio state ----
             "capital_total": total_capital,
             "total_capital_usd": total_capital,
@@ -387,6 +399,21 @@ class ContextBuilder:
         ctx["block_f_text"] = self._render_cross_tf_text(cross_tf)
 
         return ctx
+
+    async def _fetch_recent_lessons(self, *, window_hours: int, max_lines: int) -> str:
+        since = datetime.now(tz=timezone.utc) - timedelta(hours=window_hours)
+        rows = (await self.session.execute(
+            select(DecisionOutcome)
+            .where(
+                DecisionOutcome.postmortem_status == "completed",
+                DecisionOutcome.computed_at >= since,
+                DecisionOutcome.lesson_normalized.isnot(None),
+            )
+            .order_by(desc(DecisionOutcome.computed_at))
+            .limit(20)
+        )).scalars().all()
+        payload = [{"lesson_normalized": r.lesson_normalized} for r in rows]
+        return format_block_k_lessons(payload, max_lines=max_lines)
 
     # ------------------------------------------------------------------ #
     # Per-TF indicator block builder

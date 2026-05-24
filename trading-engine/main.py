@@ -248,6 +248,8 @@ async def run() -> None:
                 "adj_volume_ratio": await store.get_typed(ConfigKey.ADJ_VOLUME_RATIO),
                 "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
                 "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
+                "block_k_max_lines": await store.get_typed(ConfigKey.BLOCK_K_MAX_LINES),
+                "block_k_window_hours": await store.get_typed(ConfigKey.BLOCK_K_WINDOW_HOURS),
             }
             coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
             two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
