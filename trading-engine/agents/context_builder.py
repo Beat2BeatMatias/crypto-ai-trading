@@ -23,6 +23,12 @@ from agents.labelers import (
     structure_label,
     imbalance_label,
 )
+from agents.confluence_registry import (
+    active_registry_codes,
+    fetch_active_registry,
+    registry_verify_specs,
+    render_registry_block,
+)
 from agents.lesson_normalizer import format_block_k_lessons
 
 
@@ -78,6 +84,10 @@ class ContextBuilder:
             window_hours=block_k_window,
             max_lines=block_k_max,
         )
+        registry_entries = await fetch_active_registry(self.session)
+        registry_block = render_registry_block(registry_entries)
+        active_codes = sorted(active_registry_codes(registry_entries))
+        verify_specs = registry_verify_specs(registry_entries)
 
         today_start = datetime.combine(
             date.today(), datetime.min.time()
@@ -337,7 +347,9 @@ class ContextBuilder:
 
             # ---- Block K: Post-mortem lessons ----
             "block_k_lessons": block_k_lessons,
-            "confluence_registry_block": "  (ninguna confluencia promovida activa.)",
+            "confluence_registry_block": registry_block,
+            "active_registry_confluence_codes": active_codes,
+            "registry_verify_specs": verify_specs,
 
             # ---- Block H: Portfolio state ----
             "capital_total": total_capital,

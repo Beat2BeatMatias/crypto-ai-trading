@@ -85,6 +85,9 @@ class ConfigKey(str, Enum):
     POSTMORTEM_INTERVAL_MIN = "postmortem_interval_min"
     BLOCK_K_MAX_LINES = "block_k_max_lines"
     BLOCK_K_WINDOW_HOURS = "block_k_window_hours"
+    CONFLUENCE_PROMOTION_MIN_OCCURRENCES = "confluence_promotion_min_occurrences"
+    CONFLUENCE_PROMOTION_WINDOW_DAYS = "confluence_promotion_window_days"
+    CONFLUENCE_REGISTRY_MAX_ACTIVE = "confluence_registry_max_active"
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,18 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.BLOCK_K_WINDOW_HOURS: _Default(
         "72", "int",
         "Ventana horaria de lecciones post-mortem visibles en Bloque K. Rango 24–168.",
+    ),
+    ConfigKey.CONFLUENCE_PROMOTION_MIN_OCCURRENCES: _Default(
+        "3", "int",
+        "Ocurrencias mínimas de un pattern_tag para promover candidato a catálogo I–Z. Rango 2–10.",
+    ),
+    ConfigKey.CONFLUENCE_PROMOTION_WINDOW_DAYS: _Default(
+        "7", "int",
+        "Ventana en días para contar ocurrencias de candidatos a confluencia. Rango 3–30.",
+    ),
+    ConfigKey.CONFLUENCE_REGISTRY_MAX_ACTIVE: _Default(
+        "5", "int",
+        "Máximo de confluencias promovidas activas (I–Z) simultáneas. Rango 1–18.",
     ),
 }
 

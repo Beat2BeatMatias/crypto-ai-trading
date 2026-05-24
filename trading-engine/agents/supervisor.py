@@ -5,12 +5,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import (
     Decision, Trade, PlaybookVersion, Ohlcv, Indicators,
     ConfigEntry, ConfigHistory, FeeSnapshot, BalanceSnapshot,
-    DecisionOutcome,
+    DecisionOutcome, ConfluenceCandidate, ConfluenceRegistry,
 )
 from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
@@ -310,6 +310,15 @@ class Supervisor:
                                 applied=len(applied), rejected=len(rejected))
                 except Exception as e:
                     logger.warning("supervisor.suggestions_failed", error=str(e))
+
+            try:
+                promotions = await self._promote_confluence_candidates(
+                    active_playbook=active_playbook,
+                    current_config=current_config or {},
+                )
+                output["confluence_promotions"] = promotions
+            except Exception as e:
+                logger.warning("supervisor.confluence_promotion_failed", error=str(e))
 
         except Exception as e:
             logger.error("supervisor.error", error=str(e))
@@ -1170,6 +1179,17 @@ class Supervisor:
             )
         top_misses_block = "\n".join(top_misses_lines) or "  (sin misses en el período)"
 
+        open_confluence_candidates = (await self.session.execute(
+            select(func.count()).select_from(ConfluenceCandidate).where(
+                ConfluenceCandidate.status == "open",
+            )
+        )).scalar_one()
+        active_confluence_registry = (await self.session.execute(
+            select(func.count()).select_from(ConfluenceRegistry).where(
+                ConfluenceRegistry.active.is_(True),
+            )
+        )).scalar_one()
+
         return {
             "total_decisions": len(decisions),
             "buy_count": action_counts["BUY"],
@@ -1227,4 +1247,26 @@ class Supervisor:
             "missed_rate": round(missed_rate, 1),
             "bad_buy_rate": round(bad_buy_rate, 1),
             "top_misses_block": top_misses_block,
+            "open_confluence_candidates": open_confluence_candidates,
+            "active_confluence_registry": active_confluence_registry,
         }
+
+    async def _promote_confluence_candidates(
+        self,
+        *,
+        active_playbook,
+        current_config: dict,
+    ) -> list[dict]:
+        from agents.confluence_registry import promote_eligible_candidates
+
+        min_occ = int(current_config.get("confluence_promotion_min_occurrences", 3))
+        window = int(current_config.get("confluence_promotion_window_days", 7))
+        max_active = int(current_config.get("confluence_registry_max_active", 5))
+        playbook_content = active_playbook.content if active_playbook else ""
+        return await promote_eligible_candidates(
+            self.session,
+            min_occurrences=min_occ,
+            window_days=window,
+            max_active=max_active,
+            playbook_content=playbook_content,
+        )

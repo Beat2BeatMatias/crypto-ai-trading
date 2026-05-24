@@ -254,6 +254,36 @@ class TestC7RRRatioVerification:
 
 
 # ---------------------------------------------------------------------------
+# C8 — verify_spec para confluencias extendidas I–Z
+# ---------------------------------------------------------------------------
+
+def test_c8_extended_confluence_verify_fails_when_spec_not_met():
+    checker = CoherenceChecker(strict_mode=False)
+    decision = _buy(confluences=["H", "I"])
+    ctx = _ctx(
+        registry_verify_specs={
+            "I": {"all": [{"ctx": "volume_ratio", "lt": 0.8}]},
+        },
+        volume_ratio=1.2,
+    )
+
+    warnings = checker.evaluate(decision, ctx)
+    c8 = [w for w in warnings if w.rule_id == "C8"]
+
+    assert len(c8) == 1
+    assert c8[0].severity == "warning"
+
+
+def test_c8_skips_static_catalog_codes():
+    checker = CoherenceChecker(strict_mode=False)
+    decision = _buy(confluences=["A", "H"])
+    ctx = _ctx(registry_verify_specs={"A": {"all": [{"ctx": "rsi_15m", "lt": 10}]}})
+
+    warnings = checker.evaluate(decision, ctx)
+    assert [w for w in warnings if w.rule_id == "C8"] == []
+
+
+# ---------------------------------------------------------------------------
 # has_critical — C7 siempre activa el bloqueo
 # ---------------------------------------------------------------------------
 

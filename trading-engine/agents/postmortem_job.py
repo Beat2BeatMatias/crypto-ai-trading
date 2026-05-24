@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.llm_client import LLMClient
+from agents.confluence_registry import fetch_promoted_pattern_tags, upsert_candidate
 from agents.lesson_normalizer import normalize
 from agents.postmortem_agent import PostMortemAgent, provider_from_config
 from agents.postmortem_schemas import (
@@ -82,6 +83,7 @@ async def outcome_postmortem_tick(
 
         ranked = _rank_candidates(enriched)[:max_per_tick]
         processed = 0
+        promoted_tags = await fetch_promoted_pattern_tags(session)
 
         for decision, outcome, trade, severity in ranked:
             try:
@@ -95,11 +97,19 @@ async def outcome_postmortem_tick(
                     lesson,
                     decision_ts=decision.ts.strftime("%Y-%m-%dT%H:%MZ"),
                     decision_input=decision.input or {},
+                    promoted_pattern_tags=promoted_tags,
                 )
                 outcome.postmortem_status = "completed"
                 outcome.lesson_raw = lesson.model_dump()
                 outcome.lesson_normalized = normalized.model_dump()
                 outcome.postmortem_at = now
+                if normalized.route == "candidate":
+                    await upsert_candidate(
+                        session,
+                        normalized=normalized,
+                        decision_id=decision.id,
+                        now=now,
+                    )
             except Exception as e:
                 logger.error(
                     "postmortem.job.failed",

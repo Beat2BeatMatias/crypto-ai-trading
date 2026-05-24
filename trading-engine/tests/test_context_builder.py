@@ -118,6 +118,36 @@ _decision_outcomes_table = Table(
     Column("postmortem_at", DateTime),
 )
 
+_confluence_candidates_table = Table(
+    "confluence_candidates", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("pattern_tag", String(64), nullable=False, unique=True),
+    Column("proposed_code", String(1)),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("occurrence_count", Integer, nullable=False),
+    Column("first_seen_at", DateTime, nullable=False),
+    Column("last_seen_at", DateTime, nullable=False),
+    Column("source_decision_ids", JSON, nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("promoted_at", DateTime),
+    Column("reject_reason", Text),
+)
+
+_confluence_registry_table = Table(
+    "confluence_registry", _sqlite_metadata,
+    Column("code", String(1), primary_key=True),
+    Column("slug", String(64), nullable=False, unique=True),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("active", Boolean, nullable=False),
+    Column("promoted_from", String(36), ForeignKey("confluence_candidates.id")),
+    Column("created_at", DateTime, nullable=False),
+    Column("deactivated_at", DateTime),
+)
+
 
 # ---------------------------------------------------------------------------
 # ORM event hooks — generate PKs / timestamps at Python level for SQLite

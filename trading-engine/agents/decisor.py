@@ -15,7 +15,29 @@ from risk.coherence_checker import CoherenceChecker, CoherenceWarning
 
 logger = structlog.get_logger()
 
-_VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
+_VALID_STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGH")
+
+
+def _valid_confluence_codes(active_registry: frozenset[str]) -> frozenset[str]:
+    return _VALID_STATIC_CONFLUENCE_CODES | active_registry
+
+
+def _filter_confluence_codes(
+    confluences: list[str],
+    active_registry: frozenset[str] | None = None,
+) -> list[str]:
+    """Elimina códigos fuera del catálogo A–H + letras activas en registry."""
+    valid_set = _valid_confluence_codes(active_registry or frozenset())
+    valid = [c for c in confluences if c in valid_set]
+    invalid = [c for c in confluences if c not in valid_set]
+    if invalid:
+        logger.warning(
+            "decisor.invalid_confluence_codes_filtered",
+            invalid=invalid,
+            remaining_valid=valid,
+            valid_catalog=sorted(valid_set),
+        )
+    return valid
 
 # Reglas de coherencia que disparan el two-pass.
 # C1/C2/C3 son inconsistencias factuales (el LLM declaró algo que los
@@ -28,20 +50,6 @@ _VALID_CONFLUENCE_CODES = frozenset("ABCDEFGH")
 # vuelve a alucinarlo, C7 dispara de nuevo en la re-evaluación y
 # el has_critical() lo bloquea a HOLD antes de ejecutar.
 _TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C7"})
-
-
-def _filter_confluence_codes(confluences: list[str]) -> list[str]:
-    """Elimina códigos fuera del catálogo A–H y loguea lo que se descarta."""
-    valid = [c for c in confluences if c in _VALID_CONFLUENCE_CODES]
-    invalid = [c for c in confluences if c not in _VALID_CONFLUENCE_CODES]
-    if invalid:
-        logger.warning(
-            "decisor.invalid_confluence_codes_filtered",
-            invalid=invalid,
-            remaining_valid=valid,
-            valid_catalog=sorted(_VALID_CONFLUENCE_CODES),
-        )
-    return valid
 
 
 class Decisor:
@@ -87,6 +95,8 @@ class Decisor:
         if ctx.get("playbook"):
             ctx["playbook"] = _safe_substitute(ctx["playbook"], ctx)
 
+        active_ext = frozenset(ctx.get("active_registry_confluence_codes") or [])
+
         system_prompt = self.prompt_manager.load_system_prompt("decisor")
         system_prompt = _safe_substitute(system_prompt, ctx)
         user_prompt = self.prompt_manager.render_user_prompt("decisor", ctx, strict=False)
@@ -105,7 +115,7 @@ class Decisor:
             )
             validated = _parse_llm_output(resp.text)
 
-            clean_confluences = _filter_confluence_codes(validated.confluences)
+            clean_confluences = _filter_confluence_codes(validated.confluences, active_ext)
             if len(clean_confluences) != len(validated.confluences):
                 validated = validated.model_copy(update={"confluences": clean_confluences})
 
@@ -136,7 +146,7 @@ class Decisor:
                         fallbacks=self.fallbacks,
                     )
                     validated_review = _parse_llm_output(resp_review.text)
-                    clean_review = _filter_confluence_codes(validated_review.confluences)
+                    clean_review = _filter_confluence_codes(validated_review.confluences, active_ext)
                     if len(clean_review) != len(validated_review.confluences):
                         validated_review = validated_review.model_copy(
                             update={"confluences": clean_review}

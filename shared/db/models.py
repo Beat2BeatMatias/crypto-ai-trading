@@ -270,3 +270,45 @@ class BalanceSnapshot(Base):
     __table_args__ = (
         Index("idx_balance_snapshots_ts", "ts"),
     )
+
+
+class ConfluenceCandidate(Base):
+    __tablename__ = "confluence_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"),
+    )
+    pattern_tag: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    proposed_code: Mapped[str | None] = mapped_column(String(1))
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    definition_md: Mapped[str] = mapped_column(Text, nullable=False)
+    verify_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_decision_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        Index("idx_confluence_candidates_status", "status", "occurrence_count"),
+    )
+
+
+class ConfluenceRegistry(Base):
+    __tablename__ = "confluence_registry"
+
+    code: Mapped[str] = mapped_column(String(1), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    definition_md: Mapped[str] = mapped_column(Text, nullable=False)
+    verify_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    promoted_from: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("confluence_candidates.id"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

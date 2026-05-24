@@ -3,7 +3,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import JSON, String, Column, ForeignKey, MetaData, Table
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID, ARRAY
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
@@ -37,6 +37,8 @@ def _build_sqlite_meta(base_meta) -> MetaData:
                 col_type = JSON()
             elif isinstance(col_type, PG_UUID):
                 col_type = String(36)
+            elif isinstance(col_type, ARRAY):
+                col_type = JSON()
 
             # Strip server_defaults that SQLite cannot parse
             server_default = orig_col.server_default

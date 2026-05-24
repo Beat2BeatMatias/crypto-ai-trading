@@ -18,6 +18,7 @@ from typing import Any
 
 import structlog
 
+from agents.confluence_registry import STATIC_CONFLUENCE_CODES, evaluate_verify_spec
 from shared.schemas import DecisorOutput, DecisorAction
 
 logger = structlog.get_logger()
@@ -66,6 +67,7 @@ class CoherenceChecker:
         warnings.extend(self._c5_buy_low_confidence_no_tag(decision, ctx))
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
         warnings.extend(self._c7_rr_ratio_verification(decision, ctx))
+        warnings.extend(self._c8_extended_confluence_verify(decision, ctx))
 
         if warnings:
             logger.warning(
@@ -339,3 +341,28 @@ class CoherenceChecker:
                 "risk": round(sl_distance, 2),
             },
         )]
+
+    def _c8_extended_confluence_verify(
+        self,
+        decision: DecisorOutput,
+        ctx: dict[str, Any],
+    ) -> list[CoherenceWarning]:
+        specs = ctx.get("registry_verify_specs") or {}
+        if not specs:
+            return []
+        warnings: list[CoherenceWarning] = []
+        for code in decision.confluences:
+            if code in STATIC_CONFLUENCE_CODES or code not in specs:
+                continue
+            if evaluate_verify_spec(specs[code], ctx):
+                continue
+            warnings.append(CoherenceWarning(
+                rule_id="C8",
+                severity="warning",
+                message=(
+                    f"Confluencia extendida '{code}' declarada pero verify_spec "
+                    "no se cumple con la evidencia del ciclo."
+                ),
+                evidence={"code": code, "verify_spec": specs[code]},
+            ))
+        return warnings
