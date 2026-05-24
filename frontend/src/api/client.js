@@ -66,4 +66,12 @@ export const api = {
     },
     dailyStats: () => get("/stats/daily"),
     ohlcv: (timeframe, limit = 300) => get(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
+    confluenceCandidates: (status) => {
+        const q = status ? `?status=${encodeURIComponent(status)}` : "";
+        return get(`/confluence/candidates${q}`);
+    },
+    confluenceRegistry: (activeOnly = true) => get(`/confluence/registry?active_only=${activeOnly}`),
+    promoteConfluenceCandidate: (id) => post(`/confluence/candidates/${id}/promote`, {}),
+    rejectConfluenceCandidate: (id, reason) => post(`/confluence/candidates/${id}/reject`, { reason }),
+    deactivateConfluence: (code) => post(`/confluence/registry/${code}/deactivate`, {}),
 };

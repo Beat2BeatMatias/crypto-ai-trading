@@ -143,3 +143,31 @@ export interface Candle {
   close: number | null;
   volume: number | null;
 }
+
+export interface ConfluenceCandidate {
+  id: string;
+  pattern_tag: string;
+  proposed_code: string | null;
+  title: string;
+  definition_md: string;
+  verify_spec: Record<string, unknown>;
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  source_decision_ids: string[];
+  status: "open" | "promoted" | "rejected" | "merged" | string;
+  promoted_at: string | null;
+  reject_reason: string | null;
+}
+
+export interface ConfluenceRegistryEntry {
+  code: string;
+  slug: string;
+  title: string;
+  definition_md: string;
+  verify_spec: Record<string, unknown>;
+  active: boolean;
+  promoted_from: string | null;
+  created_at: string;
+  deactivated_at: string | null;
+}

@@ -1,29 +1,37 @@
 """Confluence registry — candidates queue, promotion, verify_spec evaluation."""
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.postmortem_schemas import LessonNormalized
+from shared.confluence_registry_ops import (
+    STATIC_CONFLUENCE_CODES,
+    playbook_conflict,
+    promote_candidate_row,
+    verify_spec_testable,
+)
 from shared.db.models import ConfluenceCandidate, ConfluenceRegistry
 
 logger = structlog.get_logger()
 
-STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGH")
-EXTENDED_LETTERS = [chr(c) for c in range(ord("I"), ord("Z") + 1)]
-LETTER_RECYCLE_DAYS = 30
-
-_KNOWN_CTX_KEYS = frozenset({
-    "price", "rsi_15m", "rsi_5m", "rsi_1h", "hist_15m", "hist_1h",
-    "volume_ratio", "block_a_profile", "pct_24h", "imbalance",
-    "block_f_cross_tf", "volatility_label", "macd_15m", "adx_15m",
-})
+__all__ = [
+    "STATIC_CONFLUENCE_CODES",
+    "fetch_active_registry",
+    "active_registry_codes",
+    "render_registry_block",
+    "registry_verify_specs",
+    "fetch_promoted_pattern_tags",
+    "upsert_candidate",
+    "promote_eligible_candidates",
+    "verify_spec_testable",
+    "evaluate_verify_spec",
+]
 
 
 async def fetch_active_registry(session: AsyncSession) -> list[ConfluenceRegistry]:
@@ -126,9 +134,9 @@ async def promote_eligible_candidates(
     now = now or datetime.now(tz=timezone.utc)
     window_start = now - timedelta(days=window_days)
 
-    active_count = (await session.execute(
-        select(func.count()).select_from(ConfluenceRegistry).where(ConfluenceRegistry.active.is_(True))
-    )).scalar_one()
+    from shared.confluence_registry_ops import active_registry_count
+
+    active_count = await active_registry_count(session)
     if active_count >= max_active:
         logger.info("confluence.promotion.skipped_max_active", active=active_count, max_active=max_active)
         return []
@@ -150,64 +158,42 @@ async def promote_eligible_candidates(
             break
         if not verify_spec_testable(candidate.verify_spec):
             continue
-        if _playbook_conflict(playbook_content, candidate.title, candidate.definition_md):
+        if playbook_conflict(playbook_content, candidate.title, candidate.definition_md):
             logger.info(
                 "confluence.promotion.skipped_playbook_conflict",
                 pattern_tag=candidate.pattern_tag,
             )
             continue
-
-        code = await _next_available_letter(session, now=now)
-        if code is None:
-            logger.warning("confluence.promotion.no_letters_available")
-            break
-
-        slug = _slug_from_tag(candidate.pattern_tag)
-        registry_row = ConfluenceRegistry(
-            code=code,
-            slug=slug,
-            title=candidate.title,
-            definition_md=candidate.definition_md,
-            verify_spec=candidate.verify_spec,
-            active=True,
-            promoted_from=candidate.id,
-            created_at=now,
-        )
-        candidate.status = "promoted"
-        candidate.proposed_code = code
-        candidate.promoted_at = now
-        session.add(registry_row)
-        session.add(candidate)
+        try:
+            registry_row = await promote_candidate_row(
+                session,
+                candidate,
+                max_active=max_active,
+                playbook_content=playbook_content,
+                now=now,
+            )
+        except Exception as e:
+            logger.warning(
+                "confluence.promotion.candidate_failed",
+                pattern_tag=candidate.pattern_tag,
+                error=str(e),
+            )
+            continue
         promoted.append({
-            "code": code,
-            "slug": slug,
+            "code": registry_row.code,
+            "slug": registry_row.slug,
             "pattern_tag": candidate.pattern_tag,
             "title": candidate.title,
             "occurrence_count": candidate.occurrence_count,
         })
         logger.info(
             "confluence.promoted",
-            code=code,
+            code=registry_row.code,
             pattern_tag=candidate.pattern_tag,
             occurrences=candidate.occurrence_count,
         )
 
-    if promoted:
-        await session.flush()
     return promoted
-
-
-def verify_spec_testable(spec: dict[str, Any]) -> bool:
-    if not spec:
-        return False
-    rules = list(spec.get("all") or []) + list(spec.get("any") or [])
-    if not rules:
-        return False
-    for rule in rules:
-        key = rule.get("ctx")
-        if not key or key not in _KNOWN_CTX_KEYS:
-            return False
-    return True
 
 
 def evaluate_verify_spec(spec: dict[str, Any], ctx: dict[str, Any]) -> bool:
@@ -250,45 +236,3 @@ def _eval_rule(rule: dict[str, Any], ctx: dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return True
-
-
-async def _next_available_letter(session: AsyncSession, *, now: datetime) -> str | None:
-    recycle_cutoff = now - timedelta(days=LETTER_RECYCLE_DAYS)
-    rows = list((await session.execute(select(ConfluenceRegistry))).scalars().all())
-    reserved: set[str] = set()
-    for row in rows:
-        if row.active:
-            reserved.add(row.code)
-            continue
-        if row.deactivated_at is None or row.deactivated_at > recycle_cutoff:
-            reserved.add(row.code)
-    for letter in EXTENDED_LETTERS:
-        if letter not in reserved:
-            return letter
-    return None
-
-
-def _slug_from_tag(pattern_tag: str) -> str:
-    slug = re.sub(r"[^a-z0-9_]+", "_", pattern_tag.lower()).strip("_")
-    return slug[:64] or "pattern"
-
-
-def _playbook_conflict(playbook: str, title: str, definition_md: str) -> bool:
-    if not playbook:
-        return False
-    strict_lines = [
-        line.strip()
-        for line in playbook.splitlines()
-        if "[STRICT]" in line.upper()
-    ]
-    if not strict_lines:
-        return False
-    haystack = f"{title} {definition_md}".lower()
-    for line in strict_lines:
-        tokens = re.findall(r"[a-záéíóúñ]{5,}", line.lower())
-        for token in tokens:
-            if token in haystack and any(
-                neg in line.lower() for neg in ("no ", "nunca", "prohibido", "evitar")
-            ):
-                return True
-    return False

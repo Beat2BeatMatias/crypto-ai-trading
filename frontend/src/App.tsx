@@ -5,6 +5,7 @@ import { Decisions } from "./pages/Decisions";
 import { PlaybookPage } from "./pages/Playbook";
 import { Config } from "./pages/Config";
 import { Health } from "./pages/Health";
+import { ConfluencePage } from "./pages/Confluence";
 
 function NavBar() {
   const base = "px-3 py-2 text-sm text-zinc-400 hover:text-white";
@@ -15,7 +16,7 @@ function NavBar() {
       <div className="flex">
         {[
           ["/", "Dashboard"], ["/trades", "Trades"],
-          ["/decisions", "Decisiones"], ["/playbook", "Playbook"],
+          ["/decisions", "Decisiones"], ["/confluence", "Confluencias"], ["/playbook", "Playbook"],
           ["/config", "Config"], ["/health", "Health"],
         ].map(([to, label]) => (
           <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => `${base} ${isActive ? active : ""}`}>
@@ -36,6 +37,7 @@ export function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/trades" element={<Trades />} />
           <Route path="/decisions" element={<Decisions />} />
+          <Route path="/confluence" element={<ConfluencePage />} />
           <Route path="/playbook" element={<PlaybookPage />} />
           <Route path="/config" element={<Config />} />
           <Route path="/health" element={<Health />} />

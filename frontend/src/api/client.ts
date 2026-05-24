@@ -1,4 +1,4 @@
-import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, Balance, Candle, Timeframe, SupervisorRun, DecisionOutcome } from "../types";
+import type { Trade, Position, Decision, ConfigEntry, Playbook, DailyStats, Balance, Candle, Timeframe, SupervisorRun, DecisionOutcome, ConfluenceCandidate, ConfluenceRegistryEntry } from "../types";
 
 const BASE = "/api";
 
@@ -69,4 +69,16 @@ export const api = {
   dailyStats: () => get<DailyStats>("/stats/daily"),
   ohlcv: (timeframe: Timeframe, limit = 300) =>
     get<Candle[]>(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
+  confluenceCandidates: (status?: string) => {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return get<ConfluenceCandidate[]>(`/confluence/candidates${q}`);
+  },
+  confluenceRegistry: (activeOnly = true) =>
+    get<ConfluenceRegistryEntry[]>(`/confluence/registry?active_only=${activeOnly}`),
+  promoteConfluenceCandidate: (id: string) =>
+    post<ConfluenceRegistryEntry>(`/confluence/candidates/${id}/promote`, {}),
+  rejectConfluenceCandidate: (id: string, reason: string) =>
+    post<ConfluenceCandidate>(`/confluence/candidates/${id}/reject`, { reason }),
+  deactivateConfluence: (code: string) =>
+    post<ConfluenceRegistryEntry>(`/confluence/registry/${code}/deactivate`, {}),
 };
