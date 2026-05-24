@@ -525,51 +525,47 @@ async def run() -> None:
 
     async def outcome_attribution_tick_wrapper() -> None:
         from agents.outcome_attribution_job import outcome_attribution_tick
+        from agents.postmortem_job import outcome_postmortem_tick
+
         horizon_min = 240
         coverage_threshold_pct = 30.0
+        postmortem_enabled = True
+        max_per_tick = 5
+        provider_name = "gemini-2.5-flash"
         try:
             async with session_factory() as s:
                 store = ConfigStore(s)
                 horizon_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_HORIZON_MIN))
                 coverage_threshold_pct = float(await store.get_typed(ConfigKey.OUTCOME_COVERAGE_THRESHOLD_PCT))
+                postmortem_enabled = bool(await store.get_typed(ConfigKey.POSTMORTEM_ENABLED))
+                max_per_tick = int(await store.get_typed(ConfigKey.POSTMORTEM_MAX_PER_TICK))
+                provider_name = str(await store.get(ConfigKey.POSTMORTEM_PROVIDER))
         except Exception as e:
             logger.warning("outcome_attribution.config_read_failed", error=str(e))
+
         await outcome_attribution_tick(
             session_factory=session_factory,
             horizon_min=horizon_min,
             coverage_threshold_pct=coverage_threshold_pct,
         )
 
-    async def outcome_postmortem_tick_wrapper() -> None:
-        from agents.postmortem_job import outcome_postmortem_tick
-
-        enabled = True
-        max_per_tick = 5
-        provider_name = "gemini-2.5-flash"
-        interval_min = 60
-        try:
-            async with session_factory() as s:
-                store = ConfigStore(s)
-                enabled = bool(await store.get_typed(ConfigKey.POSTMORTEM_ENABLED))
-                max_per_tick = int(await store.get_typed(ConfigKey.POSTMORTEM_MAX_PER_TICK))
-                provider_name = str(await store.get(ConfigKey.POSTMORTEM_PROVIDER))
-        except Exception as e:
-            logger.warning("postmortem.config_read_failed", error=str(e))
-        if not enabled:
+        if not postmortem_enabled:
             return
-        await outcome_postmortem_tick(
-            session_factory=session_factory,
-            llm=llm,
-            max_per_tick=max_per_tick,
-            provider_name=provider_name,
-        )
+        try:
+            await outcome_postmortem_tick(
+                session_factory=session_factory,
+                llm=llm,
+                max_per_tick=max_per_tick,
+                provider_name=provider_name,
+            )
+        except Exception as e:
+            logger.error("postmortem.job.error", error=str(e))
 
     async with session_factory() as s:
         store = ConfigStore(s)
         interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
         cron = await store.get(ConfigKey.SUPERVISOR_CRON)
         outcome_interval_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_INTERVAL_MIN))
-        postmortem_interval_min = int(await store.get_typed(ConfigKey.POSTMORTEM_INTERVAL_MIN))
 
     sched.add_decisor(decisor_tick, interval_min=interval_min)
     sched.add_supervisor(supervisor_tick, cron=cron)
@@ -578,9 +574,11 @@ async def run() -> None:
     sched.add_position_refresh(positions_tick, seconds=30)
     sched.add_order_tracker(order_tracker_tick, seconds=30)
     sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=outcome_interval_min)
-    sched.add_outcome_postmortem(outcome_postmortem_tick_wrapper, interval_min=postmortem_interval_min)
-    logger.info("scheduler.outcome_attribution_registered", interval_min=outcome_interval_min)
-    logger.info("scheduler.postmortem_registered", interval_min=postmortem_interval_min)
+    logger.info(
+        "scheduler.outcome_attribution_registered",
+        interval_min=outcome_interval_min,
+        postmortem_chained=True,
+    )
     sched.start()
 
     stop_event = asyncio.Event()

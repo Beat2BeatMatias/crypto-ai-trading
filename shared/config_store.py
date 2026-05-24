@@ -278,7 +278,8 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.POSTMORTEM_INTERVAL_MIN: _Default(
         "60", "int",
-        "Cada cuántos minutos corre el job de post-mortem (offset implícito post attribution). Rango 15–240.",
+        "Deprecated: post-mortem corre encadenado tras outcome attribution "
+        "(mismo intervalo que outcome_attribution_interval_min). Se conserva por compatibilidad.",
     ),
 }
 

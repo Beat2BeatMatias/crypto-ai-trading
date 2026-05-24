@@ -85,9 +85,9 @@ Jobs:
 
 | Job | Frecuencia | Modelo LLM sugerido |
 |---|---|---|
-| `outcome_postmortem_tick` | 60 min (offset +5 min post attribution) | Flash / Haiku |
-| `lesson_normalizer_tick` | 60 min (mismo tick o inmediato después) | Determinístico + fallback LLM |
-| Promoción | 1×/día en ciclo Supervisor | Supervisor ratifica |
+| `outcome_attribution_tick` + `outcome_postmortem_tick` (encadenados) | `outcome_attribution_interval_min` (default 60 min) | Flash / Haiku |
+
+El post-mortem corre **inmediatamente después** de outcome attribution en el mismo wrapper (`outcome_attribution_tick_wrapper`), garantizando que `decision_outcomes` esté actualizado antes del análisis LLM.
 
 Límite de costo: **max 5 post-mortems por tick**, priorizados por `severity_score` (ver §5.3).
 
