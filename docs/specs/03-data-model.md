@@ -1,7 +1,7 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.1 — 2026-05-23.
+> Versión: 1.2 — 2026-05-24.
 
 Base de datos: **Postgres 17** (imagen `postgres:17-alpine`).
 SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migraciones en `trading-engine/alembic/versions/`.
@@ -34,7 +34,13 @@ SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migracio
                           │ decision_outcomes│            │   positions    │
                           │ PK decision_id   │            │ id (uuid)      │
                           │ MFE/MAE, class.  │            └────────────────┘
-                          └──────────────────┘
+                          │ post-mortem cols │
+                          └────────┬─────────┘
+                                   │
+   ┌────────────────────┐          │            ┌─────────────────────┐
+   │ confluence_        │◄─────────┘ (source)   │ confluence_registry │
+   │ candidates         │──promote─────────────►│ PK code (I–Z)       │
+   └────────────────────┘                        └─────────────────────┘
 
    ┌────────────────┐      ┌─────────────┐
    │ config         │      │ config_hist │
@@ -125,8 +131,50 @@ Atribución contrafactual 1:1 con `decisions.id`. Poblada por `outcome_attributi
 | `tp_target_pct` | NUMERIC(10,5) | YES | Distancia TP declarada (%) |
 | `classification` | VARCHAR(32) | NO | `GOOD_BUY`, `BAD_BUY`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN` |
 | `computed_at` | TIMESTAMPTZ | NO | `now()` |
+| `postmortem_status` | VARCHAR(16) | YES | `completed` \| `failed` \| `null` (migration 011) |
+| `lesson_raw` | JSONB | YES | Payload validado del PostMortemAgent |
+| `lesson_normalized` | JSONB | YES | Salida del normalizador (`route`, `dedupe_key`, `block_k_line`, …) |
+| `postmortem_at` | TIMESTAMPTZ | YES | Timestamp del análisis post-mortem |
 
-- Índices: `idx_decision_outcomes_classification (classification, computed_at)`, `idx_decision_outcomes_pending (matured) WHERE matured = false`.
+- Índices: `idx_decision_outcomes_classification (classification, computed_at)`, `idx_decision_outcomes_pending (matured) WHERE matured = false`, `idx_decision_outcomes_postmortem_pending` (parcial: outcomes elegibles sin post-mortem).
+
+### 2.3.ter `confluence_candidates` (migration 012)
+
+Patrones compuestos aprendidos vía post-mortem, pendientes de promoción a registry.
+
+| Columna | Tipo | Nullable | Notas |
+|---------|------|----------|-------|
+| `id` | UUID | NO | PK |
+| `pattern_tag` | VARCHAR(64) | NO | Unique; clave de deduplicación |
+| `proposed_code` | VARCHAR(1) | YES | Letra sugerida I–Z |
+| `title` | VARCHAR(128) | NO | |
+| `definition_md` | TEXT | NO | Definición operacional markdown |
+| `verify_spec` | JSONB | NO | Spec testeable contra ctx del Decisor |
+| `occurrence_count` | INT | NO | default 1 |
+| `first_seen_at` | TIMESTAMPTZ | NO | |
+| `last_seen_at` | TIMESTAMPTZ | NO | |
+| `source_decision_ids` | JSONB | NO | Lista de UUIDs (no ARRAY — compat SQLite tests) |
+| `status` | VARCHAR(16) | NO | `open` \| `promoted` \| `rejected` |
+| `promoted_at` | TIMESTAMPTZ | YES | |
+| `reject_reason` | TEXT | YES | |
+
+- Índice: `idx_confluence_candidates_status (status, occurrence_count DESC)`.
+
+### 2.3.iv `confluence_registry` (migration 012)
+
+Catálogo dinámico de letras I–Z promovidas.
+
+| Columna | Tipo | Nullable | Notas |
+|---------|------|----------|-------|
+| `code` | VARCHAR(1) | NO | PK; letra I–Z |
+| `slug` | VARCHAR(64) | NO | Unique |
+| `title` | VARCHAR(128) | NO | |
+| `definition_md` | TEXT | NO | |
+| `verify_spec` | JSONB | NO | |
+| `active` | BOOLEAN | NO | default true |
+| `promoted_from` | UUID | YES | FK `confluence_candidates.id` |
+| `created_at` | TIMESTAMPTZ | NO | |
+| `deactivated_at` | TIMESTAMPTZ | YES | Reserva letra 30 días |
 
 ### 2.4 `trades`
 
@@ -283,6 +331,8 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 008 | `008_add_decision_outcomes.py` | Tabla `decision_outcomes` + índices. |
 | 009 | `009_expand_close_reason_length.py` | `close_reason` VARCHAR(20) → VARCHAR(30). |
 | 010 | `010_add_balance_locked_fields.py` | `balance_snapshots.usdt_locked`, `btc_locked`. |
+| 011 | `011_add_decision_outcome_postmortem.py` | Columnas post-mortem en `decision_outcomes` + índice parcial pending. |
+| 012 | `012_add_confluence_registry.py` | Tablas `confluence_candidates`, `confluence_registry`. |
 
 Comandos:
 
@@ -309,6 +359,9 @@ alembic downgrade -1        # rollback granular
 | Insert `Decision` | 1/tick + 1/día | Sin update salvo `rejected_reason`. |
 | Read `Decision` últimos 3 | 1/tick | `WHERE agent='decisor' ORDER BY ts DESC LIMIT 3`. |
 | Insert/UPSERT `DecisionOutcome` | 1/h (configurable) | UPSERT por `decision_id`. |
+| Update post-mortem columns | encadenado a attribution | Máx. `postmortem_max_per_tick` por tick. |
+| UPSERT `ConfluenceCandidate` | encadenado a post-mortem | Por `pattern_tag`. |
+| Read `ConfluenceRegistry WHERE active` | 1/tick Decisor | Pequeño (≤5 filas típico). |
 | Read `Position WHERE status='open'` | 1/tick + 2/min (WS) | Pequeño. |
 | Insert `Position` | en cada BUY | |
 | Update `Position` | 1×/30s (refresh_unrealized) | Pequeño número de filas. |

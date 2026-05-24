@@ -1,7 +1,9 @@
 # Especificación Funcional — Crypto AI Trading
 
 > Audiencia: Product, Risk, Trading, Stakeholders.
-> Versión: 1.4 — 2026-05-23.
+> Versión: 1.5 — 2026-05-24.
+>
+> Cambios v1.5: Aprendizaje desde post-mortem (§F10): job LLM encadenado a outcome attribution, Bloque K, normalizador de lecciones, catálogo extendido I–Z (`confluence_registry`), promoción Supervisor + UI operador (`/confluence`). CoherenceChecker C7/C8. Migraciones 011–012.
 >
 > Cambios v1.4: Outcome attribution contrafactual (§F9), notificaciones Telegram, endpoints de reset (`/drawdown/reset`, `/circuit-breaker/reset`), balance con saldos locked, flujo del Decisor sin overrides (corrige §5.1), WebSocket completo (8 eventos).
 >
@@ -64,6 +66,7 @@ Persona responsable del bot. Sus tareas diarias son:
 | Fee Manager | cada 24 h | Refrescar maker/taker fees desde Binance. |
 | Balance Refresher | cada 60 s | Persistir snapshot USDT/BTC (free + locked) desde Binance. |
 | Outcome Attribution | cada `outcome_attribution_interval_min` (default 60 min) | Clasificar decisiones del Decisor con MFE/MAE forward → `decision_outcomes`. |
+| Post-mortem LLM | encadenado al final de Outcome Attribution (mismo tick) | Analizar outcomes negativos → `lesson_raw` + normalizador → candidatos o Bloque K. |
 
 ---
 
@@ -117,7 +120,7 @@ El Decisor es **LLM-centric**: el LLM toma todas las decisiones de trading con a
 | Campo del output | Decide | Margen real | Capa que lo puede pisar |
 |------------------|--------|-------------|-------------------------|
 | `regime` | LLM | Libre dentro del enum `TRENDING_UP / TRENDING_DOWN / RANGE / HIGH_VOLATILITY / NEUTRAL`. | Pydantic (validación de enum). |
-| `confluences` | LLM | Subset del catálogo cerrado A–H (mínimo 2 para BUY). Códigos fuera del catálogo son filtrados silenciosamente. | `_filter_confluence_codes` en `decisor.py`. |
+| `confluences` | LLM | Subset del catálogo **A–H** (fijo) + letras **I–Z** activas en `confluence_registry`. Mínimo 2 para BUY (guía). Códigos no válidos se filtran silenciosamente. | `_filter_confluence_codes` en `decisor.py`. |
 | `action` | **LLM** | Libre `BUY / SELL / HOLD` sin overrides deterministas. SELL requiere posición abierta (R6/R7). | Risk Gate R6/R7. CoherenceChecker en strict_mode. |
 | `confidence_base` y `confidence` | LLM | El LLM calcula y declara su propia confianza. El sistema no fuerza HOLD por umbral. | Solo el Risk Gate (R1–R10) puede bloquear la acción. |
 | `confidence_adjustment` | LLM | Bounded a `[-0.10, +0.10]`. Justificación obligatoria. | Pydantic (cap absoluto). |
@@ -129,14 +132,14 @@ El Decisor es **LLM-centric**: el LLM toma todas las decisiones de trading con a
 #### F2.bis.2 Lo que el LLM **no** puede hacer, por construcción
 
 1. **No puede violar R1–R10**: aunque produzca SL inválido, R:R bajo, size excesivo, o pida BUY con `kill_switch=true`, el Risk Gate lo bloquea y persiste `rejected_reason`. Esta es la **única barrera hard-blocking** sobre la `action`.
-2. **No puede inventar confluencias nuevas**: el catálogo A–H está cerrado en el system prompt; códigos desconocidos son silenciosamente descartados.
+2. **No puede inventar confluencias nuevas ad hoc**: el catálogo A–H está fijo en el system prompt; letras I–Z solo son válidas si están promovidas y listadas en `{confluence_registry_block}`; cualquier otro código se descarta.
 3. **No puede shortear**: spot-only; SELL solo cierra una posición LONG existente (R6/R7).
 4. **No puede forzar un `position_size_pct > max_position_pct`**: el Risk Gate (R1) bloquea el trade si excede el límite.
 
 #### F2.bis.3 Lo que el LLM **sí** decide con autonomía real (v1.3)
 
 - **Clasificar el régimen** del mercado y actuar contra él si ve confluencias suficientes (e.g., BUY en TRENDING_DOWN con confirmación multi-TF).
-- **Elegir qué confluencias A–H** declarar activas (mínimo 2 para BUY).
+- **Elegir qué confluencias A–H e I–Z activas** declarar (mínimo 2 para BUY).
 - **Decidir la `action`** BUY/SELL/HOLD sin override de confidence-floor ni de régimen.
 - **Elegir `position_size_pct`** dentro de `[min_position_size, max_position_pct]` según su lectura de riesgo/oportunidad.
 - **Ubicar SL y TP exactos** dentro de las bandas ATR y del rango R:R configurado, priorizando soportes/resistencias y walls del order book.
@@ -154,7 +157,7 @@ Reproducida en el system prompt del Decisor (orden de precedencia descendente):
 
 #### F2.bis.5 CoherenceChecker — detección de inconsistencias del LLM
 
-Componente post-LLM que verifica la coherencia lógica entre lo que el LLM **declara** (régimen, confluencias, reasoning) y lo que los **indicadores muestran** en ese ciclo. Ejecuta 6 reglas:
+Componente post-LLM que verifica la coherencia lógica entre lo que el LLM **declara** (régimen, confluencias, reasoning) y lo que los **indicadores muestran** en ese ciclo. Ejecuta 8 reglas:
 
 | Regla | Verifica |
 |-------|----------|
@@ -164,6 +167,8 @@ Componente post-LLM que verifica la coherencia lógica entre lo que el LLM **dec
 | C4 | Confianza alta (≥0.85) con menos de 2 confluencias declaradas. |
 | C5 | BUY con confianza baja (<0.60) sin justificación explícita en reasoning. |
 | C6 | `expected_holding_min` fuera del rango del perfil operativo derivado (Bloque A). |
+| C7 | R:R real calculado en código ≤ `min_rr_ratio` (siempre **critical**). |
+| C8 | Confluencia extendida I–Z declarada pero `verify_spec` del registry no cumple en el ciclo (warning). |
 
 Por defecto, los warnings son **solo informativos**: se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del **próximo ciclo** para que el LLM aprenda de sus propias inconsistencias. No bloquean la decisión.
 
@@ -202,7 +207,8 @@ Antes de ejecutar la decisión, el Risk Gate verifica reglas absolutas (ver `05-
   1. **Evaluación** — Primera llamada LLM corta (JSON estricto) responde si el playbook activo sigue siendo válido (`ratify`) o si requiere regeneración (`regenerate`). Antes de consultar al LLM, se evalúan **guardrails determinísticos** (`max_playbook_age_days`, delta WR, cambio de régimen, kill switch disparado) que pueden forzar regeneración sin opinión del LLM.
   2. **Regeneración** (sólo si la fase 1 resolvió `regenerate`) — Segunda llamada LLM produce el nuevo `PlaybookVersion` (`active=true`, anteriores `active=false`).
 - Si la fase 1 resuelve **`ratify`**: **no** se inserta nueva versión. El playbook activo se mantiene y la actividad queda auditada en `decisions` (`agent="supervisor"`, `output.ratified=true`, `output.ratify_reason`).
-- **Llamada LLM adicional** para sugerencias de configuración (independiente del resultado anterior): propone valores nuevos para `atr_timeframe`, `sl_atr_multiplier`, `min_rr_ratio`, `decisor_interval_min`, `max_position_pct`, `conf_threshold_*`. Solo aplica las que caen dentro de **guardrails** (`_SAFE_BOUNDS`); el resto se persiste como sugerencia rechazada con motivo.
+- **Llamada LLM adicional** para sugerencias de configuración (independiente del resultado anterior): propone valores nuevos para parámetros dentro de `_SAFE_BOUNDS`.
+- **Promoción de confluencias** (fase 4 del ciclo): evalúa candidatos en `confluence_candidates` que cumplen P1–P3 y los promueve a `confluence_registry` asignando letra I–Z. Resultado en `decisions.output.confluence_promotions`. Ver §F5.bis.6.
 
 ### F5.bis. Aprendizaje: alcance y límites
 
@@ -213,13 +219,14 @@ El sistema "aprende día a día" en un sentido **acotado y trazable**, no por en
 | Lazo | Frecuencia | Qué cambia | Quién aplica | Reversible |
 |------|-----------|------------|--------------|------------|
 | Lazo 1 — Playbook | 1×/día (00:00 UTC) o manual. **No siempre produce una nueva versión** (ver §F5.bis.5). | Markdown del playbook activo (`setups`, `patrones a evitar`, `reglas específicas`, régimen esperado). | Supervisor LLM en dos fases: (a) `ratify` mantiene el playbook activo; (b) `regenerate` produce `PlaybookVersion` con `active=true`. | Sí, rollback a versión anterior con 1 click. |
-| Lazo 2 — Configuración | 1×/día junto con lazo 1 (siempre se ejecuta, ratifique o no). | Valores numéricos de 14 parámetros dentro de `_SAFE_BOUNDS`. | Supervisor LLM → `ConfigStore.set` con `changed_by="supervisor"`. | Sí, vía `config_history` y override manual desde la UI. |
+| Lazo 2 — Configuración | 1×/día junto con lazo 1 (siempre se ejecuta, ratifique o no). | Valores numéricos de parámetros dentro de `_SAFE_BOUNDS`. | Supervisor LLM → `ConfigStore.set` con `changed_by="supervisor"`. | Sí, vía `config_history` y override manual desde la UI. |
+| Lazo 3 — Confluencias I–Z | Continuo (post-mortem) + 1×/día (promoción Supervisor) + manual (UI). | Patrones compuestos verificables más allá de A–H. | Post-mortem → normalizador → `confluence_candidates` → `confluence_registry`. | Sí, desactivar letra en UI; no recicla letra <30 días. |
 
 #### F5.bis.2 Qué **no** es este aprendizaje
 
 - **No es fine-tuning** del modelo LLM: si el provider actualiza la versión del modelo, no hay continuidad de pesos.
 - **No es memoria embeddings / RAG**: no hay vector store; la "memoria" del Decisor es texto markdown + las últimas 3 decisiones inyectadas en el contexto.
-- **No introduce confluencias nuevas**: el catálogo A–H está cerrado en el prompt del Decisor; el Supervisor tiene regla explícita de no introducir códigos nuevos.
+- **No introduce confluencias A–H nuevas**: el catálogo base A–H permanece fijo en el prompt. Patrones aprendidos pueden promoverse a letras **I–Z** vía pipeline post-mortem (§F10), con trazabilidad en `confluence_registry` y aprobación Supervisor u operador.
 - **No ajusta `daily_stop_pct` ni `max_drawdown_pct`** automáticamente: están explícitamente excluidos de `_SAFE_BOUNDS`.
 
 #### F5.bis.3 Memoria de corto, mediano y largo plazo
@@ -228,7 +235,8 @@ El sistema "aprende día a día" en un sentido **acotado y trazable**, no por en
 |-----------|-----------|-----------|
 | Corto plazo (1 ciclo) | Indicadores del ciclo + order book snapshot. | `agents/context_builder.py`. |
 | Mediano plazo (últimas 3 decisiones) | Bloque `ULTIMAS DECISIONES` del user prompt. Habilita el cooldown post-SELL. | `agents/context_builder.py`. |
-| Largo plazo (24 h+) | Playbook markdown + valores de configuración persistidos. | `playbook_versions`, `config`, `config_history`. |
+| Largo plazo (24 h+) | Playbook markdown + valores de configuración persistidos + confluencias promovidas I–Z. | `playbook_versions`, `config`, `config_history`, `confluence_registry`. |
+| Lecciones recientes (72 h) | Bloque K: lecciones post-mortem normalizadas (remap/guidance). | `decision_outcomes.lesson_normalized`, `ContextBuilder`. |
 
 #### F5.bis.4 Modo `diagnostic` del Supervisor
 
@@ -263,6 +271,21 @@ Persistencia según el veredicto:
 
 > Auditoría: el operador siempre puede ver que el Supervisor corrió (vía `decisions` o `/api/decisions?agent=supervisor`), independientemente de si generó una versión nueva.
 
+#### F5.bis.6 Promoción de confluencias extendidas (I–Z)
+
+Criterios para pasar de `confluence_candidates` → `confluence_registry` (todos deben cumplirse):
+
+| # | Criterio | Default | Verificador |
+|---|----------|---------|-------------|
+| P1 | Mismo `pattern_tag` con ≥ N ocurrencias en ventana | 3 en 7 días | SQL + config |
+| P2 | `verify_spec` completo y testeable (keys en ctx del Decisor) | — | `verify_spec_testable()` |
+| P3 | No es subcaso trivial de A–H | — | Normalizador (ruta `candidate`) |
+| P4 | Ratificación Supervisor u operador | ciclo diario o manual | Supervisor auto + UI `/confluence` |
+| P5 | Sin conflicto con reglas `[STRICT]` del playbook | — | Heurística en código |
+| P6 | Máximo de letras activas simultáneas | 5 (`confluence_registry_max_active`) | SQL count |
+
+Asignación de letra: siguiente libre en I–Z no reservada (incluye letras desactivadas hace <30 días). Formato JSON del Decisor: **una letra** (`"I"`), nunca `"I:slug"`.
+
 ### F6. Control operativo (Web)
 
 | Capacidad | Endpoint | Quién puede |
@@ -281,7 +304,8 @@ Persistencia según el veredicto:
 | Disparar Supervisor manualmente | `POST /api/supervisor/run` | Operador |
 | Reset circuit breaker operacional | `POST /api/circuit-breaker/reset` | Operador |
 | Reset ancla de drawdown (high-water mark) | `POST /api/drawdown/reset` | Operador |
-| Outcomes contrafactuales del Decisor | `GET /api/decisions/outcomes` | Operador |
+| Outcomes contrafactuales del Decisor | `GET /api/decisions/outcomes` (`include_lessons=true` opcional) | Operador |
+| Candidatos / catálogo confluencias I–Z | `GET /api/confluence/candidates`, `GET /api/confluence/registry`, `POST …/promote`, `POST …/reject`, `POST …/deactivate` | Operador |
 | Historial ratificaciones Supervisor | `GET /api/supervisor/runs` | Operador |
 | Velas OHLCV (chart) | `GET /api/ohlcv?timeframe=&limit=` | Operador |
 | Sugerencias de configuración pendientes | `GET /api/config/suggestions` | Operador |
@@ -293,6 +317,7 @@ Páginas (React + Tailwind):
 - **`/` Dashboard** — balance Binance, posiciones abiertas, última decisión, estado del día (P&L realizado/no realizado, trades, decisiones).
 - **`/trades`** — listado, filtros por status, botón cerrar.
 - **`/decisions`** — historial detallado con input/output JSON.
+- **`/confluence`** — cola de candidatos post-mortem, catálogo I–Z activo, promover/rechazar/desactivar.
 - **`/playbook`** — markdown del playbook activo + historial con rollback y edición inline.
 - **`/config`** — formulario de los ~60 parámetros tipados, con descripciones, validación, kill switch y switch de modo.
 - **`/health`** — estado de motor, DB, Binance.
@@ -316,7 +341,33 @@ Job periódico que evalúa **ex post** cada decisión del Decisor usando velas O
 - **Persistencia**: tabla `decision_outcomes` (1:1 con `decisions.id`, UPSERT idempotente).
 - **Exposición**: `GET /api/decisions/outcomes` y bloque `outcome_attribution` en `GET /api/health`.
 
-### F10. Notificaciones Telegram (opcional)
+### F10. Aprendizaje desde post-mortem (lecciones de malas decisiones)
+
+Pipeline encadenado al job de outcome attribution (mismo intervalo; no job separado):
+
+```text
+outcome_attribution → post-mortem LLM → normalizador → remap | candidate | guidance
+  ├─ remap/guidance → Bloque K (Decisor user prompt)
+  └─ candidate      → confluence_candidates (upsert por pattern_tag)
+       └─ Supervisor / operador → confluence_registry (I, J, K…)
+```
+
+**Elegibilidad post-mortem** (clasificaciones): `BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`.
+
+**Salidas persistidas** en `decision_outcomes`:
+- `postmortem_status`: `completed` | `failed` | `null`
+- `lesson_raw`: JSON del PostMortemAgent (validado Pydantic)
+- `lesson_normalized`: ruta `remap` | `candidate` | `guidance` + `block_k_line`, `dedupe_key`, payloads
+
+**Bloque K** (user prompt del Decisor, entre Bloque G y H): hasta `block_k_max_lines` (default 5) lecciones deduplicadas por `dedupe_key`, ventana `block_k_window_hours` (default 72 h). Solo rutas `remap` y `guidance` (no `candidate`).
+
+**Bloque dinámico `{confluence_registry_block}`**: definiciones operacionales de letras I–Z activas, mismo estilo que A–H en system prompt.
+
+**Kill switch**: `postmortem_enabled` (default `true`). Límite por tick: `postmortem_max_per_tick` (default 5).
+
+> Diseño detallado: `docs/superpowers/specs/2026-05-24-decision-postmortem-learning-design.md`
+
+### F11. Notificaciones Telegram (opcional)
 
 Si `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` están configurados, el engine envía alertas push ante eventos críticos: kill switch activado/desactivado, pausa del engine (circuit breaker), rachas de rechazos del Risk Gate, y trades cerrados con P&L significativo.
 
@@ -467,6 +518,18 @@ Tres rutas, todas convergen en `Trade.status = "closed"`:
 - Mínimo de confluencias para BUY: **2** (`min_confluences_buy`).
 - Cooldown post-SELL: **15 min** (`cooldown_after_sell_min`).
 
+### 6.4.bis Confluencias extendidas (I–Z)
+
+Letras **I–Z** no están fijas en el prompt: se generan dinámicamente desde `confluence_registry` cuando un patrón aprendido es promovido (§F5.bis.6, §F10).
+
+| Aspecto | Regla |
+|---------|-------|
+| Origen | Post-mortem → normalizador ruta `candidate` → `confluence_candidates` → promoción |
+| Formato Decisor | Una letra (`"I"`), nunca `"I:slug"` |
+| Validación | `_filter_confluence_codes()` acepta A–H + letras activas en registry; C8 audita `verify_spec` |
+| Límite activas | `confluence_registry_max_active` (default 5) |
+| Desactivación | UI `/confluence` o SQL; letra reservada 30 días tras desactivar |
+
 ### 6.5 Régimen de mercado
 
 | Régimen | Guía para el LLM | Observación |
@@ -516,12 +579,15 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | AC-09 | Toda escritura en `config` queda registrada en `config_history` con `changed_by`. |
 | AC-10 | El operador puede activar una versión anterior del playbook con un click (rollback). |
 | AC-11 | Un BUY del LLM con `position_size_pct > max_position_pct` es **rechazado** por el Risk Gate (R1) con `rejected_reason="risk_gate: R1"`. No hay reescritura silenciosa; el LLM debe aprender del rechazo vía el Bloque G del ciclo siguiente. |
-| AC-15 | `GET /api/decisions/stats?window=24` retorna rechazos desglosados por `rule_id` (R0–R11), warnings del CoherenceChecker por regla (C1–C6), histogramas de distribución de `confidence` y `position_size_pct`, y tasa de `two_pass_triggered`. |
+| AC-15 | `GET /api/decisions/stats?window=24` retorna rechazos desglosados por `rule_id` (R0–R11), warnings del CoherenceChecker por regla (C1–C8), histogramas de distribución de `confidence` y `position_size_pct`, y tasa de `two_pass_triggered`. |
 | AC-16 | `GET /api/health` incluye los bloques `risk_gate`, `coherence`, `outcome_attribution`, `postgres` (table counts + DB size), `llm` (latency p50/p95/p99) y `circuit_breaker`. |
 | AC-17 | El job de outcome attribution persiste una fila en `decision_outcomes` por decisión madura; `GET /api/decisions/outcomes` expone clasificación y métricas MFE/MAE. |
 | AC-12 | El Supervisor en modo `diagnostic` (con `closed_trades < min_trades`) puede ratificar el playbook activo. Cuando regenera, el nuevo `PlaybookVersion` conserva la estructura obligatoria de secciones y **no** introduce confluencias fuera del catálogo A–H ni valores de parámetros del sistema. |
 | AC-13 | El Supervisor fuerza la regeneración del playbook (sin consultar al LLM en la fase 1) cuando se cumple alguno de los guardrails determinísticos: `days_since_active >= max_playbook_age_days`, `abs(wr_24h − wr_baseline) > playbook_force_regen_wr_delta_pct`, cambio de régimen estructural, o kill switch activado en el período. `force_regen_reason` queda registrado en la `Decision`. |
 | AC-14 | Cada ejecución del Supervisor (ratifique o regenere) inserta exactamente **una** fila en `decisions` con `agent="supervisor"`. El operador puede auditar la actividad vía `GET /api/decisions?agent=supervisor` aunque no haya nuevas versiones de playbook. |
+| AC-18 | Tras outcome attribution, el pipeline post-mortem procesa outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) y persiste `postmortem_status`, `lesson_raw` y `lesson_normalized` en `decision_outcomes`. |
+| AC-19 | Lecciones `remap`/`guidance` aparecen en Bloque K del Decisor; candidatos `candidate` hacen upsert en `confluence_candidates`. El Supervisor (o operador vía UI) puede promover candidatos a `confluence_registry` cumpliendo P1–P6. |
+| AC-20 | La página `/confluence` lista candidatos y registry I–Z; `POST …/promote`, `POST …/reject` y `POST …/deactivate` responden 400 con código estructurado ante reglas de negocio violadas. |
 
 ### 8.2 No funcionales
 

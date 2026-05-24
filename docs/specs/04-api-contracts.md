@@ -1,7 +1,7 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.2 — 2026-05-23.
+> Versión: 1.3 — 2026-05-24.
 
 Servicio: **`web`** (FastAPI). Base URL local: `http://localhost:8100`. Todas las rutas REST viven bajo el prefijo `/api`. WebSocket en `/ws` (sin prefijo).
 
@@ -28,7 +28,7 @@ CORS configurable via `ALLOWED_ORIGINS` (default `http://localhost:3100`).
 ```jsonc
 {
   "regime": "TRENDING_UP",                  // MarketRegime
-  "confluences": ["B","C","G"],              // 0..10 códigos del catálogo A-H
+  "confluences": ["B","C","G"],              // 0..10 códigos A–H + letras I–Z activas en registry
   "action": "BUY",                            // DecisorAction
   "confidence_base": 0.85,                    // 0.0..1.0
   "confidence_adjustment": 0.05,              // -0.10..+0.10
@@ -53,8 +53,12 @@ Reglas:
 ```jsonc
 {
   "decision_id": "uuid",
-  "decision_ts": "2026-05-23T12:00:00Z",
+  "ts": "2026-05-23T12:00:00Z",
   "action": "HOLD",
+  "confidence": 0.72,
+  "regime": "RANGE",
+  "executed": false,
+  "rejected_reason": null,
   "classification": "MISSED_OPPORTUNITY",
   "horizon_min": 240,
   "matured": true,
@@ -63,9 +67,17 @@ Reglas:
   "mae_pct": -0.45,
   "time_to_mfe_min": 45,
   "time_to_mae_min": 12,
-  "computed_at": "2026-05-23T16:00:01Z"
+  "sl_dist_pct": null,
+  "tp_target_pct": null,
+  "computed_at": "2026-05-23T16:00:01Z",
+  "postmortem_status": "completed",
+  "lesson_raw": { "classification": "MISSED_OPPORTUNITY", "root_cause": "…", "lesson": "…" },
+  "lesson_normalized": { "route": "guidance", "dedupe_key": "…", "block_k_line": "[guidance] …" },
+  "postmortem_at": "2026-05-23T16:05:00Z"
 }
 ```
+
+Campos post-mortem (`postmortem_status`, `lesson_raw`, `lesson_normalized`, `postmortem_at`) solo se incluyen cuando `include_lessons=true`.
 
 ### 1.5 `TradeOutcome` (legacy en `decisions.outcome`)
 
@@ -228,13 +240,47 @@ Parámetro `window`: horas 1–168 (default 24).
 
 200 OK: breakdown de rechazos Risk Gate por `rule_id`, warnings CoherenceChecker, histogramas de `confidence` y `position_size_pct`, tasa `two_pass_triggered`.
 
-#### `GET /api/decisions/outcomes?classification=&limit=`
+#### `GET /api/decisions/outcomes?classification=&limit=&since_hours=&include_lessons=`
 
 Parámetros:
+- `since_hours`: 1..168 (default 24).
 - `classification` opcional: filtra por clasificación (`GOOD_BUY`, `MISSED_OPPORTUNITY`, etc.).
-- `limit`: 1..500 (default 100).
+- `limit`: 1..5000 (default 500).
+- `include_lessons`: boolean (default `false`); si `true`, incluye columnas post-mortem.
 
-200 OK: `DecisionOutcomeOut[]`, `decision_ts DESC`.
+200 OK: `DecisionOutcomeOut[]`, `ts DESC`.
+
+#### `GET /api/confluence/candidates?status=&limit=`
+
+Parámetros: `status` opcional (`open`, `promoted`, `rejected`); `limit` 1..200 (default 50).
+
+200 OK: `ConfluenceCandidateOut[]` ordenado por `occurrence_count DESC`.
+
+#### `GET /api/confluence/registry?active_only=`
+
+Parámetro `active_only` (default `true`).
+
+200 OK: `ConfluenceRegistryOut[]` ordenado por `code ASC`.
+
+#### `POST /api/confluence/candidates/{candidate_id}/promote`
+
+200 OK: `ConfluenceRegistryOut` de la letra asignada.
+
+400: `{ "detail": { "code": "MAX_ACTIVE", "message": "…" } }` u otros códigos de `ConfluenceOpsError`.
+
+#### `POST /api/confluence/candidates/{candidate_id}/reject`
+
+Body opcional: `{ "reason": "string" }` (max 500 chars).
+
+200 OK: `ConfluenceCandidateOut` con `status=rejected`.
+
+#### `POST /api/confluence/registry/{code}/deactivate`
+
+`code`: una letra I–Z.
+
+200 OK: `ConfluenceRegistryOut` con `active=false`, `deactivated_at` poblado.
+
+400: letra inexistente, ya desactivada, o reservada.
 
 #### `GET /api/supervisor/runs?limit=`
 

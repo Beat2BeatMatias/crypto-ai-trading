@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.5 — 2026-05-23.
+> Versión: 1.6 — 2026-05-24.
+>
+> Cambios v1.6: Pipeline post-mortem encadenado a outcome attribution (`postmortem_job`, `PostMortemAgent`, `lesson_normalizer`, Bloque K). Catálogo extendido I–Z (`confluence_candidates`, `confluence_registry`, `shared/confluence_registry_ops.py`). API y UI `/confluence`. CoherenceChecker C7/C8. `_filter_confluence_codes` acepta registry dinámico. Migraciones 011–012. Nuevas config keys post-mortem y promoción.
 >
 > Cambios v1.5: Outcome attribution (`decision_outcomes`, job scheduler, API). Migraciones 005–010. R0/R11 en Risk Gate. Circuit breaker bifurcado (operacional vs financiero). Health enriquecido. WS 8 eventos. Telegram. Balance locked. OCO brackets (`order_id_sl/tp`). Elimina referencias obsoletas a overrides y recharts.
 >
@@ -22,6 +24,7 @@ Tres servicios en contenedores Docker que comparten una única base de datos Pos
                   │                  Postgres 17                  │
                   │ (decisions, decision_outcomes, trades,        │
                   │  positions, ohlcv, indicators, playbook,      │
+                  │  confluence_candidates, confluence_registry,  │
                   │  config, config_history, fee/balance snaps)   │
                   └─────────▲──────────────────────────▲──────────┘
                             │                          │
@@ -37,6 +40,8 @@ Tres servicios en contenedores Docker que comparten una única base de datos Pos
         │ • RiskGate + CircuitBr.  │         │                       │
         │ • Executor + OrderTracker│         └───────────▲───────────┘
         │ • OutcomeAttribution     │                     │
+        │ • PostMortem + lessons   │                     │
+        │ • Confluence registry    │                     │
         │ • Supervisor LLM         │                     │ HTTP/WS
         │ • Telegram (opcional)    │              ┌──────┴──────┐
         │ • APScheduler            │              │  frontend   │
@@ -110,6 +115,7 @@ run():
       - add_position_refresh   30 s
       - add_order_tracker      30 s
       - add_outcome_attribution  interval = outcome_attribution_interval_min
+      - (encadenado) post-mortem al final del tick de outcome attribution
   • signal handler SIGINT/SIGTERM → shutdown ordenado
 ```
 
@@ -136,7 +142,12 @@ run():
 | `agents/supervisor.py` | Métricas 24h, ratificación/regeneración playbook, config suggestions, persistencia. |
 | `agents/outcome_attribution.py` | Función pura `attribute()` — clasificación contrafactual MFE/MAE (sin I/O). |
 | `agents/outcome_attribution_job.py` | Job scheduler: query candidates → OHLCV → UPSERT `decision_outcomes`. |
-| `risk/coherence_checker.py` | Reglas C1–C6: auditoría consistencia declaración vs indicadores. |
+| `agents/postmortem_agent.py` | LLM analiza outcomes negativos → `PostMortemLesson` (Pydantic). |
+| `agents/postmortem_job.py` | Encadenado tras attribution: post-mortem → normalizador → Bloque K / candidatos. |
+| `agents/lesson_normalizer.py` | Rutas `remap` / `candidate` / `guidance`; formatea Bloque K. |
+| `agents/confluence_registry.py` | Upsert candidatos, promoción Supervisor, lectura registry activo. |
+| `shared/confluence_registry_ops.py` | Ops compartidas engine+web: promote/reject/deactivate, `verify_spec_testable()`. |
+| `risk/coherence_checker.py` | Reglas C1–C8: auditoría consistencia declaración vs indicadores + registry I–Z. |
 | `notifications/telegram.py` | Alertas push opcionales (kill switch, pausas, trades). |
 
 ### 2.3 Diagrama de secuencia — Decisor tick
@@ -257,7 +268,7 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 ┌────────────────────────────────────────────────────────────┐
 │ Capa 3: CoherenceChecker + two-pass (NUEVO, auditoría)     │
 │   • risk/coherence_checker.py:CoherenceChecker.evaluate    │
-│   • Reglas C1–C6: consistencia lógica declaración vs datos │
+│   • Reglas C1–C8: consistencia lógica declaración vs datos │
 │   • Warnings → pass2 (LLM se auto-corrige): si C1/C2/C3   │
 │   • strict_mode: C1/C2/C3 → _hold_decision("coherence")   │
 │   • Persiste coherence_warnings en decisions.output        │
@@ -293,9 +304,9 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 |------|-------------------|-----------------|-------------------|
 | 1a | `agents/prompts/decisor_system.txt` | Prompt engineering (jerarquía, guía sizing, etiquetas interpretativas). | Determina sesgo y formato del JSON; no es enforcement. |
 | 1b | `agents/context_builder.py:build` | Construcción bloques A–K con indicadores enriquecidos y labelers. | Contexto inyectado en el user prompt. |
-| 1c | `agents/decisor.py:_filter_confluence_codes` | Filtra códigos fuera de catálogo A–H (silencioso). | Log `decisor.invalid_confluence_codes_filtered`. |
+| 1c | `agents/decisor.py:_filter_confluence_codes` | Filtra códigos fuera de A–H y letras I–Z no activas en registry. | Log `decisor.invalid_confluence_codes_filtered`. |
 | 2 | `shared/schemas.py:DecisorOutput` (Pydantic) | Validación estructural (tipos, enums, bounds). | Excepción → `_hold_decision("parse_error")`. |
-| 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría de consistencia C1–C6. | `coherence_warnings` en output; warning en log `coherence.warnings_detected`. |
+| 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría de consistencia C1–C8. | `coherence_warnings` en output; C7 siempre critical. |
 | 3b | `agents/decisor.py:_build_review_ctx` + pass 2 | Two-pass auto-revisión si hay C1/C2/C3. | Log `decisor.two_pass_triggered` + `decisor.two_pass_result`. |
 | 3c | `agents/labelers.py` | Etiquetas interpretativas pre-calculadas. | Sugerencias en contexto; el LLM puede discrepar. |
 | 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange (R1–R10). | `Decision.rejected_reason` = `"risk_gate: R{n}"`, `rule_id` estructurado. |
@@ -331,21 +342,23 @@ El `ContextBuilder` arma el input del LLM en bloques semánticos organizados:
 | H | Estado del portfolio (capital, P&L, drawdown, posiciones) | `capital_total`, `pnl_*` |
 | I | Config de riesgo compacta (todos los parámetros numéricos) | `max_position_pct`, `min_rr_ratio`, ... |
 | J | Playbook activo (markdown) | `playbook` |
+| K | Lecciones post-mortem recientes (remap/guidance) | `block_k_lessons` |
+| — | Catálogo dinámico I–Z (system prompt, no user block) | `{confluence_registry_block}` |
 
-#### 2.6.bis.5 CoherenceChecker — reglas C1–C6
+#### 2.6.bis.5 CoherenceChecker — reglas C1–C8
 
 Ver `trading-engine/risk/coherence_checker.py`. Implementado con el dataclass `CoherenceWarning`:
 
 ```python
 @dataclass
 class CoherenceWarning:
-    rule_id: str      # "C1"..."C6"
+    rule_id: str      # "C1"..."C8"
     message: str
-    severity: str     # "warning" | "critical" (en strict_mode)
+    severity: str     # "warning" | "critical" (C7 siempre critical)
     evidence: dict    # valores numéricos que evidencian la inconsistencia
 ```
 
-Las reglas factuales (C1/C2/C3) disparan **two-pass** cuando `TWO_PASS_ENABLED=true`.
+Las reglas factuales (C1/C2/C3) disparan **two-pass** cuando `TWO_PASS_ENABLED=true`. **C7** (R:R real ≤ mínimo) bloquea siempre. **C8** verifica `verify_spec` de confluencias I–Z del registry.
 
 #### 2.6.bis.6 Two-pass — flujo técnico
 
@@ -464,7 +477,7 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 - Lifespan: crea engine/session_factory, lanza `ticker_broadcaster` async task.
 - CORS configurable (`ALLOWED_ORIGINS`, default `http://localhost:3100`).
 - Si la URL es SQLite → `Base.metadata.create_all` (modo dev/test).
-- Routers en prefijo `/api`: health, trades, decisions, positions, balance, playbook, config, control, stats, suggestions.
+- Routers en prefijo `/api`: health, trades, decisions, positions, balance, playbook, config, control, stats, suggestions, confluence.
 - WebSocket `/ws` (sin prefijo).
 
 ### 3.2 Endpoints REST
@@ -488,9 +501,14 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 | POST | `/api/mode` | `{ok, mode}` | Cambia entre PAPER_TRADING/LIVE. Para LIVE requiere `confirmation == "CONFIRMO TRADING REAL"`. |
 | POST | `/api/supervisor/run` | `{ok, queued:true}` | Setea `supervisor_run_now=true`; el engine lo consume en el próximo tick. |
 | GET | `/api/stats/daily` | `DailyStatsOut` | Métricas del día desde 00:00 UTC. |
-| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | **(v1.4)** Rechazos por `rule_id` (R1–R10), warnings C1–C6, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
+| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | Rechazos por `rule_id` (R0–R11), warnings C1–C8, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
 | GET | `/api/supervisor/runs` | `SupervisorRunOut[]` | Historial de ratificaciones/regeneraciones del Supervisor. |
-| GET | `/api/decisions/outcomes?classification=&limit=` | `DecisionOutcomeOut[]` | Outcomes contrafactuales con MFE/MAE y clasificación. |
+| GET | `/api/decisions/outcomes?classification=&limit=&since_hours=&include_lessons=` | `DecisionOutcomeOut[]` | Outcomes contrafactuales; `include_lessons=true` expone post-mortem. |
+| GET | `/api/confluence/candidates?status=&limit=` | `ConfluenceCandidateOut[]` | Cola de patrones aprendidos pendientes de promoción. |
+| GET | `/api/confluence/registry?active_only=` | `ConfluenceRegistryOut[]` | Catálogo I–Z activo (o histórico si `active_only=false`). |
+| POST | `/api/confluence/candidates/{id}/promote` | `ConfluenceRegistryOut` | Promueve candidato a registry (valida P1–P6). |
+| POST | `/api/confluence/candidates/{id}/reject` | `ConfluenceCandidateOut` | Rechaza candidato con motivo opcional. |
+| POST | `/api/confluence/registry/{code}/deactivate` | `ConfluenceRegistryOut` | Desactiva letra I–Z (reservada 30 días). |
 | GET | `/api/ohlcv?timeframe=&limit=` | `CandleOut[]` | Velas OHLCV para chart (ascendente). |
 | POST | `/api/circuit-breaker/reset` | `{ok}` | Reset pausa operacional (LLM/exchange); no aplica a daily_stop/drawdown. |
 | POST | `/api/drawdown/reset` | `{ok}` | Reset ancla high-water mark (`drawdown_reset_ts`). |
@@ -535,6 +553,7 @@ frontend/src/
 │   ├── Decisions.tsx    ← historial con input/output JSON
 │   ├── Playbook.tsx     ← markdown + rollback + edit
 │   ├── Config.tsx       ← 60+ parámetros tipados + kill switch + modo
+│   ├── Confluence.tsx   ← candidatos post-mortem, registry I–Z, promote/reject/deactivate
 │   └── Health.tsx       ← estado motor/DB/Binance/LLM/outcome attribution
 └── types/index.ts       ← interfaces TS espejo de los Pydantic
 ```
@@ -561,7 +580,9 @@ Ver `03-data-model.md` para detalle de columnas, índices y migraciones.
 | `ohlcv` | engine | Velas (time, timeframe) PK compuesto, upsert idempotente. |
 | `indicators` | engine | JSONB con indicadores por timeframe + GIN. |
 | `decisions` | engine | Log de cada decisión LLM. Input+output JSONB con índice GIN. |
-| `decision_outcomes` | engine | Atribución contrafactual 1:1 con `decisions` (MFE/MAE, clasificación). |
+| `decision_outcomes` | engine | Atribución contrafactual 1:1 con `decisions` (MFE/MAE, clasificación, lecciones post-mortem). |
+| `confluence_candidates` | engine | Patrones compuestos aprendidos pendientes de promoción (upsert por `pattern_tag`). |
+| `confluence_registry` | engine + web | Letras I–Z promovidas con `verify_spec` JSONB; PK `code`. |
 | `trades` | engine | Operaciones (BUY/SELL). Estados open/closed. Incluye `order_id_sl/tp`. |
 | `positions` | engine | Estado en tiempo real, con P&L no realizado. |
 | `playbook_versions` | engine (Supervisor) y web (rollback) | Versionado con índice único parcial sobre `active=true`. |
@@ -598,6 +619,8 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
 | Coherence / two-pass | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`. |
 | Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_coverage_threshold_pct`. |
+| Post-mortem / Bloque K | `postmortem_enabled`, `postmortem_max_per_tick`, `postmortem_provider`, `block_k_max_lines`, `block_k_window_hours`. |
+| Confluencias I–Z | `confluence_promotion_min_occurrences`, `confluence_promotion_window_days`, `confluence_registry_max_active`. |
 | Engine interno | `engine_paused`, `engine_pause_reason`, `drawdown_reset_ts`. |
 
 Comportamiento:
@@ -685,6 +708,8 @@ docker-compose logs -f trading-engine
 | 008 | Tabla `decision_outcomes` + índices. |
 | 009 | `trades.close_reason` ampliado a VARCHAR(30). |
 | 010 | `balance_snapshots.usdt_locked`, `balance_snapshots.btc_locked`. |
+| 011 | `decision_outcomes`: `postmortem_status`, `lesson_raw`, `lesson_normalized`, `postmortem_at` + índice parcial pending. |
+| 012 | Tablas `confluence_candidates`, `confluence_registry`. |
 
 ### 8.4 Operaciones rutinarias
 
@@ -731,6 +756,8 @@ Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0
 | Circuit Breaker | Risk | `trading-engine/risk/circuit_breaker.py` | — | Integrado en `main.py`; pausas operacionales auto-reset ~10 min vs financieras manuales. |
 | CoherenceChecker | Risk | `trading-engine/risk/coherence_checker.py` | `agents/decisor.py` | `shared/schemas.py` |
 | Outcome Attribution | Agent | `agents/outcome_attribution.py`, `agents/outcome_attribution_job.py` | — | `shared/db/models.py` |
+| Post-mortem | Agent | `agents/postmortem_agent.py`, `agents/postmortem_job.py`, `agents/lesson_normalizer.py` | `agents/prompts/postmortem_*.txt` | `shared/db/models.py` |
+| Confluence registry | Agent + API | `agents/confluence_registry.py`, `shared/confluence_registry_ops.py` | `web/api/confluence.py`, `frontend/src/pages/Confluence.tsx` | `shared/db/models.py` |
 | PriceCollector | Data | `collectors/price_collector.py`, `collectors/indicators.py` | — | `shared/db/models.py` |
 | OrderBookCollector | Data | `collectors/orderbook_collector.py` | — | — |
 | FeeManager | Execution | `execution/fee_manager.py` | — | `shared/db/models.py` |

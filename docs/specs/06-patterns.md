@@ -1,9 +1,9 @@
 # Patrones de Implementación — Crypto AI Trading
 
 > Audiencia: Devs / Tech leads.
-> Versión: 1.1 — 2026-05-23.
+> Versión: 1.2 — 2026-05-24.
 
-Catálogo de **16 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
+Catálogo de **18 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
 
 Este documento complementa la [Especificación Técnica](./02-technical-spec.md) describiendo *cómo* se construye el sistema, no *qué* hace. Sirve para nuevas features que deben mantener consistencia con la arquitectura existente.
 
@@ -451,6 +451,37 @@ async def _evaluate_ratification(self, metrics, active_playbook, cfg) -> dict:
 2. Llamada LLM corta con JSON estructurado (`json_mode=True`) y parseo defensivo.
 3. Persistencia del veredicto **con motivo**: distinguir si fue por cortocircuito determinístico (`force_regen_reason`) o por opinión del LLM (`ratify_reason`).
 4. Audit trail asegurado aunque no haya cambios materiales (1 fila en `decisions` por ejecución).
+
+---
+
+## P-18 — Pipeline post-mortem encadenado (atribución → lección → acción)
+
+**Categoría**: LLM / Learning
+
+**Evidencia**: `trading-engine/main.py` (post-mortem encadenado tras `outcome_attribution_tick`); `agents/postmortem_job.py`; `agents/lesson_normalizer.py`; `agents/context_builder.py` (Bloque K); `agents/confluence_registry.py`.
+
+```python
+async def outcome_attribution_tick(...):
+    await run_outcome_attribution(...)
+    if postmortem_enabled:
+        await outcome_postmortem_tick(session, llm, max_per_tick=...)
+```
+
+Flujo interno del tick post-mortem:
+
+1. Query outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) sin `postmortem_status`.
+2. `PostMortemAgent` → `lesson_raw` (JSONB validado).
+3. `lesson_normalizer.normalize()` → ruta `remap` | `candidate` | `guidance`.
+4. Persistir en `decision_outcomes.lesson_normalized`.
+5. Si `candidate` → upsert `confluence_candidates` por `pattern_tag`.
+6. Bloque K lee lecciones `remap`/`guidance` en ventana configurable (`block_k_window_hours`).
+
+**Cuándo usar**: cuando el sistema debe aprender de errores **sin** mutar el playbook ni el catálogo A–H directamente. Requisitos:
+
+1. Job encadenado (no scheduler separado) para garantizar orden attribution → post-mortem.
+2. Límite por tick (`postmortem_max_per_tick`) para controlar costo LLM.
+3. Normalizador determinístico que clasifica la salida en rutas con efectos distintos (prompt vs. candidato vs. remap).
+4. Promoción a producción (I–Z) separada con criterios P1–P6 y aprobación Supervisor u operador.
 
 ---
 
