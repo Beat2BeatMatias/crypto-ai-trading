@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Decision, DecisionOutcome
+from shared.config_store import default_list_since
 
 router = APIRouter()
 
@@ -47,12 +48,19 @@ async def _session(request: Request) -> AsyncSession:
 async def list_decisions(session: Annotated[AsyncSession, Depends(_session)],
                           agent: str | None = Query(None),
                           executed: bool | None = Query(None),
+                          since: datetime | None = Query(None),
+                          include_paper: bool = Query(False),
                           limit: int = Query(100, le=500)):
     stmt = select(Decision).order_by(desc(Decision.ts)).limit(limit)
     if agent:
         stmt = stmt.where(Decision.agent == agent)
     if executed is not None:
         stmt = stmt.where(Decision.executed == executed)
+    effective_since = since
+    if effective_since is None and not include_paper:
+        effective_since = await default_list_since(session)
+    if effective_since is not None:
+        stmt = stmt.where(Decision.ts >= effective_since)
     rows = (await session.execute(stmt)).scalars().all()
     return [DecisionOut.model_validate(r, from_attributes=True) for r in rows]
 

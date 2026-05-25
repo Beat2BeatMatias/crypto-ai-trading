@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Decision } from "../types";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { cutoffFromDateInput } from "../lib/liveSince";
+import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 
 function explainRejection(reason: string): string {
   if (reason.startsWith("stop_loss must be"))
@@ -47,13 +49,25 @@ export function Decisions() {
   const [actionFilter, setActionFilter] = useState<"" | "BUY" | "SELL" | "HOLD">("");
   const [confMin, setConfMin] = useState(0);
   const [confMax, setConfMax] = useState(100);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const {
+    liveSinceIso,
+    dateFrom,
+    setDateFrom,
+    dateTo,
+    setDateTo,
+    includePaper,
+    setIncludePaper,
+    clearDateFilters,
+    hasCustomDateFilter,
+  } = useLiveSinceFilter();
   const [selected, setSelected] = useState<Decision | null>(null);
 
   useEffect(() => {
-    api.decisions(agent ? { agent } : undefined).then(setAllItems).catch(() => {});
-  }, [agent]);
+    api.decisions({
+      agent: agent || undefined,
+      includePaper,
+    }).then(setAllItems).catch(() => {});
+  }, [agent, includePaper]);
 
   const items = useMemo(() => {
     let list = [...allItems];
@@ -68,12 +82,14 @@ export function Decisions() {
       const conf = (o.confidence ?? 0) * 100;
       return conf >= confMin && conf <= confMax;
     });
-    if (dateFrom)
-      list = list.filter(d => new Date(d.ts) >= new Date(dateFrom));
+    if (dateFrom) {
+      const cutoff = cutoffFromDateInput(dateFrom, liveSinceIso);
+      list = list.filter(d => new Date(d.ts) >= cutoff);
+    }
     if (dateTo)
       list = list.filter(d => new Date(d.ts) <= new Date(dateTo + "T23:59:59Z"));
     return list;
-  }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo]);
+  }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo, liveSinceIso]);
 
   const out = (d: Decision) => d.output as {
     action?: string; confidence?: number; reasoning?: string;
@@ -156,13 +172,13 @@ export function Decisions() {
 
             {/* Date range */}
             <div className="flex gap-2 items-center ml-auto">
-              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setIncludePaper(false); }}
                 className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" />
               <span className="text-zinc-600 text-xs">—</span>
-              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setIncludePaper(false); }}
                 className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" />
-              {(dateFrom || dateTo) && (
-                <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+              {hasCustomDateFilter && (
+                <button onClick={clearDateFilters}
                   className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
               )}
             </div>

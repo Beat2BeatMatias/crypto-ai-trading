@@ -7,6 +7,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Position
 from shared.pnl import compute_pnl_usdt, compute_pnl_pct
+from shared.config_store import default_list_since
 
 router = APIRouter()
 
@@ -83,10 +84,18 @@ def _to_out(r: Trade, *, current_price: float | None = None) -> TradeOut:
 
 @router.get("/trades", response_model=list[TradeOut])
 async def list_trades(session: Annotated[AsyncSession, Depends(_session)],
-                      status: str | None = Query(None), limit: int = Query(100, le=500)):
+                      status: str | None = Query(None),
+                      since: datetime | None = Query(None),
+                      include_paper: bool = Query(False),
+                      limit: int = Query(100, le=500)):
     stmt = select(Trade).order_by(desc(Trade.ts_open)).limit(limit)
     if status:
         stmt = stmt.where(Trade.status == status)
+    effective_since = since
+    if effective_since is None and not include_paper:
+        effective_since = await default_list_since(session)
+    if effective_since is not None:
+        stmt = stmt.where(Trade.ts_open >= effective_since)
     rows = (await session.execute(stmt)).scalars().all()
 
     open_trade_ids = [r.id for r in rows if r.status == "open"]

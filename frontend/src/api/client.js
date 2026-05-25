@@ -33,7 +33,15 @@ async function patch(path, body) {
     return r.json();
 }
 export const api = {
-    trades: (status) => get(`/trades${status ? `?status=${status}` : ""}`),
+    trades: (p) => {
+        const q = new URLSearchParams();
+        if (p?.status)
+            q.set("status", p.status);
+        if (p?.includePaper)
+            q.set("include_paper", "true");
+        const qs = q.toString();
+        return get(`/trades${qs ? `?${qs}` : ""}`);
+    },
     closeTrade: (id) => post(`/trades/${id}/close`, {}),
     decisions: (p) => {
         const q = new URLSearchParams();
@@ -41,6 +49,8 @@ export const api = {
             q.set("agent", p.agent);
         if (p?.executed !== undefined)
             q.set("executed", String(p.executed));
+        if (p?.includePaper)
+            q.set("include_paper", "true");
         const qs = q.toString();
         return get(`/decisions${qs ? `?${qs}` : ""}`);
     },

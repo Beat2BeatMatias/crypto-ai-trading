@@ -764,6 +764,7 @@ export function Config() {
     "mode",
     // internas — no se exponen en el UI
     "drawdown_reset_ts",
+    "live_since_ts",
     "supervisor_run_now",
     "engine_paused",
     "engine_pause_reason",

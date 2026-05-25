@@ -40,6 +40,14 @@ async def set_mode(body: ModeBody, session: Annotated[AsyncSession, Depends(_ses
     store = ConfigStore(session)
     try:
         await store.set(ConfigKey.MODE, body.mode, changed_by="user")
+        if body.mode == "LIVE":
+            current = (await store.get(ConfigKey.LIVE_SINCE_TS)).strip()
+            if not current:
+                await store.set(
+                    ConfigKey.LIVE_SINCE_TS,
+                    datetime.now(timezone.utc).isoformat(),
+                    changed_by="user",
+                )
     except KeyError:
         raise HTTPException(404, "Config not seeded — apply migrations and seed defaults first")
     return {"ok": True, "mode": body.mode}

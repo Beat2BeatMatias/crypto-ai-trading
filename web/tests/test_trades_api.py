@@ -116,3 +116,27 @@ async def test_open_trade_includes_scenario_pnl(client, app_with_db):
     assert data[0]["unrealized_pnl_usdt"] == pytest.approx(0.5, rel=1e-4)
     assert data[0]["sl_pnl_usdt"] == pytest.approx(-1.0, rel=1e-4)
     assert data[0]["tp_pnl_usdt"] == pytest.approx(2.0, rel=1e-4)
+
+
+async def test_list_trades_excludes_paper_when_live(client, app_with_db):
+    from shared.config_store import ConfigStore, ConfigKey
+
+    paper_ts = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+    live_ts = datetime(2026, 5, 18, 4, 0, tzinfo=timezone.utc)
+    await _create_trade(app_with_db.state.session_factory, ts_open=paper_ts)
+    await _create_trade(app_with_db.state.session_factory, ts_open=live_ts)
+
+    async with app_with_db.state.session_factory() as s:
+        store = ConfigStore(s)
+        await store.seed_defaults()
+        await store.set(ConfigKey.MODE, "LIVE", changed_by="test")
+        await store.set(ConfigKey.LIVE_SINCE_TS, "2026-05-18T03:46:01+00:00", changed_by="test")
+
+    r = await client.get("/api/trades")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+    assert r.json()[0]["ts_open"].startswith("2026-05-18")
+
+    r_all = await client.get("/api/trades?include_paper=true")
+    assert r_all.status_code == 200
+    assert len(r_all.json()) == 2

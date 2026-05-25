@@ -25,6 +25,10 @@ async def test_live_mode_correct_confirmation_ok(client, app_with_db):
     })
     assert r.status_code == 200
     assert r.json()["mode"] == "LIVE"
+    async with app_with_db.state.session_factory() as s:
+        store = ConfigStore(s)
+        live_since = await store.get(ConfigKey.LIVE_SINCE_TS)
+    assert live_since.strip() != ""
 
 
 async def test_circuit_breaker_reset_ok(client, app_with_db):

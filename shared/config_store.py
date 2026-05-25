@@ -89,6 +89,7 @@ class ConfigKey(str, Enum):
     CONFLUENCE_PROMOTION_MIN_OCCURRENCES = "confluence_promotion_min_occurrences"
     CONFLUENCE_PROMOTION_WINDOW_DAYS = "confluence_promotion_window_days"
     CONFLUENCE_REGISTRY_MAX_ACTIVE = "confluence_registry_max_active"
+    LIVE_SINCE_TS = "live_since_ts"
 
 
 @dataclass(frozen=True)
@@ -312,7 +313,28 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "5", "int",
         "Máximo de confluencias promovidas activas (I–Z) simultáneas. Rango 1–18.",
     ),
+    ConfigKey.LIVE_SINCE_TS: _Default(
+        "", "string",
+        "ISO UTC timestamp when mode switched to LIVE. Used as default filter cutoff for trades/decisions.",
+    ),
 }
+
+
+async def default_list_since(session: AsyncSession) -> datetime | None:
+    """Return the LIVE cutoff timestamp when mode is LIVE, else None."""
+    store = ConfigStore(session)
+    try:
+        if await store.get(ConfigKey.MODE) != "LIVE":
+            return None
+        raw = (await store.get(ConfigKey.LIVE_SINCE_TS)).strip()
+        if not raw:
+            return None
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except KeyError:
+        return None
 
 
 class ConfigStore:

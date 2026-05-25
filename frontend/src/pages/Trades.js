@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { PnlRow } from "../components/PnlRow";
 import { computePnlPct, computePnlUsdt } from "../lib/pnl";
+import { cutoffFromDateInput } from "../lib/liveSince";
+import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 // ── Close reason labels ───────────────────────────────────────────────────────
 const CLOSE_REASON_LABELS = {
     sl_triggered: { label: "Stop Loss", className: "text-red-400" },
@@ -110,20 +112,19 @@ export function Trades() {
     const [allTrades, setAllTrades] = useState([]);
     const [statusFilter, setStatusFilter] = useState("all");
     const [resultFilter, setResultFilter] = useState("all");
-    const [dateFrom, setDateFrom] = useState("");
-    const [dateTo, setDateTo] = useState("");
+    const { liveSinceIso, dateFrom, setDateFrom, dateTo, setDateTo, includePaper, setIncludePaper, clearDateFilters, hasCustomDateFilter, } = useLiveSinceFilter();
     const [sortKey, setSortKey] = useState("ts_open");
     const [sortDir, setSortDir] = useState("desc");
     const [livePrice, setLivePrice] = useState(null);
     const { closing, requestClose } = useCloseTrade(setAllTrades);
     useEffect(() => {
         const status = statusFilter === "all" ? undefined : statusFilter;
-        api.trades(status).then(setAllTrades).catch(() => { });
+        api.trades({ status, includePaper }).then(setAllTrades).catch(() => { });
         const id = setInterval(() => {
-            api.trades(status).then(setAllTrades).catch(() => { });
+            api.trades({ status, includePaper }).then(setAllTrades).catch(() => { });
         }, 30_000);
         return () => clearInterval(id);
-    }, [statusFilter]);
+    }, [statusFilter, includePaper]);
     useEffect(() => {
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
@@ -146,8 +147,10 @@ export function Trades() {
             list = list.filter(t => (t.pnl_usdt ?? 0) > 0);
         else if (resultFilter === "loss")
             list = list.filter(t => (t.pnl_usdt ?? 0) < 0);
-        if (dateFrom)
-            list = list.filter(t => new Date(t.ts_open) >= new Date(dateFrom));
+        if (dateFrom) {
+            const cutoff = cutoffFromDateInput(dateFrom, liveSinceIso);
+            list = list.filter(t => new Date(t.ts_open) >= cutoff);
+        }
         if (dateTo)
             list = list.filter(t => new Date(t.ts_open) <= new Date(dateTo + "T23:59:59Z"));
         list.sort((a, b) => {
@@ -163,7 +166,7 @@ export function Trades() {
             return sortDir === "asc" ? av - bv : bv - av;
         });
         return list;
-    }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir]);
+    }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir, liveSinceIso]);
     function toggleSort(key) {
         if (sortKey === key)
             setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -178,7 +181,7 @@ export function Trades() {
     const btnCls = (active) => `text-xs px-3 py-1.5 rounded transition-colors ${active
         ? "bg-blue-900 text-blue-200 font-semibold"
         : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`;
-    return (_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Historial de trades" }), _jsx("button", { onClick: () => exportCSV(trades), disabled: trades.length === 0, className: "text-xs px-3 py-1.5 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors", children: "\u2193 CSV" })] }), _jsxs("div", { className: "flex flex-wrap gap-3 items-end", children: [_jsx("div", { className: "flex gap-1", children: ["all", "open", "closed"].map(s => (_jsx("button", { onClick: () => setStatusFilter(s), className: btnCls(statusFilter === s), children: s === "all" ? "Todos" : s === "open" ? "Abiertos" : "Cerrados" }, s))) }), _jsxs("div", { className: "flex gap-1", children: [_jsx("button", { onClick: () => setResultFilter("all"), className: btnCls(resultFilter === "all"), children: "Win+Loss" }), _jsxs("button", { onClick: () => setResultFilter("win"), className: btnCls(resultFilter === "win"), children: [_jsx("span", { className: "text-emerald-400", children: "\u25B2" }), " Win"] }), _jsxs("button", { onClick: () => setResultFilter("loss"), className: btnCls(resultFilter === "loss"), children: [_jsx("span", { className: "text-red-400", children: "\u25BC" }), " Loss"] })] }), _jsxs("div", { className: "flex gap-2 items-center ml-auto", children: [_jsx("input", { type: "date", value: dateFrom, onChange: e => setDateFrom(e.target.value), className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500" }), _jsx("span", { className: "text-zinc-600 text-xs", children: "\u2014" }), _jsx("input", { type: "date", value: dateTo, onChange: e => setDateTo(e.target.value), className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500" }), (dateFrom || dateTo) && (_jsx("button", { onClick: () => { setDateFrom(""); setDateTo(""); }, className: "text-xs text-zinc-500 hover:text-zinc-300", children: "\u2715" }))] })] }), _jsxs("div", { className: "flex gap-3 text-xs text-zinc-500", children: [_jsx("span", { children: "Ordenar:" }), [
+    return (_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Historial de trades" }), _jsx("button", { onClick: () => exportCSV(trades), disabled: trades.length === 0, className: "text-xs px-3 py-1.5 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors", children: "\u2193 CSV" })] }), _jsxs("div", { className: "flex flex-wrap gap-3 items-end", children: [_jsx("div", { className: "flex gap-1", children: ["all", "open", "closed"].map(s => (_jsx("button", { onClick: () => setStatusFilter(s), className: btnCls(statusFilter === s), children: s === "all" ? "Todos" : s === "open" ? "Abiertos" : "Cerrados" }, s))) }), _jsxs("div", { className: "flex gap-1", children: [_jsx("button", { onClick: () => setResultFilter("all"), className: btnCls(resultFilter === "all"), children: "Win+Loss" }), _jsxs("button", { onClick: () => setResultFilter("win"), className: btnCls(resultFilter === "win"), children: [_jsx("span", { className: "text-emerald-400", children: "\u25B2" }), " Win"] }), _jsxs("button", { onClick: () => setResultFilter("loss"), className: btnCls(resultFilter === "loss"), children: [_jsx("span", { className: "text-red-400", children: "\u25BC" }), " Loss"] })] }), _jsxs("div", { className: "flex gap-2 items-center ml-auto", children: [_jsx("input", { type: "date", value: dateFrom, onChange: e => { setDateFrom(e.target.value); setIncludePaper(false); }, className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500" }), _jsx("span", { className: "text-zinc-600 text-xs", children: "\u2014" }), _jsx("input", { type: "date", value: dateTo, onChange: e => { setDateTo(e.target.value); setIncludePaper(false); }, className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500" }), hasCustomDateFilter && (_jsx("button", { onClick: clearDateFilters, className: "text-xs text-zinc-500 hover:text-zinc-300", children: "\u2715" }))] })] }), _jsxs("div", { className: "flex gap-3 text-xs text-zinc-500", children: [_jsx("span", { children: "Ordenar:" }), [
                         ["ts_open", "Fecha"],
                         ["pnl_usdt", "P&L"],
                         ["entry_price", "Precio entrada"],

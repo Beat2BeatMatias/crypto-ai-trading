@@ -4,6 +4,8 @@ import { api } from "../api/client";
 import type { Trade } from "../types";
 import { PnlRow } from "../components/PnlRow";
 import { computePnlPct, computePnlUsdt } from "../lib/pnl";
+import { cutoffFromDateInput } from "../lib/liveSince";
+import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 
 // ── Close reason labels ───────────────────────────────────────────────────────
 
@@ -160,8 +162,17 @@ export function Trades() {
   const [allTrades, setAllTrades] = useState<Trade[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
   const [resultFilter, setResultFilter] = useState<"all" | "win" | "loss">("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const {
+    liveSinceIso,
+    dateFrom,
+    setDateFrom,
+    dateTo,
+    setDateTo,
+    includePaper,
+    setIncludePaper,
+    clearDateFilters,
+    hasCustomDateFilter,
+  } = useLiveSinceFilter();
   const [sortKey, setSortKey] = useState<SortKey>("ts_open");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [livePrice, setLivePrice] = useState<number | null>(null);
@@ -169,12 +180,12 @@ export function Trades() {
 
   useEffect(() => {
     const status = statusFilter === "all" ? undefined : statusFilter;
-    api.trades(status).then(setAllTrades).catch(() => {});
+    api.trades({ status, includePaper }).then(setAllTrades).catch(() => {});
     const id = setInterval(() => {
-      api.trades(status).then(setAllTrades).catch(() => {});
+      api.trades({ status, includePaper }).then(setAllTrades).catch(() => {});
     }, 30_000);
     return () => clearInterval(id);
-  }, [statusFilter]);
+  }, [statusFilter, includePaper]);
 
   useEffect(() => {
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -200,8 +211,10 @@ export function Trades() {
     else if (resultFilter === "loss")
       list = list.filter(t => (t.pnl_usdt ?? 0) < 0);
 
-    if (dateFrom)
-      list = list.filter(t => new Date(t.ts_open) >= new Date(dateFrom));
+    if (dateFrom) {
+      const cutoff = cutoffFromDateInput(dateFrom, liveSinceIso);
+      list = list.filter(t => new Date(t.ts_open) >= cutoff);
+    }
     if (dateTo)
       list = list.filter(t => new Date(t.ts_open) <= new Date(dateTo + "T23:59:59Z"));
 
@@ -218,7 +231,7 @@ export function Trades() {
     });
 
     return list;
-  }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir]);
+  }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir, liveSinceIso]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -277,16 +290,16 @@ export function Trades() {
         {/* Date range */}
         <div className="flex gap-2 items-center ml-auto">
           <input
-            type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setIncludePaper(false); }}
             className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500"
           />
           <span className="text-zinc-600 text-xs">—</span>
           <input
-            type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setIncludePaper(false); }}
             className="text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500"
           />
-          {(dateFrom || dateTo) && (
-            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+          {hasCustomDateFilter && (
+            <button onClick={clearDateFilters}
               className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
           )}
         </div>

@@ -2,6 +2,8 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { cutoffFromDateInput } from "../lib/liveSince";
+import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 function explainRejection(reason) {
     if (reason.startsWith("stop_loss must be"))
         return "El SL propuesto por el LLM estaba por encima del precio actual al momento de validar (el orderbook no tenía snapshot).";
@@ -42,12 +44,14 @@ export function Decisions() {
     const [actionFilter, setActionFilter] = useState("");
     const [confMin, setConfMin] = useState(0);
     const [confMax, setConfMax] = useState(100);
-    const [dateFrom, setDateFrom] = useState("");
-    const [dateTo, setDateTo] = useState("");
+    const { liveSinceIso, dateFrom, setDateFrom, dateTo, setDateTo, includePaper, setIncludePaper, clearDateFilters, hasCustomDateFilter, } = useLiveSinceFilter();
     const [selected, setSelected] = useState(null);
     useEffect(() => {
-        api.decisions(agent ? { agent } : undefined).then(setAllItems).catch(() => { });
-    }, [agent]);
+        api.decisions({
+            agent: agent || undefined,
+            includePaper,
+        }).then(setAllItems).catch(() => { });
+    }, [agent, includePaper]);
     const items = useMemo(() => {
         let list = [...allItems];
         if (actionFilter) {
@@ -61,12 +65,14 @@ export function Decisions() {
             const conf = (o.confidence ?? 0) * 100;
             return conf >= confMin && conf <= confMax;
         });
-        if (dateFrom)
-            list = list.filter(d => new Date(d.ts) >= new Date(dateFrom));
+        if (dateFrom) {
+            const cutoff = cutoffFromDateInput(dateFrom, liveSinceIso);
+            list = list.filter(d => new Date(d.ts) >= cutoff);
+        }
         if (dateTo)
             list = list.filter(d => new Date(d.ts) <= new Date(dateTo + "T23:59:59Z"));
         return list;
-    }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo]);
+    }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo, liveSinceIso]);
     const out = (d) => d.output;
     const isBuyRejected = (d) => out(d).action === "BUY" && !d.executed;
     const rejectionLabel = (reason) => {
@@ -104,7 +110,7 @@ export function Decisions() {
                                                 : a === "SELL" ? "bg-red-900/70 text-red-300 font-semibold"
                                                     : a === "HOLD" ? "bg-zinc-700 text-zinc-300 font-semibold"
                                                         : "bg-blue-900 text-blue-200 font-semibold"
-                                            : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`, children: a === "" ? "Todas las acciones" : a }, a)))] }), _jsxs("div", { className: "flex flex-wrap gap-3 items-center", children: [_jsxs("div", { className: "flex items-center gap-2 text-xs text-zinc-400", children: [_jsx("span", { children: "Conf:" }), _jsx("input", { type: "range", min: 0, max: 100, step: 5, value: confMin, onChange: e => setConfMin(Number(e.target.value)), className: "w-20 accent-blue-500" }), _jsxs("span", { className: "text-zinc-300 w-8", children: [confMin, "%"] }), _jsx("span", { children: "\u2013" }), _jsx("input", { type: "range", min: 0, max: 100, step: 5, value: confMax, onChange: e => setConfMax(Number(e.target.value)), className: "w-20 accent-blue-500" }), _jsxs("span", { className: "text-zinc-300 w-8", children: [confMax, "%"] })] }), _jsxs("div", { className: "flex gap-2 items-center ml-auto", children: [_jsx("input", { type: "date", value: dateFrom, onChange: e => setDateFrom(e.target.value), className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" }), _jsx("span", { className: "text-zinc-600 text-xs", children: "\u2014" }), _jsx("input", { type: "date", value: dateTo, onChange: e => setDateTo(e.target.value), className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" }), (dateFrom || dateTo) && (_jsx("button", { onClick: () => { setDateFrom(""); setDateTo(""); }, className: "text-xs text-zinc-500 hover:text-zinc-300", children: "\u2715" }))] })] })] }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-500 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-3", children: "TS" }), _jsx("th", { className: "text-left pr-3", children: "ID" }), _jsx("th", { className: "text-left pr-3", children: "Agente" }), _jsx("th", { className: "text-left pr-3", children: "Modelo" }), _jsx("th", { className: "text-left pr-3", children: "Acci\u00F3n" }), _jsx("th", { className: "text-right pr-3", children: "Conf" }), _jsx("th", { className: "text-left", children: "Estado / Motivo" })] }) }), _jsx("tbody", { children: items.map(d => (_jsxs("tr", { onClick: () => setSelected(d), className: `cursor-pointer border-t border-zinc-800 hover:bg-zinc-800/40 transition-colors ${selected?.id === d.id ? "bg-zinc-800" : ""}`, children: [_jsx("td", { className: "py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap", children: new Date(d.ts).toLocaleString("es-AR", { hour12: false }) }), _jsx("td", { className: "pr-3 text-xs text-zinc-500 font-mono", children: d.id.substring(0, 8) }), _jsx("td", { className: "pr-3", children: d.agent }), _jsx("td", { className: "pr-3 text-xs text-zinc-400 font-mono", children: d.model }), _jsx("td", { className: "pr-3 font-semibold", children: d.agent === "supervisor"
+                                            : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`, children: a === "" ? "Todas las acciones" : a }, a)))] }), _jsxs("div", { className: "flex flex-wrap gap-3 items-center", children: [_jsxs("div", { className: "flex items-center gap-2 text-xs text-zinc-400", children: [_jsx("span", { children: "Conf:" }), _jsx("input", { type: "range", min: 0, max: 100, step: 5, value: confMin, onChange: e => setConfMin(Number(e.target.value)), className: "w-20 accent-blue-500" }), _jsxs("span", { className: "text-zinc-300 w-8", children: [confMin, "%"] }), _jsx("span", { children: "\u2013" }), _jsx("input", { type: "range", min: 0, max: 100, step: 5, value: confMax, onChange: e => setConfMax(Number(e.target.value)), className: "w-20 accent-blue-500" }), _jsxs("span", { className: "text-zinc-300 w-8", children: [confMax, "%"] })] }), _jsxs("div", { className: "flex gap-2 items-center ml-auto", children: [_jsx("input", { type: "date", value: dateFrom, onChange: e => { setDateFrom(e.target.value); setIncludePaper(false); }, className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" }), _jsx("span", { className: "text-zinc-600 text-xs", children: "\u2014" }), _jsx("input", { type: "date", value: dateTo, onChange: e => { setDateTo(e.target.value); setIncludePaper(false); }, className: "text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 focus:outline-none" }), hasCustomDateFilter && (_jsx("button", { onClick: clearDateFilters, className: "text-xs text-zinc-500 hover:text-zinc-300", children: "\u2715" }))] })] })] }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-500 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-3", children: "TS" }), _jsx("th", { className: "text-left pr-3", children: "ID" }), _jsx("th", { className: "text-left pr-3", children: "Agente" }), _jsx("th", { className: "text-left pr-3", children: "Modelo" }), _jsx("th", { className: "text-left pr-3", children: "Acci\u00F3n" }), _jsx("th", { className: "text-right pr-3", children: "Conf" }), _jsx("th", { className: "text-left", children: "Estado / Motivo" })] }) }), _jsx("tbody", { children: items.map(d => (_jsxs("tr", { onClick: () => setSelected(d), className: `cursor-pointer border-t border-zinc-800 hover:bg-zinc-800/40 transition-colors ${selected?.id === d.id ? "bg-zinc-800" : ""}`, children: [_jsx("td", { className: "py-2 pr-3 text-zinc-400 text-xs whitespace-nowrap", children: new Date(d.ts).toLocaleString("es-AR", { hour12: false }) }), _jsx("td", { className: "pr-3 text-xs text-zinc-500 font-mono", children: d.id.substring(0, 8) }), _jsx("td", { className: "pr-3", children: d.agent }), _jsx("td", { className: "pr-3 text-xs text-zinc-400 font-mono", children: d.model }), _jsx("td", { className: "pr-3 font-semibold", children: d.agent === "supervisor"
                                                 ? out(d).mode === "diagnostic"
                                                     ? _jsx("span", { className: "text-xs bg-amber-900/50 text-amber-300 px-2 py-0.5 rounded font-normal", children: "Diagn\u00F3stico" })
                                                     : _jsx("span", { className: "text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded font-normal", children: "Normal" })

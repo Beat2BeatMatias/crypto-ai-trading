@@ -36,12 +36,19 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const api = {
-  trades: (status?: string) => get<Trade[]>(`/trades${status ? `?status=${status}` : ""}`),
+  trades: (p?: { status?: string; includePaper?: boolean }) => {
+    const q = new URLSearchParams();
+    if (p?.status) q.set("status", p.status);
+    if (p?.includePaper) q.set("include_paper", "true");
+    const qs = q.toString();
+    return get<Trade[]>(`/trades${qs ? `?${qs}` : ""}`);
+  },
   closeTrade: (id: string) => post<Trade>(`/trades/${id}/close`, {}),
-  decisions: (p?: { agent?: string; executed?: boolean }) => {
+  decisions: (p?: { agent?: string; executed?: boolean; includePaper?: boolean }) => {
     const q = new URLSearchParams();
     if (p?.agent) q.set("agent", p.agent);
     if (p?.executed !== undefined) q.set("executed", String(p.executed));
+    if (p?.includePaper) q.set("include_paper", "true");
     const qs = q.toString();
     return get<Decision[]>(`/decisions${qs ? `?${qs}` : ""}`);
   },

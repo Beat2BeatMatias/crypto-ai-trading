@@ -226,8 +226,8 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
     }, [timeframe]);
     useEffect(() => {
         const refresh = () => {
-            api.trades("open").then(setOpenTrades).catch(() => { });
-            api.trades("closed").then((all) => setClosedTrades(all.slice(0, 50))).catch(() => { });
+            api.trades({ status: "open" }).then(setOpenTrades).catch(() => { });
+            api.trades({ status: "closed" }).then((all) => setClosedTrades(all.slice(0, 50))).catch(() => { });
             api.decisions({ agent: "decisor" })
                 .then((rows) => setDecisions(rows.slice(0, 80).map((d) => ({
                 id: d.id,
@@ -525,8 +525,8 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
             }
         }
         if (ev.event === "trade_opened" || ev.event === "trade_closed") {
-            api.trades("open").then(setOpenTrades).catch(() => { });
-            api.trades("closed").then((all) => setClosedTrades(all.slice(0, 50))).catch(() => { });
+            api.trades({ status: "open" }).then(setOpenTrades).catch(() => { });
+            api.trades({ status: "closed" }).then((all) => setClosedTrades(all.slice(0, 50))).catch(() => { });
         }
         if (ev.event === "decision") {
             api.decisions({ agent: "decisor" })
