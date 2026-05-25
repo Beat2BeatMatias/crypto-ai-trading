@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, ContextManager
 
 import structlog
-from sqlalchemy import select
+from pydantic import ValidationError
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.llm_client import LLMClient
@@ -20,6 +21,32 @@ from shared.db.models import Decision, DecisionOutcome, Trade
 
 logger = structlog.get_logger()
 
+_MAX_POSTMORTEM_ATTEMPTS = 3
+
+
+def _attempt_count(outcome: DecisionOutcome) -> int:
+    raw = outcome.lesson_raw
+    if isinstance(raw, dict):
+        meta = raw.get("_meta")
+        if isinstance(meta, dict):
+            try:
+                return int(meta.get("attempts", 0))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "429" in msg
+        or "rate limit" in msg
+        or "rate_limit" in msg
+        or "resource_exhausted" in msg
+        or "timeout" in msg
+        or "timed out" in msg
+    )
+
 
 async def _fetch_candidates(session: AsyncSession) -> list[tuple[Decision, DecisionOutcome]]:
     stmt = (
@@ -29,11 +56,18 @@ async def _fetch_candidates(session: AsyncSession) -> list[tuple[Decision, Decis
             Decision.agent == "decisor",
             DecisionOutcome.classification.in_(POSTMORTEM_ELIGIBLE_CLASSIFICATIONS),
             DecisionOutcome.matured.is_(True),
-            DecisionOutcome.postmortem_status.is_(None),
+            or_(
+                DecisionOutcome.postmortem_status.is_(None),
+                DecisionOutcome.postmortem_status == "failed",
+            ),
         )
         .order_by(DecisionOutcome.computed_at.asc())
     )
-    return list((await session.execute(stmt)).all())
+    rows = list((await session.execute(stmt)).all())
+    return [
+        (d, o) for d, o in rows
+        if o.postmortem_status != "failed" or _attempt_count(o) < _MAX_POSTMORTEM_ATTEMPTS
+    ]
 
 
 async def _load_trade(session: AsyncSession, trade_id) -> Trade | None:
@@ -57,6 +91,18 @@ def _rank_candidates(
         scored.append((decision, outcome, trade, score))
     scored.sort(key=lambda x: x[3], reverse=True)
     return scored
+
+
+def _record_failure(outcome: DecisionOutcome, *, error: str, now: datetime) -> None:
+    attempts = _attempt_count(outcome) + 1
+    meta: dict[str, Any] = {"attempts": attempts, "last_error": error[:500]}
+    if attempts >= _MAX_POSTMORTEM_ATTEMPTS:
+        outcome.postmortem_status = "failed"
+    else:
+        outcome.postmortem_status = None
+    outcome.lesson_raw = {"_meta": meta}
+    outcome.lesson_normalized = None
+    outcome.postmortem_at = now
 
 
 async def outcome_postmortem_tick(
@@ -110,14 +156,22 @@ async def outcome_postmortem_tick(
                         decision_id=decision.id,
                         now=now,
                     )
-            except Exception as e:
-                logger.error(
-                    "postmortem.job.failed",
+            except ValidationError as e:
+                logger.warning(
+                    "postmortem.job.validation_failed",
                     decision_id=str(decision.id),
                     error=str(e),
                 )
-                outcome.postmortem_status = "failed"
-                outcome.postmortem_at = now
+                _record_failure(outcome, error=str(e), now=now)
+            except Exception as e:
+                log_fn = logger.warning if _is_transient_error(e) else logger.error
+                log_fn(
+                    "postmortem.job.failed",
+                    decision_id=str(decision.id),
+                    error=str(e),
+                    transient=_is_transient_error(e),
+                )
+                _record_failure(outcome, error=str(e), now=now)
 
             session.add(outcome)
             processed += 1

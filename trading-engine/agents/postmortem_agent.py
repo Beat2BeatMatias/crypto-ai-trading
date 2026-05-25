@@ -8,7 +8,7 @@ from typing import Any
 import structlog
 
 from agents.llm_client import LLMClient, LLMProvider
-from agents.postmortem_schemas import LessonRaw
+from agents.postmortem_schemas import LessonRaw, coerce_lesson_raw
 
 logger = structlog.get_logger()
 
@@ -108,6 +108,7 @@ class PostMortemAgent:
         parsed = _parse_json(resp.text)
         parsed["classification"] = outcome.classification
         parsed["severity_score"] = severity_score
+        parsed = coerce_lesson_raw(parsed)
         lesson = LessonRaw.model_validate(parsed)
         logger.info(
             "postmortem.completed",

@@ -21,7 +21,8 @@ OUTCOME_METRICS:
 
 TRADE (si ejecutada): {trade_summary}
 
-Emití JSON con esta estructura exacta:
+Emití JSON con esta estructura exacta (respetá tipos: objetos dentro de arrays, no strings sueltos):
+
 {{
   "version": 1,
   "classification": "{classification}",
@@ -42,8 +43,22 @@ Emití JSON con esta estructura exacta:
     "time_to_mae_min": null,
     "time_to_mfe_min": null
   }},
-  "misread_indicators": [],
-  "ignored_signals": [],
+  "misread_indicators": [
+    {{
+      "indicator_key": "rsi_15m",
+      "value_at_decision": 41.89,
+      "decisor_interpretation": "cómo lo interpretó el Decisor",
+      "correct_interpretation": "interpretación correcta con el dato",
+      "evidence_from_input": true
+    }}
+  ],
+  "ignored_signals": [
+    {{
+      "indicator_key": "volume_ratio",
+      "value_at_decision": 0.6,
+      "why_relevant": "por qué debió pesar en la decisión"
+    }}
+  ],
   "confluence_analysis": {{
     "misapplied_codes": [],
     "should_have_used": [],
@@ -56,3 +71,14 @@ Emití JSON con esta estructura exacta:
   }},
   "hindsight_guardrails_passed": true
 }}
+
+Reglas para proposed_pattern:
+- Si el patrón ya existe en catálogo A–H mal aplicado: NO uses null; enviá objeto con
+  "tag" (snake_case, ej. "range_support_misread"), "title", "maps_to_existing" (letra A–H),
+  y "definition_hint" breve.
+- Si proponés patrón nuevo compuesto: "tag" obligatorio, "maps_to_existing": null,
+  "title" y "definition_hint" obligatorios.
+- Si no aplica patrón: "proposed_pattern": null.
+
+misread_indicators e ignored_signals: siempre arrays de OBJETOS (nunca strings sueltos).
+Si no hay ítems, usá [].

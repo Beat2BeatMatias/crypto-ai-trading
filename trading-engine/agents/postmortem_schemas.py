@@ -152,3 +152,75 @@ def _f(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_object_list(
+    items: Any,
+    *,
+    kind: Literal["misread", "ignored"],
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    if not isinstance(items, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            key = item.strip()
+            if kind == "misread":
+                out.append({
+                    "indicator_key": key,
+                    "decisor_interpretation": key,
+                    "correct_interpretation": "",
+                    "evidence_from_input": True,
+                })
+            else:
+                out.append({
+                    "indicator_key": key,
+                    "why_relevant": key,
+                })
+        elif isinstance(item, dict):
+            row = dict(item)
+            if "indicator_key" not in row:
+                for alt in ("key", "indicator", "name"):
+                    if alt in row:
+                        row["indicator_key"] = str(row[alt])
+                        break
+            if "indicator_key" not in row:
+                continue
+            out.append(row)
+    return out
+
+
+def _coerce_proposed_pattern(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return None
+    row = dict(value)
+    tag = row.get("tag")
+    if not tag:
+        maps_to = row.get("maps_to_existing")
+        if maps_to:
+            row["tag"] = f"remap_{str(maps_to).lower()}"
+        elif row.get("name"):
+            row["tag"] = str(row["name"]).lower().replace(" ", "_")[:64]
+        else:
+            row["tag"] = "unspecified_pattern"
+    if not row.get("title"):
+        row["title"] = str(row.get("definition_hint") or row["tag"])[:128]
+    return row
+
+
+def coerce_lesson_raw(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize common LLM JSON shape drift before Pydantic validation."""
+    out = dict(data)
+    out["misread_indicators"] = _coerce_object_list(
+        out.get("misread_indicators"), kind="misread",
+    )
+    out["ignored_signals"] = _coerce_object_list(
+        out.get("ignored_signals"), kind="ignored",
+    )
+    if "proposed_pattern" in out:
+        out["proposed_pattern"] = _coerce_proposed_pattern(out.get("proposed_pattern"))
+    return out

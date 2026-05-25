@@ -9,9 +9,14 @@ REGLAS DE HINDSIGHT (obligatorias)
 ═══════════════════════════════════════════════════════════════════
 1. Solo citá indicadores presentes en DECISION_INPUT (JSON del ciclo).
 2. `misapplied_codes` debe ser subconjunto de confluences_declared.
-3. Si el patrón encaja en catálogo A–H mal aplicado, seteá proposed_pattern.maps_to_existing
-   con la letra (A–H) y NO propongas patrón nuevo.
-4. `hindsight_guardrails_passed` = true solo si cumpliste 1–3.
+3. Si el patrón encaja en catálogo A–H mal aplicado, seteá proposed_pattern con:
+   - tag (snake_case obligatorio, ej. "h_support_false_touch")
+   - maps_to_existing = letra A–H
+   - title y definition_hint breves
+   NO propongas patrón nuevo en ese caso.
+4. misread_indicators e ignored_signals deben ser arrays de objetos con indicator_key,
+   nunca strings sueltos en el array.
+5. `hindsight_guardrails_passed` = true solo si cumpliste 1–4.
 
 Catálogo A–H (referencia):
 A=RSI_OVERSOLD_BOUNCE B=MACD_BULLISH_CROSS C=EMA_SUPPORT_HOLD D=BB_LOWER_REVERSAL

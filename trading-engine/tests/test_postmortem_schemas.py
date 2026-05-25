@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.postmortem_schemas import LessonRaw, compute_severity_score
+from agents.postmortem_schemas import LessonRaw, coerce_lesson_raw, compute_severity_score
 
 
 def test_compute_severity_bad_buy_uses_pnl():
@@ -56,3 +56,28 @@ def test_lesson_raw_validates_minimal_payload():
     })
     assert lesson.root_cause_tag == ""
     assert lesson.hindsight_guardrails_passed is True
+
+
+def test_coerce_lesson_raw_string_arrays():
+    raw = coerce_lesson_raw({
+        "classification": "MISSED_OPPORTUNITY",
+        "severity_score": 0.8,
+        "summary": "Test",
+        "decision_snapshot": {
+            "regime_declared": "RANGE",
+            "action": "HOLD",
+            "confidence": 0.7,
+            "confluences_declared": ["H"],
+            "reasoning_excerpt": "x",
+        },
+        "forward_evidence": {},
+        "misread_indicators": ["rsi_1h", "macd_1h"],
+        "ignored_signals": ["volume_ratio"],
+        "proposed_pattern": {"maps_to_existing": "H", "definition_hint": "mal soporte"},
+    })
+    lesson = LessonRaw.model_validate(raw)
+    assert lesson.misread_indicators[0].indicator_key == "rsi_1h"
+    assert lesson.ignored_signals[0].indicator_key == "volume_ratio"
+    assert lesson.proposed_pattern is not None
+    assert lesson.proposed_pattern.tag == "remap_h"
+    assert lesson.proposed_pattern.maps_to_existing == "H"

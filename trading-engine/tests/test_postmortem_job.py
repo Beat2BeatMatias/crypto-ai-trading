@@ -250,3 +250,91 @@ async def test_postmortem_tick_skips_good_hold(session):
         max_per_tick=5,
     )
     llm.call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_postmortem_tick_retries_previously_failed(session):
+    s, factory = session
+    now = datetime.now(tz=timezone.utc)
+    decision = Decision(
+        ts=now,
+        agent="decisor",
+        model="test",
+        input={"price": 100.0},
+        output={"action": "HOLD", "confidence": 0.6, "confluences": ["H"]},
+        executed=False,
+    )
+    s.add(decision)
+    await s.commit()
+    s.add(DecisionOutcome(
+        decision_id=decision.id,
+        horizon_min=240,
+        matured=True,
+        classification="MISSED_OPPORTUNITY",
+        mfe_pct=Decimal("0.5"),
+        tp_target_pct=Decimal("0.4"),
+        computed_at=now,
+        postmortem_status="failed",
+        postmortem_at=now,
+    ))
+    await s.commit()
+
+    await outcome_postmortem_tick(
+        session_factory=_session_factory(factory),
+        llm=_make_llm(),
+        max_per_tick=5,
+    )
+
+    async with factory() as check:
+        outcome = (await check.execute(
+            select(DecisionOutcome).where(DecisionOutcome.decision_id == decision.id)
+        )).scalar_one()
+    assert outcome.postmortem_status == "completed"
+    assert outcome.lesson_raw is not None
+    assert "_meta" not in outcome.lesson_raw
+
+
+@pytest.mark.asyncio
+async def test_postmortem_tick_validation_error_leaves_retryable(session):
+    s, factory = session
+    now = datetime.now(tz=timezone.utc)
+    decision = Decision(
+        ts=now,
+        agent="decisor",
+        model="test",
+        input={"price": 100.0},
+        output={"action": "BUY", "confidence": 0.7, "confluences": ["H"]},
+        executed=True,
+    )
+    s.add(decision)
+    await s.commit()
+    s.add(DecisionOutcome(
+        decision_id=decision.id,
+        horizon_min=240,
+        matured=True,
+        classification="BAD_BUY",
+        computed_at=now,
+    ))
+    await s.commit()
+
+    llm = MagicMock(spec=LLMClient)
+    llm.call = AsyncMock(return_value=LLMResponse(
+        text='{"classification":"BAD_BUY","severity_score":0.5,"summary":"x"}',
+        tokens_in=1,
+        tokens_out=1,
+        latency_ms=1,
+        provider=LLMProvider.GEMINI_FLASH.value,
+    ))
+
+    await outcome_postmortem_tick(
+        session_factory=_session_factory(factory),
+        llm=llm,
+        max_per_tick=5,
+    )
+
+    async with factory() as check:
+        outcome = (await check.execute(
+            select(DecisionOutcome).where(DecisionOutcome.decision_id == decision.id)
+        )).scalar_one()
+    assert outcome.postmortem_status is None
+    assert outcome.lesson_raw["_meta"]["attempts"] == 1
