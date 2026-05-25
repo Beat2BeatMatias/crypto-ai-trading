@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.7 — 2026-05-25.
+> Versión: 1.8 — 2026-05-25.
+>
+> Cambios v1.8: `outcome_attribution_window_hours` (config + migración 015). Ventana compartida entre outcome attribution y post-mortem (default 25 h). UI `/config` sección Outcome Attribution.
 >
 > Cambios v1.7: `postmortem_fallback_providers` (config + migración 013). `coerce_lesson_raw()` en `postmortem_schemas.py`. Reintento post-mortem (`failed` re-elegible, máx. 3 intentos, `_meta` en `lesson_raw`). UI `/config` sección Post-mortem + `FallbackChain`. Documentada semántica 1 LLM call / decisión.
 >
@@ -482,6 +484,7 @@ outcome_attribution_tick()
 
 **Selección de candidatos** (`postmortem_job._fetch_candidates`):
 
+- `Decision.ts >= now − outcome_attribution_window_hours` (misma ventana que attribution; default 25 h)
 - `classification IN (BAD_BUY, BAD_SELL, MISSED_OPPORTUNITY, BLOCKED_GOOD_TRADE)`
 - `matured = true`
 - `postmortem_status IS NULL OR postmortem_status = 'failed'` (con `_meta.attempts < 3`)
@@ -654,7 +657,7 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
 | Coherence / two-pass | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`. |
-| Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_coverage_threshold_pct`. |
+| Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_attribution_window_hours`, `outcome_coverage_threshold_pct`. |
 | Post-mortem / Bloque K | `postmortem_enabled`, `postmortem_max_per_tick`, `postmortem_provider`, `postmortem_fallback_providers`, `block_k_max_lines`, `block_k_window_hours`. |
 | Confluencias I–Z | `confluence_promotion_min_occurrences`, `confluence_promotion_window_days`, `confluence_registry_max_active`. |
 | Engine interno | `engine_paused`, `engine_pause_reason`, `drawdown_reset_ts`. |
@@ -748,6 +751,7 @@ docker-compose logs -f trading-engine
 | 011 | `decision_outcomes`: `postmortem_status`, `lesson_raw`, `lesson_normalized`, `postmortem_at` + índice parcial pending. |
 | 012 | Tablas `confluence_candidates`, `confluence_registry`. |
 | 013 | Seed config `postmortem_fallback_providers` (idempotente). |
+| 015 | Seed config `outcome_attribution_window_hours` (idempotente). |
 
 ### 8.4 Operaciones rutinarias
 

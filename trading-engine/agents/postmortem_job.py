@@ -1,7 +1,7 @@
 """Background job: LLM post-mortem for negative decision outcomes."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ContextManager
 
 import structlog
@@ -22,6 +22,7 @@ from shared.db.models import Decision, DecisionOutcome, Trade
 logger = structlog.get_logger()
 
 _MAX_POSTMORTEM_ATTEMPTS = 3
+_DEFAULT_WINDOW_HOURS = 25
 
 
 def _attempt_count(outcome: DecisionOutcome) -> int:
@@ -48,12 +49,19 @@ def _is_transient_error(exc: Exception) -> bool:
     )
 
 
-async def _fetch_candidates(session: AsyncSession) -> list[tuple[Decision, DecisionOutcome]]:
+async def _fetch_candidates(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    window_hours: int = _DEFAULT_WINDOW_HOURS,
+) -> list[tuple[Decision, DecisionOutcome]]:
+    since = now - timedelta(hours=window_hours)
     stmt = (
         select(Decision, DecisionOutcome)
         .join(DecisionOutcome, Decision.id == DecisionOutcome.decision_id)
         .where(
             Decision.agent == "decisor",
+            Decision.ts >= since,
             DecisionOutcome.classification.in_(POSTMORTEM_ELIGIBLE_CLASSIFICATIONS),
             DecisionOutcome.matured.is_(True),
             or_(
@@ -112,6 +120,7 @@ async def outcome_postmortem_tick(
     max_per_tick: int = 5,
     provider_name: str = "gemini-2.5-flash",
     fallback_providers: list[LLMProvider] | None = None,
+    window_hours: int = _DEFAULT_WINDOW_HOURS,
     now_fn: Callable[[], datetime] | None = None,
 ) -> None:
     now = (now_fn or _utcnow)()
@@ -122,7 +131,7 @@ async def outcome_postmortem_tick(
     )
 
     async with session_factory() as session:
-        raw_rows = await _fetch_candidates(session)
+        raw_rows = await _fetch_candidates(session, now=now, window_hours=window_hours)
         if not raw_rows:
             logger.info("postmortem.job.no_candidates")
             return

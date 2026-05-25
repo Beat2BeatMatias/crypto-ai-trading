@@ -193,6 +193,12 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 60, max: 1440, step: 30, unit: "min",
     format: v => v >= 60 ? `${v / 60}h` : `${v}min`, parse: parseInt,
   },
+  outcome_attribution_window_hours: {
+    label: "Ventana de análisis (attribution + post-mortem)",
+    description: "Solo decisiones de las últimas N horas entran al job de outcome attribution y a la cola post-mortem. Compartida entre ambos jobs. Default 25 h.",
+    type: "slider", min: 12, max: 72, step: 1, unit: "h",
+    format: v => `${v}h`, parse: parseInt,
+  },
   outcome_coverage_threshold_pct: {
     label: "Umbral de cobertura OHLCV (máx. faltantes)",
     description: "Si más de este % de velas 1m faltan en la ventana de evaluación, la decisión se clasifica como UNKNOWN en lugar de arriesgarse a una clasificación incorrecta.",
@@ -448,7 +454,7 @@ const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] 
       "block_k_max_lines",
       "block_k_window_hours",
     ],
-    note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). La cadena de fallback se configura abajo.",
+    note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). Usa la misma ventana de análisis (`outcome_attribution_window_hours`). La cadena de fallback se configura abajo.",
   },
   {
     title: "Scheduler",
@@ -461,9 +467,10 @@ const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] 
     keys: [
       "outcome_attribution_interval_min",
       "outcome_attribution_horizon_min",
+      "outcome_attribution_window_hours",
       "outcome_coverage_threshold_pct",
     ],
-    note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). Los cambios toman efecto en el próximo tick del job.",
+    note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). La ventana en horas también limita la cola post-mortem. Los cambios toman efecto en el próximo tick.",
   },
 ];
 

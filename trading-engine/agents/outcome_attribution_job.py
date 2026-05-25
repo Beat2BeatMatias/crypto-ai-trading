@@ -18,19 +18,24 @@ from agents.outcome_attribution import attribute
 
 logger = structlog.get_logger()
 
-_WINDOW_HOURS = 25
+_DEFAULT_WINDOW_HOURS = 25
 _BUFFER_MIN = 15
 
 
-async def _fetch_candidates(session: AsyncSession, *, now: datetime) -> list[Decision]:
-    """Decisor decisions in (now-25h, now-15min) with no outcome, PENDING, or UNKNOWN
+async def _fetch_candidates(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    window_hours: int = _DEFAULT_WINDOW_HOURS,
+) -> list[Decision]:
+    """Decisor decisions in (now-window_hours, now-15min) with no outcome, PENDING, or UNKNOWN
     that has a trade associated (trade_id is set), so they can be re-evaluated once
     the trade closes and pnl_pct becomes available.
 
     UNKNOWN decisions without a trade_id (e.g. missing input fields) are intentionally
     excluded to avoid infinite reprocessing of permanently un-classifiable decisions.
     """
-    since = now - timedelta(hours=_WINDOW_HOURS)
+    since = now - timedelta(hours=window_hours)
     upto = now - timedelta(minutes=_BUFFER_MIN)
     stmt = (
         select(Decision)
@@ -105,12 +110,13 @@ async def outcome_attribution_tick(
     session_factory: Callable[[], "ContextManager[AsyncSession]"],
     horizon_min: int = 240,
     coverage_threshold_pct: float = 30.0,
+    window_hours: int = _DEFAULT_WINDOW_HOURS,
     now_fn: Callable[[], datetime] | None = None,
 ) -> None:
     """Tick called by the scheduler. Idempotent."""
     now = (now_fn or _utcnow)()
     async with session_factory() as session:
-        candidates = await _fetch_candidates(session, now=now)
+        candidates = await _fetch_candidates(session, now=now, window_hours=window_hours)
         if not candidates:
             logger.info("outcome_attribution.job.no_candidates")
             return

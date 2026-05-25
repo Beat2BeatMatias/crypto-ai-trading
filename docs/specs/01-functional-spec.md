@@ -1,7 +1,9 @@
 # Especificación Funcional — Crypto AI Trading
 
 > Audiencia: Product, Risk, Trading, Stakeholders.
-> Versión: 1.7 — 2026-05-25.
+> Versión: 1.8 — 2026-05-25.
+>
+> Cambios v1.8: `outcome_attribution_window_hours` — ventana compartida (default 25 h) para outcome attribution y cola post-mortem. Configurable en `/config`.
 >
 > Cambios v1.7: Post-mortem endurecido: `coerce_lesson_raw` antes de Pydantic, reintento de `failed` (máx. 3 intentos), `postmortem_fallback_providers` configurable (UI + config). Semántica documentada: 1 llamada LLM por decisión, `postmortem_max_per_tick` limita decisiones/tick. UI `/config` sección Post-mortem. Migración 013.
 >
@@ -337,7 +339,8 @@ WebSocket `/ws` empuja:
 
 Job periódico que evalúa **ex post** cada decisión del Decisor usando velas OHLCV 1m y el trade asociado (si existe). No modifica decisiones pasadas; alimenta al Supervisor y al operador con señales de calidad.
 
-- **Horizonte**: `outcome_attribution_horizon_min` (default 240 min). Decisiones más recientes quedan `PENDING` hasta madurar.
+- **Horizonte forward**: `outcome_attribution_horizon_min` (default 240 min). Decisiones más recientes quedan `PENDING` hasta madurar.
+- **Ventana del job**: `outcome_attribution_window_hours` (default 25 h). Solo decisiones con `ts` dentro de `(now − ventana, now − 15 min)` se (re)calculan. **Misma ventana** limita la cola post-mortem (§F10).
 - **Métricas forward**: `forward_return_pct`, `mfe_pct`, `mae_pct`, `time_to_mfe_min`, `time_to_mae_min`.
 - **Clasificaciones**: `GOOD_BUY`, `BAD_BUY`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN`.
 - **Persistencia**: tabla `decision_outcomes` (1:1 con `decisions.id`, UPSERT idempotente).
@@ -354,7 +357,7 @@ outcome_attribution → post-mortem LLM → normalizador → remap | candidate |
        └─ Supervisor / operador → confluence_registry (I, J, K…)
 ```
 
-**Elegibilidad post-mortem** (clasificaciones): `BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`.
+**Elegibilidad post-mortem** (clasificaciones): `BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`. Además: `Decision.ts` dentro de `outcome_attribution_window_hours` (compartida con §F9).
 
 **Granularidad LLM**: **1 decisión elegible = 1 llamada LLM** (no batching). Cada análisis recibe el snapshot completo `decisions.input` + output + métricas forward de esa decisión. Motivo: calidad del razonamiento causal, trazabilidad 1:1 en BD y aislamiento de fallos de parseo.
 

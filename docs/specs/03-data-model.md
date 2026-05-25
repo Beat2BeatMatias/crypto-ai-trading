@@ -1,7 +1,9 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.3 — 2026-05-25.
+> Versión: 1.4 — 2026-05-25.
+>
+> Cambios v1.4: Clave `outcome_attribution_window_hours` (migration 015). Tabla claves outcome attribution.
 >
 > Cambios v1.3: Migración 013 — seed `postmortem_fallback_providers`. Documentadas claves post-mortem en `config` (incl. fallback CSV). Índice post-mortem pending incluye reintento de `failed`.
 
@@ -270,6 +272,15 @@ Versionado de playbook escrito por el Supervisor.
 
 Toda actualización vía `ConfigStore.set` escribe una fila aquí.
 
+**Claves outcome attribution** (migration 015 agrega ventana compartida):
+
+| Key | Tipo | Default | Notas |
+|-----|------|---------|-------|
+| `outcome_attribution_interval_min` | int | `60` | Intervalo del job (attribution + post-mortem encadenado). |
+| `outcome_attribution_horizon_min` | int | `240` | Horizonte forward MFE/MAE (min). |
+| `outcome_attribution_window_hours` | int | `25` | Ventana compartida attribution + post-mortem. Rango 12–72. |
+| `outcome_coverage_threshold_pct` | int | `30` | Máx. % velas 1m faltantes antes de `UNKNOWN`. |
+
 **Claves post-mortem** (migration 011 + defaults en código; 013 agrega fallback):
 
 | Key | Tipo | Default | Notas |
@@ -348,6 +359,7 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 011 | `011_add_decision_outcome_postmortem.py` | Columnas post-mortem en `decision_outcomes` + índice parcial pending. |
 | 012 | `012_add_confluence_registry.py` | Tablas `confluence_candidates`, `confluence_registry`. |
 | 013 | `013_add_postmortem_fallback_providers.py` | Seed idempotente `postmortem_fallback_providers` en `config`. |
+| 015 | `015_add_outcome_attribution_window_hours.py` | Seed idempotente `outcome_attribution_window_hours` en `config`. |
 
 Comandos:
 

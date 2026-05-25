@@ -78,6 +78,7 @@ class ConfigKey(str, Enum):
     # Outcome Attribution job
     OUTCOME_ATTRIBUTION_INTERVAL_MIN = "outcome_attribution_interval_min"
     OUTCOME_ATTRIBUTION_HORIZON_MIN = "outcome_attribution_horizon_min"
+    OUTCOME_ATTRIBUTION_WINDOW_HOURS = "outcome_attribution_window_hours"
     OUTCOME_COVERAGE_THRESHOLD_PCT = "outcome_coverage_threshold_pct"
     POSTMORTEM_ENABLED = "postmortem_enabled"
     POSTMORTEM_MAX_PER_TICK = "postmortem_max_per_tick"
@@ -264,6 +265,11 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Horizonte de evaluación contrafactual en minutos. "
         "Define cuántas velas 1m se analizan después de cada decisión para calcular MFE/MAE. "
         "Debe ser mayor que el holding promedio esperado. Rango 60–1440.",
+    ),
+    ConfigKey.OUTCOME_ATTRIBUTION_WINDOW_HOURS: _Default(
+        "25", "int",
+        "Ventana compartida (horas) para outcome attribution y post-mortem: "
+        "solo decisiones con ts dentro de este rango se (re)calculan o envían al LLM. Rango 12–72.",
     ),
     ConfigKey.OUTCOME_COVERAGE_THRESHOLD_PCT: _Default(
         "30", "int",

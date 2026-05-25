@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -338,3 +338,37 @@ async def test_postmortem_tick_validation_error_leaves_retryable(session):
         )).scalar_one()
     assert outcome.postmortem_status is None
     assert outcome.lesson_raw["_meta"]["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_postmortem_tick_skips_decisions_outside_window(session):
+    s, factory = session
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    decision = Decision(
+        ts=now - timedelta(hours=30),
+        agent="decisor",
+        model="test",
+        input={"price": 100.0},
+        output={"action": "BUY", "confidence": 0.7, "confluences": ["H"]},
+        executed=True,
+    )
+    s.add(decision)
+    await s.commit()
+    s.add(DecisionOutcome(
+        decision_id=decision.id,
+        horizon_min=240,
+        matured=True,
+        classification="BAD_BUY",
+        computed_at=now - timedelta(hours=26),
+    ))
+    await s.commit()
+
+    llm = _make_llm()
+    await outcome_postmortem_tick(
+        session_factory=_session_factory(factory),
+        llm=llm,
+        max_per_tick=5,
+        window_hours=25,
+        now_fn=lambda: now,
+    )
+    llm.call.assert_not_awaited()

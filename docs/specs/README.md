@@ -26,10 +26,10 @@ Carpeta de especificaciones funcionales y técnicas del proyecto **Crypto AI Tra
 
 | Campo | Valor |
 |-------|-------|
-| Versión | 1.7 |
+| Versión | 1.8 |
 | Fecha de generación | 2026-05-14 |
 | Fecha de unificación | 2026-05-15 (incorpora reverse-engineering de `meli/specs/`) |
-| Última revisión | 2026-05-25 (post-mortem: fallback configurable, coerce JSON, retry de failed, UI Config; migración 013) |
+| Última revisión | 2026-05-25 (ventana compartida attribution/post-mortem: `outcome_attribution_window_hours`, migración 015, UI Config) |
 | Alcance | Bot autónomo en paper trading (PAPER_TRADING) sobre Binance Testnet, con roadmap a LIVE (mainnet). |
 | Owner | Equipo Crypto AI Trading |
 

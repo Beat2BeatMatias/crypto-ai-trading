@@ -1,7 +1,9 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.4 — 2026-05-25.
+> Versión: 1.5 — 2026-05-25.
+>
+> Cambios v1.5: Nota en §2.7 — `outcome_attribution_window_hours` en sección Outcome Attribution de `/config` (ventana compartida attribution + post-mortem).
 >
 > Cambios v1.4: Nota en §2.7 — claves post-mortem (`postmortem_provider`, `postmortem_fallback_providers`) configurables vía UI `/config` (select + `FallbackChain`); mismas opciones que Decisor/Supervisor.
 
@@ -419,7 +421,9 @@ Errores:
 
 > Toda actualización inserta una fila en `config_history` con `changed_by="user"`.
 
-> **Post-mortem (UI)**: la sección "Post-mortem — Aprendizaje" en `/config` expone `postmortem_provider` (select) y `postmortem_fallback_providers` (componente `FallbackChain`, CSV ordenado). También: `postmortem_enabled`, `postmortem_max_per_tick`, `block_k_max_lines`, `block_k_window_hours`.
+> **Outcome Attribution (UI)**: sección en `/config` con `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_attribution_window_hours` (ventana compartida con post-mortem, default 25 h) y `outcome_coverage_threshold_pct`.
+
+> **Post-mortem (UI)**: la sección "Post-mortem — Aprendizaje" en `/config` expone `postmortem_provider` (select) y `postmortem_fallback_providers` (componente `FallbackChain`, CSV ordenado). También: `postmortem_enabled`, `postmortem_max_per_tick`, `block_k_max_lines`, `block_k_window_hours`. Usa la misma ventana temporal que attribution (`outcome_attribution_window_hours`, sección Outcome Attribution).
 
 #### `GET /api/config/suggestions`
 

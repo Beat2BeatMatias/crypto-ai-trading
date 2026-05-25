@@ -531,6 +531,7 @@ async def run() -> None:
 
         horizon_min = 240
         coverage_threshold_pct = 30.0
+        window_hours = 25
         postmortem_enabled = True
         max_per_tick = 5
         provider_name = "gemini-2.5-flash"
@@ -540,6 +541,7 @@ async def run() -> None:
                 store = ConfigStore(s)
                 horizon_min = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_HORIZON_MIN))
                 coverage_threshold_pct = float(await store.get_typed(ConfigKey.OUTCOME_COVERAGE_THRESHOLD_PCT))
+                window_hours = int(await store.get_typed(ConfigKey.OUTCOME_ATTRIBUTION_WINDOW_HOURS))
                 postmortem_enabled = bool(await store.get_typed(ConfigKey.POSTMORTEM_ENABLED))
                 max_per_tick = int(await store.get_typed(ConfigKey.POSTMORTEM_MAX_PER_TICK))
                 provider_name = str(await store.get(ConfigKey.POSTMORTEM_PROVIDER))
@@ -553,6 +555,7 @@ async def run() -> None:
             session_factory=session_factory,
             horizon_min=horizon_min,
             coverage_threshold_pct=coverage_threshold_pct,
+            window_hours=window_hours,
         )
 
         if not postmortem_enabled:
@@ -564,6 +567,7 @@ async def run() -> None:
                 max_per_tick=max_per_tick,
                 provider_name=provider_name,
                 fallback_providers=postmortem_fallbacks,
+                window_hours=window_hours,
             )
         except Exception as e:
             logger.error("postmortem.job.error", error=str(e))
