@@ -534,6 +534,7 @@ async def run() -> None:
         postmortem_enabled = True
         max_per_tick = 5
         provider_name = "gemini-2.5-flash"
+        postmortem_fallbacks: list[LLMProvider] = []
         try:
             async with session_factory() as s:
                 store = ConfigStore(s)
@@ -542,6 +543,9 @@ async def run() -> None:
                 postmortem_enabled = bool(await store.get_typed(ConfigKey.POSTMORTEM_ENABLED))
                 max_per_tick = int(await store.get_typed(ConfigKey.POSTMORTEM_MAX_PER_TICK))
                 provider_name = str(await store.get(ConfigKey.POSTMORTEM_PROVIDER))
+                postmortem_fallbacks = _parse_providers(
+                    await store.get(ConfigKey.POSTMORTEM_FALLBACK_PROVIDERS)
+                )
         except Exception as e:
             logger.warning("outcome_attribution.config_read_failed", error=str(e))
 
@@ -559,6 +563,7 @@ async def run() -> None:
                 llm=llm,
                 max_per_tick=max_per_tick,
                 provider_name=provider_name,
+                fallback_providers=postmortem_fallbacks,
             )
         except Exception as e:
             logger.error("postmortem.job.error", error=str(e))

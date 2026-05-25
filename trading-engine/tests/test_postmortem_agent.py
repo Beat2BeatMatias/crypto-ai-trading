@@ -87,3 +87,43 @@ async def test_postmortem_agent_parses_llm_response():
     assert lesson.root_cause_tag == "false_breakout_range"
     assert lesson.confluence_analysis.misapplied_codes == ["H"]
     llm.call.assert_awaited_once()
+    call_kwargs = llm.call.await_args.kwargs
+    assert call_kwargs["fallbacks"] == []
+
+
+@pytest.mark.asyncio
+async def test_postmortem_agent_passes_configured_fallbacks():
+    llm = MagicMock(spec=LLMClient)
+    llm.call = AsyncMock(return_value=LLMResponse(
+        text=_lesson_json(),
+        tokens_in=100,
+        tokens_out=200,
+        latency_ms=50,
+        provider=LLMProvider.GEMINI_FLASH.value,
+    ))
+    agent = PostMortemAgent(
+        llm=llm,
+        fallbacks=[LLMProvider.GROQ_COMPOUND_MINI, LLMProvider.GROQ_LLAMA4_SCOUT],
+    )
+    decision = SimpleNamespace(
+        id=uuid4(),
+        ts=datetime.now(tz=timezone.utc),
+        input={"price": 100.0},
+        output={"action": "HOLD", "confidence": 0.6, "confluences": []},
+        trade_id=None,
+    )
+    outcome = SimpleNamespace(
+        classification="MISSED_OPPORTUNITY",
+        forward_return_pct=0.5,
+        mfe_pct=0.5,
+        mae_pct=-0.1,
+        time_to_mfe_min=10,
+        time_to_mae_min=5,
+        sl_dist_pct=None,
+        tp_target_pct=0.4,
+    )
+    await agent.analyze(decision=decision, outcome=outcome, trade=None, severity_score=0.5)
+    assert llm.call.await_args.kwargs["fallbacks"] == [
+        LLMProvider.GROQ_COMPOUND_MINI,
+        LLMProvider.GROQ_LLAMA4_SCOUT,
+    ]

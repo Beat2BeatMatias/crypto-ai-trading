@@ -41,10 +41,17 @@ const SELECT_OPTIONS = {
         "groq-llama-4-scout", "groq-gpt-oss-120b", "gemini-2.5-flash"],
     supervisor_provider: ["gemini-2.5-pro", "groq-llama-3.3-70b", "groq-compound-beta",
         "groq-llama-4-scout", "groq-gpt-oss-120b"],
+    postmortem_provider: ["gemini-2.5-flash", "gemini-2.5-pro", "groq-llama-3.3-70b",
+        "groq-compound-beta", "groq-compound-mini", "groq-llama-4-scout",
+        "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3-32b", "groq-llama-3.1-8b"],
     mode: ["PAPER_TRADING", "LIVE"],
     atr_timeframe: ["5m", "15m", "1h"],
 };
-const FALLBACK_KEYS = new Set(["fallback_providers", "supervisor_fallback_providers"]);
+const FALLBACK_KEYS = new Set([
+    "fallback_providers",
+    "supervisor_fallback_providers",
+    "postmortem_fallback_providers",
+]);
 const fmt2 = (v) => v.toFixed(2);
 const fmt1 = (v) => v.toFixed(1);
 const fmtPct1 = (v) => `${(v * 100).toFixed(0)}%`;
@@ -123,6 +130,34 @@ const FIELD_DEFS = {
         label: "Proveedor LLM — Supervisor",
         description: "Modelo primario que genera el playbook diario.",
         type: "select",
+    },
+    postmortem_provider: {
+        label: "Proveedor LLM — Post-mortem",
+        description: "Modelo primario que analiza decisiones con outcome negativo y genera lecciones.",
+        type: "select",
+    },
+    postmortem_enabled: {
+        label: "Post-mortem habilitado",
+        description: "Si está activo, tras outcome attribution se encadena el análisis LLM de malas decisiones.",
+        type: "toggle",
+    },
+    postmortem_max_per_tick: {
+        label: "Post-mortems por tick",
+        description: "Máximo de análisis LLM por ejecución del job (cada intervalo de outcome attribution).",
+        type: "slider", min: 1, max: 20, step: 1, unit: "análisis",
+        format: v => String(v), parse: parseInt,
+    },
+    block_k_max_lines: {
+        label: "Bloque K — máx. líneas",
+        description: "Cantidad de lecciones post-mortem recientes inyectadas en el prompt del Decisor.",
+        type: "slider", min: 1, max: 10, step: 1, unit: "líneas",
+        format: v => String(v), parse: parseInt,
+    },
+    block_k_window_hours: {
+        label: "Bloque K — ventana horaria",
+        description: "Solo lecciones completadas en las últimas N horas aparecen en el Bloque K.",
+        type: "slider", min: 24, max: 168, step: 24, unit: "h",
+        format: v => `${v}h`, parse: parseInt,
     },
     llm_timeout_sec: {
         label: "Timeout LLM",
@@ -398,6 +433,18 @@ const GROUPS = [
         keys: ["decisor_provider", "supervisor_provider", "llm_timeout_sec", "llm_max_retries"],
     },
     {
+        title: "Post-mortem — Aprendizaje",
+        color: "orange",
+        keys: [
+            "postmortem_enabled",
+            "postmortem_provider",
+            "postmortem_max_per_tick",
+            "block_k_max_lines",
+            "block_k_window_hours",
+        ],
+        note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). La cadena de fallback se configura abajo.",
+    },
+    {
         title: "Scheduler",
         color: "zinc",
         keys: ["supervisor_cron"],
@@ -493,6 +540,7 @@ function FallbackChain({ label, configKey, currentValue, onSave }) {
 }
 const COLOR_CLASSES = {
     amber: { border: "border-amber-800/40", title: "text-amber-300", dot: "bg-amber-400" },
+    orange: { border: "border-orange-800/40", title: "text-orange-300", dot: "bg-orange-400" },
     emerald: { border: "border-emerald-800/40", title: "text-emerald-300", dot: "bg-emerald-400" },
     sky: { border: "border-sky-800/40", title: "text-sky-300", dot: "bg-sky-400" },
     violet: { border: "border-violet-800/40", title: "text-violet-300", dot: "bg-violet-400" },
@@ -562,6 +610,7 @@ export function Config() {
     const modeEntry = entries.find(e => e.key === "mode");
     const fallbackDecissor = entries.find(e => e.key === "fallback_providers");
     const fallbackSupervisor = entries.find(e => e.key === "supervisor_fallback_providers");
+    const fallbackPostMortem = entries.find(e => e.key === "postmortem_fallback_providers");
     const knownKeys = new Set([
         ...GROUPS.flatMap(g => g.keys),
         ...Array.from(FALLBACK_KEYS),
@@ -573,6 +622,10 @@ export function Config() {
         "engine_pause_reason",
         "pending_execute",
         "fallback_provider",
+        "postmortem_interval_min",
+        "confluence_promotion_min_occurrences",
+        "confluence_promotion_window_days",
+        "confluence_registry_max_active",
         // legacy obsoletas — eliminadas en v1.3 LLM-centric
         "peso_timeframe_partial",
         "peso_timeframe_minimal",
@@ -599,5 +652,5 @@ export function Config() {
                                     return null;
                                 return (_jsx("div", { children: _jsx(ConfigField, { fieldKey: e.key, def: def, value: e.value, entry: e, onSave: (k, v) => onSave(k, v) }) }, e.key));
                             }) })] }, group.title));
-            }), fallbackDecissor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Decisor", configKey: "fallback_providers", currentValue: fallbackDecissor.value, onSave: onSave })), fallbackSupervisor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Supervisor", configKey: "supervisor_fallback_providers", currentValue: fallbackSupervisor.value, onSave: onSave })), otherEntries.length > 0 && (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5 border border-zinc-800", children: [_jsx("h2", { className: "text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4", children: "Otros par\u00E1metros" }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-600 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-4 w-64", children: "Key" }), _jsx("th", { className: "text-left pr-4", children: "Valor" }), _jsx("th", { className: "w-24" })] }) }), _jsx("tbody", { children: otherEntries.map(e => (_jsxs("tr", { className: "border-t border-zinc-800", children: [_jsx("td", { className: "py-2 pr-4 font-mono text-zinc-400 text-xs align-top pt-3", children: e.key }), _jsxs("td", { className: "pr-4 align-top pt-2", children: [SELECT_OPTIONS[e.key] ? (_jsx("select", { className: "rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100", value: edits[e.key] ?? e.value, onChange: ev => { setEdits(p => ({ ...p, [e.key]: ev.target.value })); onSave(e.key, ev.target.value); }, children: SELECT_OPTIONS[e.key].map(opt => _jsx("option", { value: opt, children: opt }, opt)) })) : (_jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm", value: edits[e.key] ?? e.value, onChange: ev => setEdits(p => ({ ...p, [e.key]: ev.target.value })) })), _jsx(SupervisorHint, { entry: e })] }), _jsx("td", { className: "align-top pt-2", children: edits[e.key] !== undefined && edits[e.key] !== e.value && (_jsx("button", { onClick: () => onSave(e.key), className: "rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500", children: "Guardar" })) })] }, e.key))) })] })] })), drawdownResetModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-amber-700/50 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2 text-amber-300", children: "\u26A0\uFE0F Resetear pico de drawdown" }), _jsx("p", { className: "text-sm text-zinc-300 mb-4", children: "El engine dejar\u00E1 de considerar el historial anterior como referencia del pico m\u00E1ximo. A partir del pr\u00F3ximo tick, el drawdown se medir\u00E1 desde el balance actual." }), _jsx("p", { className: "text-xs text-zinc-500 mb-4", children: "No se eliminan datos. El historial queda intacto y el reset puede rehacerse en cualquier momento." }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setDrawdownResetModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm hover:bg-zinc-600", children: "Cancelar" }), _jsx("button", { onClick: onResetDrawdown, disabled: drawdownResetting, className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500 disabled:opacity-50", children: drawdownResetting ? "Reseteando..." : "Confirmar reset" })] })] }) })), liveModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-zinc-700 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2", children: "\u26A0\uFE0F Confirmar modo LIVE" }), _jsxs("p", { className: "text-sm text-zinc-300 mb-3", children: ["Esto activa trading con dinero real en Binance. Escribe exactamente:", _jsx("code", { className: "block mt-2 bg-zinc-800 px-3 py-2 rounded text-amber-300", children: "CONFIRMO TRADING REAL" })] }), _jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 mb-3", value: liveConfirm, onChange: e => setLiveConfirm(e.target.value) }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setLiveModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm", children: "Cancelar" }), _jsx("button", { onClick: onLive, className: "rounded bg-red-600 px-4 py-2 text-sm hover:bg-red-500", children: "Activar LIVE" })] })] }) }))] }));
+            }), fallbackDecissor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Decisor", configKey: "fallback_providers", currentValue: fallbackDecissor.value, onSave: onSave })), fallbackSupervisor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Supervisor", configKey: "supervisor_fallback_providers", currentValue: fallbackSupervisor.value, onSave: onSave })), fallbackPostMortem && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Post-mortem", configKey: "postmortem_fallback_providers", currentValue: fallbackPostMortem.value, onSave: onSave })), otherEntries.length > 0 && (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5 border border-zinc-800", children: [_jsx("h2", { className: "text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4", children: "Otros par\u00E1metros" }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-600 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-4 w-64", children: "Key" }), _jsx("th", { className: "text-left pr-4", children: "Valor" }), _jsx("th", { className: "w-24" })] }) }), _jsx("tbody", { children: otherEntries.map(e => (_jsxs("tr", { className: "border-t border-zinc-800", children: [_jsx("td", { className: "py-2 pr-4 font-mono text-zinc-400 text-xs align-top pt-3", children: e.key }), _jsxs("td", { className: "pr-4 align-top pt-2", children: [SELECT_OPTIONS[e.key] ? (_jsx("select", { className: "rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100", value: edits[e.key] ?? e.value, onChange: ev => { setEdits(p => ({ ...p, [e.key]: ev.target.value })); onSave(e.key, ev.target.value); }, children: SELECT_OPTIONS[e.key].map(opt => _jsx("option", { value: opt, children: opt }, opt)) })) : (_jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm", value: edits[e.key] ?? e.value, onChange: ev => setEdits(p => ({ ...p, [e.key]: ev.target.value })) })), _jsx(SupervisorHint, { entry: e })] }), _jsx("td", { className: "align-top pt-2", children: edits[e.key] !== undefined && edits[e.key] !== e.value && (_jsx("button", { onClick: () => onSave(e.key), className: "rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500", children: "Guardar" })) })] }, e.key))) })] })] })), drawdownResetModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-amber-700/50 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2 text-amber-300", children: "\u26A0\uFE0F Resetear pico de drawdown" }), _jsx("p", { className: "text-sm text-zinc-300 mb-4", children: "El engine dejar\u00E1 de considerar el historial anterior como referencia del pico m\u00E1ximo. A partir del pr\u00F3ximo tick, el drawdown se medir\u00E1 desde el balance actual." }), _jsx("p", { className: "text-xs text-zinc-500 mb-4", children: "No se eliminan datos. El historial queda intacto y el reset puede rehacerse en cualquier momento." }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setDrawdownResetModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm hover:bg-zinc-600", children: "Cancelar" }), _jsx("button", { onClick: onResetDrawdown, disabled: drawdownResetting, className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500 disabled:opacity-50", children: drawdownResetting ? "Reseteando..." : "Confirmar reset" })] })] }) })), liveModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-zinc-700 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2", children: "\u26A0\uFE0F Confirmar modo LIVE" }), _jsxs("p", { className: "text-sm text-zinc-300 mb-3", children: ["Esto activa trading con dinero real en Binance. Escribe exactamente:", _jsx("code", { className: "block mt-2 bg-zinc-800 px-3 py-2 rounded text-amber-300", children: "CONFIRMO TRADING REAL" })] }), _jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 mb-3", value: liveConfirm, onChange: e => setLiveConfirm(e.target.value) }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setLiveModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm", children: "Cancelar" }), _jsx("button", { onClick: onLive, className: "rounded bg-red-600 px-4 py-2 text-sm hover:bg-red-500", children: "Activar LIVE" })] })] }) }))] }));
 }

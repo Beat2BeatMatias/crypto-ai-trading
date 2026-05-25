@@ -82,6 +82,7 @@ class ConfigKey(str, Enum):
     POSTMORTEM_ENABLED = "postmortem_enabled"
     POSTMORTEM_MAX_PER_TICK = "postmortem_max_per_tick"
     POSTMORTEM_PROVIDER = "postmortem_provider"
+    POSTMORTEM_FALLBACK_PROVIDERS = "postmortem_fallback_providers"
     POSTMORTEM_INTERVAL_MIN = "postmortem_interval_min"
     BLOCK_K_MAX_LINES = "block_k_max_lines"
     BLOCK_K_WINDOW_HOURS = "block_k_window_hours"
@@ -279,7 +280,12 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.POSTMORTEM_PROVIDER: _Default(
         "gemini-2.5-flash", "string",
-        "Provider LLM para post-mortem (gemini-2.5-flash | groq-llama-3.3-70b | …).",
+        "Provider LLM primario para post-mortem. Opciones: gemini-2.5-flash | gemini-2.5-pro | groq-llama-3.3-70b | …",
+    ),
+    ConfigKey.POSTMORTEM_FALLBACK_PROVIDERS: _Default(
+        "groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b",
+        "string",
+        "Cascada de fallback para post-mortem (CSV ordenado). Mismas opciones que fallback_providers.",
     ),
     ConfigKey.POSTMORTEM_INTERVAL_MIN: _Default(
         "60", "int",

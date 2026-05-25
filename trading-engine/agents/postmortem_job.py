@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.llm_client import LLMClient
+from agents.llm_client import LLMClient, LLMProvider
 from agents.confluence_registry import fetch_promoted_pattern_tags, upsert_candidate
 from agents.lesson_normalizer import normalize
 from agents.postmortem_agent import PostMortemAgent, provider_from_config
@@ -111,10 +111,15 @@ async def outcome_postmortem_tick(
     llm: LLMClient,
     max_per_tick: int = 5,
     provider_name: str = "gemini-2.5-flash",
+    fallback_providers: list[LLMProvider] | None = None,
     now_fn: Callable[[], datetime] | None = None,
 ) -> None:
     now = (now_fn or _utcnow)()
-    agent = PostMortemAgent(llm=llm, provider=provider_from_config(provider_name))
+    agent = PostMortemAgent(
+        llm=llm,
+        provider=provider_from_config(provider_name),
+        fallbacks=fallback_providers or [],
+    )
 
     async with session_factory() as session:
         raw_rows = await _fetch_candidates(session)

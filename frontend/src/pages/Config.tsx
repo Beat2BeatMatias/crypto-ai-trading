@@ -45,11 +45,18 @@ const SELECT_OPTIONS: Record<string, string[]> = {
                         "groq-llama-4-scout", "groq-gpt-oss-120b", "gemini-2.5-flash"],
   supervisor_provider: ["gemini-2.5-pro", "groq-llama-3.3-70b", "groq-compound-beta",
                         "groq-llama-4-scout", "groq-gpt-oss-120b"],
+  postmortem_provider: ["gemini-2.5-flash", "gemini-2.5-pro", "groq-llama-3.3-70b",
+                        "groq-compound-beta", "groq-compound-mini", "groq-llama-4-scout",
+                        "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3-32b", "groq-llama-3.1-8b"],
   mode:                ["PAPER_TRADING", "LIVE"],
   atr_timeframe:       ["5m", "15m", "1h"],
 };
 
-const FALLBACK_KEYS = new Set(["fallback_providers", "supervisor_fallback_providers"]);
+const FALLBACK_KEYS = new Set([
+  "fallback_providers",
+  "supervisor_fallback_providers",
+  "postmortem_fallback_providers",
+]);
 
 type FieldDef = {
   label: string;
@@ -142,6 +149,34 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     label: "Proveedor LLM — Supervisor",
     description: "Modelo primario que genera el playbook diario.",
     type: "select",
+  },
+  postmortem_provider: {
+    label: "Proveedor LLM — Post-mortem",
+    description: "Modelo primario que analiza decisiones con outcome negativo y genera lecciones.",
+    type: "select",
+  },
+  postmortem_enabled: {
+    label: "Post-mortem habilitado",
+    description: "Si está activo, tras outcome attribution se encadena el análisis LLM de malas decisiones.",
+    type: "toggle",
+  },
+  postmortem_max_per_tick: {
+    label: "Post-mortems por tick",
+    description: "Máximo de análisis LLM por ejecución del job (cada intervalo de outcome attribution).",
+    type: "slider", min: 1, max: 20, step: 1, unit: "análisis",
+    format: v => String(v), parse: parseInt,
+  },
+  block_k_max_lines: {
+    label: "Bloque K — máx. líneas",
+    description: "Cantidad de lecciones post-mortem recientes inyectadas en el prompt del Decisor.",
+    type: "slider", min: 1, max: 10, step: 1, unit: "líneas",
+    format: v => String(v), parse: parseInt,
+  },
+  block_k_window_hours: {
+    label: "Bloque K — ventana horaria",
+    description: "Solo lecciones completadas en las últimas N horas aparecen en el Bloque K.",
+    type: "slider", min: 24, max: 168, step: 24, unit: "h",
+    format: v => `${v}h`, parse: parseInt,
   },
   llm_timeout_sec: {
     label: "Timeout LLM",
@@ -423,6 +458,18 @@ const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] 
     keys: ["decisor_provider", "supervisor_provider", "llm_timeout_sec", "llm_max_retries"],
   },
   {
+    title: "Post-mortem — Aprendizaje",
+    color: "orange",
+    keys: [
+      "postmortem_enabled",
+      "postmortem_provider",
+      "postmortem_max_per_tick",
+      "block_k_max_lines",
+      "block_k_window_hours",
+    ],
+    note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). La cadena de fallback se configura abajo.",
+  },
+  {
     title: "Scheduler",
     color: "zinc",
     keys: ["supervisor_cron"],
@@ -696,6 +743,7 @@ function FallbackChain({ label, configKey, currentValue, onSave }: {
 
 const COLOR_CLASSES: Record<string, { border: string; title: string; dot: string }> = {
   amber:   { border: "border-amber-800/40",   title: "text-amber-300",   dot: "bg-amber-400" },
+  orange:  { border: "border-orange-800/40",  title: "text-orange-300",  dot: "bg-orange-400" },
   emerald: { border: "border-emerald-800/40", title: "text-emerald-300", dot: "bg-emerald-400" },
   sky:     { border: "border-sky-800/40",     title: "text-sky-300",     dot: "bg-sky-400" },
   violet:  { border: "border-violet-800/40",  title: "text-violet-300",  dot: "bg-violet-400" },
@@ -762,6 +810,7 @@ export function Config() {
   const modeEntry = entries.find(e => e.key === "mode");
   const fallbackDecissor = entries.find(e => e.key === "fallback_providers");
   const fallbackSupervisor = entries.find(e => e.key === "supervisor_fallback_providers");
+  const fallbackPostMortem = entries.find(e => e.key === "postmortem_fallback_providers");
 
   const knownKeys = new Set([
     ...GROUPS.flatMap(g => g.keys),
@@ -774,6 +823,10 @@ export function Config() {
     "engine_pause_reason",
     "pending_execute",
     "fallback_provider",
+    "postmortem_interval_min",
+    "confluence_promotion_min_occurrences",
+    "confluence_promotion_window_days",
+    "confluence_registry_max_active",
     // legacy obsoletas — eliminadas en v1.3 LLM-centric
     "peso_timeframe_partial",
     "peso_timeframe_minimal",
@@ -859,6 +912,10 @@ export function Config() {
       {fallbackSupervisor && (
         <FallbackChain label="Cadena de fallback — Supervisor" configKey="supervisor_fallback_providers"
           currentValue={fallbackSupervisor.value} onSave={onSave} />
+      )}
+      {fallbackPostMortem && (
+        <FallbackChain label="Cadena de fallback — Post-mortem" configKey="postmortem_fallback_providers"
+          currentValue={fallbackPostMortem.value} onSave={onSave} />
       )}
 
       {/* Parámetros sin UI dedicada */}

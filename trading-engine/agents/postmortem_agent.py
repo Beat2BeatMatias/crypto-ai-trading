@@ -58,9 +58,16 @@ def _trim_input(inp: dict[str, Any], *, max_chars: int = 12000) -> dict[str, Any
 
 
 class PostMortemAgent:
-    def __init__(self, *, llm: LLMClient, provider: LLMProvider | None = None):
+    def __init__(
+        self,
+        *,
+        llm: LLMClient,
+        provider: LLMProvider | None = None,
+        fallbacks: list[LLMProvider] | None = None,
+    ):
         self.llm = llm
         self.provider = provider or LLMProvider.GEMINI_FLASH
+        self.fallbacks = fallbacks or []
 
     async def analyze(
         self,
@@ -102,7 +109,7 @@ class PostMortemAgent:
             provider=self.provider,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            fallbacks=[LLMProvider.GROQ_LLAMA],
+            fallbacks=self.fallbacks,
             json_mode=True,
         )
         parsed = _parse_json(resp.text)
