@@ -41,7 +41,6 @@ _SAFE_BOUNDS: dict[str, tuple] = {
     "conf_threshold_range":        (0.50, 0.90),
     "conf_threshold_high_vol":     (0.60, 0.95),
 }
-_VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
 
 # Boolean toggles que el Supervisor puede activar/desactivar.
 # Aplicados sólo cuando la sugerencia es claramente "true" o "false".
@@ -151,7 +150,6 @@ CONFIGURACIÓN ACTUAL:
 OPCIONES VÁLIDAS (con criterio LLM-Centric):
 
 ENFORCEMENT — Risk Gate los aplica con dureza:
-- atr_timeframe: "5m" | "15m" | "1h" — granularidad del ATR de referencia.
 - sl_atr_multiplier: 0.1 a 0.8 (cuanto menor, SL más cerca; debe ser < sl_atr_max_multiplier).
   Criterio: bajar si los SL llegan tarde y dejan grandes pérdidas; subir si te sacan con ruido.
 - sl_atr_max_multiplier: 0.5 a 20.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
@@ -160,7 +158,9 @@ ENFORCEMENT — Risk Gate los aplica con dureza:
 - min_fees_to_tp_ratio: 1.5 a 6.0 — subir si los TPs apenas pasan fees (rentabilidad marginal).
 
 PARÁMETROS DE SOLO LECTURA (informativo, NO sugerir cambios):
-- decisor_interval_min: se muestra como contexto operativo. El operador es el único que puede modificarlo.
+- decisor_interval_min: intervalo entre ciclos del Decisor. Solo el operador puede modificarlo.
+  NO incluir este parámetro en el array `suggestions`.
+- atr_timeframe: timeframe del ATR de referencia (5m / 15m / 1h). Solo el operador puede modificarlo.
   NO incluir este parámetro en el array `suggestions`.
 
 GUÍAS LLM (sólo recalibrar si hay desalineación medible):
@@ -645,16 +645,7 @@ class Supervisor:
             if suggested is None or suggested == current:
                 continue
 
-            if key == "atr_timeframe":
-                if str(suggested) not in _VALID_ATR_TIMEFRAMES:
-                    rejected.append({**s, "reject_reason": f"valor '{suggested}' no es un timeframe válido"})
-                    continue
-                working[key] = str(suggested)
-                await store.set(ConfigKey(key), str(suggested), changed_by="supervisor")
-                applied.append(s)
-                logger.info("supervisor.config_applied", key=key, old=current, new=suggested, reason=reason)
-
-            elif key in _SAFE_TOGGLES:
+            if key in _SAFE_TOGGLES:
                 normalized = self._normalize_bool(suggested)
                 if normalized is None:
                     rejected.append({**s, "reject_reason": f"valor '{suggested}' no es booleano válido (true/false)"})

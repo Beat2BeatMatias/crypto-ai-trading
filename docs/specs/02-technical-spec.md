@@ -409,8 +409,7 @@ Complementa `01-functional-spec.md §F5.bis`. Acá se describe el contrato técn
   - `sl_atr_multiplier <= sl_atr_max_multiplier`
   - `min_rr_ratio <= default_rr_ratio`
   - `conf_threshold_trending_up <= conf_threshold_range <= conf_threshold_high_vol`
-- **Exclusiones absolutas del auto-apply**: `daily_stop_pct`, `max_drawdown_pct`.
-- **`_VALID_ATR_TIMEFRAMES`**: `{"5m", "15m", "1h"}` para `atr_timeframe`.
+- **Exclusiones absolutas del auto-apply**: `daily_stop_pct`, `max_drawdown_pct`, `decisor_interval_min`, `atr_timeframe`.
 
 > Detalle de bounds en `05-risk-and-safety.md §7`.
 
@@ -673,16 +672,17 @@ _SAFE_BOUNDS = {
   "sl_atr_multiplier":          (0.1, 0.8),
   "sl_atr_max_multiplier":      (0.5, 20.0),
   "min_rr_ratio":               (1.0, 3.0),
-  "decisor_interval_min":       (5, 60),
   "max_position_pct":           (0.01, 0.20),
+  "min_fees_to_tp_ratio":       (1.5, 6.0),
+  "expected_holding_max_min":   (30, 1440),
+  "cooldown_after_sell_min":    (0, 120),
   "conf_threshold_trending_up": (0.40, 0.85),
   "conf_threshold_range":       (0.50, 0.90),
   "conf_threshold_high_vol":    (0.60, 0.95),
 }
-_VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
 ```
 
-`daily_stop_pct` y `max_drawdown_pct` están **excluidos** intencionalmente — el operador debe cambiarlos manualmente.
+`daily_stop_pct`, `max_drawdown_pct`, `decisor_interval_min` y `atr_timeframe` están **excluidos** — el operador debe cambiarlos manualmente desde `/config`.
 
 ---
 

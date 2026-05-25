@@ -230,19 +230,22 @@ Endpoint: `POST /api/mode {mode, confirmation}`.
   "sl_atr_multiplier":          (0.1, 0.8),
   "sl_atr_max_multiplier":      (0.5, 20.0),
   "min_rr_ratio":               (1.0, 3.0),
-  "decisor_interval_min":       (5, 60),
   "max_position_pct":           (0.01, 0.20),
+  "min_fees_to_tp_ratio":       (1.5, 6.0),
+  "expected_holding_max_min":   (30, 1440),
+  "cooldown_after_sell_min":    (0, 120),
   "conf_threshold_trending_up": (0.40, 0.85),
   "conf_threshold_range":       (0.50, 0.90),
   "conf_threshold_high_vol":    (0.60, 0.95),
 }
-_VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
 ```
 
 ### 7.2 Claves **excluidas** del auto-apply
 
 - `daily_stop_pct`
 - `max_drawdown_pct`
+- `decisor_interval_min` — frecuencia del ciclo del Decisor; solo operador.
+- `atr_timeframe` — timeframe del ATR de referencia; solo operador.
 - `postmortem_provider`, `postmortem_fallback_providers`, `postmortem_enabled`, `postmortem_max_per_tick` (configuración de aprendizaje — solo operador vía `/config`)
 
 Estas son **explícitamente** marcadas como demasiado críticas o fuera del dominio de optimización automática. El Supervisor puede sugerirlas en el reporte (salvo post-mortem), pero el código rechaza la aplicación automática y deja constancia en `output.config_rejected`.

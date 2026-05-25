@@ -2,25 +2,6 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { ConfigEntry } from "../types";
 
-/** Keys that the Supervisor agent can modify automatically via config suggestions. */
-const SUPERVISOR_MANAGED_KEYS = new Set([
-  "atr_timeframe",
-  "sl_atr_multiplier",
-  "sl_atr_max_multiplier",
-  "min_rr_ratio",
-  "decisor_interval_min",
-  "max_position_pct",
-  "min_position_size",
-  "conf_threshold_trending_up",
-  "conf_threshold_range",
-  "conf_threshold_high_vol",
-  "min_confluences_buy",
-  "min_fees_to_tp_ratio",
-  "cooldown_after_sell_min",
-  "rsi_overbought_1h",
-  "expected_holding_max_min",
-]);
-
 const ALL_PROVIDERS = [
   "groq-llama-3.3-70b", "groq-compound-beta", "groq-compound-mini",
   "groq-llama-4-scout", "groq-gpt-oss-120b", "groq-gpt-oss-20b",
@@ -486,40 +467,10 @@ const GROUPS: { title: string; keys: string[]; color: string; note?: string }[] 
   },
 ];
 
-function SupervisorHint({ entry }: { entry: ConfigEntry | undefined }) {
-  if (!entry) return null;
-  const isManaged = SUPERVISOR_MANAGED_KEYS.has(entry.key);
-  const bySupervisor = entry.last_changed_by === "supervisor";
-  if (!isManaged && !bySupervisor) return null;
-
-  const dateStr = entry.updated_at
-    ? new Date(entry.updated_at).toLocaleString("es-AR", {
-        hour12: false, day: "2-digit", month: "2-digit",
-        year: "numeric", hour: "2-digit", minute: "2-digit",
-      })
-    : null;
-
-  return (
-    <div className="flex items-center gap-2 mt-1.5">
-      {isManaged && (
-        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-950 border border-indigo-800/50 px-1.5 py-0.5 text-[10px] text-indigo-400 font-medium leading-none">
-          ⚡ auto-supervisor
-        </span>
-      )}
-      {bySupervisor && dateStr && (
-        <span className="text-[10px] text-indigo-400/60 leading-none">
-          Modificado por Supervisor · {dateStr}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function SliderField({ fieldKey, def, value, entry, onSave }: {
+function SliderField({ fieldKey, def, value, onSave }: {
   fieldKey: string;
   def: FieldDef;
   value: string;
-  entry?: ConfigEntry;
   onSave: (key: string, value: string) => void;
 }) {
   const parse = def.parse ?? parseFloat;
@@ -578,16 +529,14 @@ function SliderField({ fieldKey, def, value, entry, onSave }: {
           <span>{fmt(def.max!)}</span>
         </div>
       </div>
-      <SupervisorHint entry={entry} />
     </div>
   );
 }
 
-function ConfigField({ fieldKey, def, value, entry, onSave }: {
+function ConfigField({ fieldKey, def, value, onSave }: {
   fieldKey: string;
   def: FieldDef;
   value: string;
-  entry?: ConfigEntry;
   onSave: (key: string, value: string) => void;
 }) {
   const [local, setLocal] = useState(value);
@@ -596,7 +545,7 @@ function ConfigField({ fieldKey, def, value, entry, onSave }: {
   useEffect(() => { setLocal(value); setDirty(false); }, [value]);
 
   if (def.type === "slider") {
-    return <SliderField fieldKey={fieldKey} def={def} value={value} entry={entry} onSave={onSave} />;
+    return <SliderField fieldKey={fieldKey} def={def} value={value} onSave={onSave} />;
   }
 
   if (def.type === "toggle") {
@@ -618,7 +567,6 @@ function ConfigField({ fieldKey, def, value, entry, onSave }: {
             }`} />
           </button>
         </div>
-        <SupervisorHint entry={entry} />
       </div>
     );
   }
@@ -640,7 +588,6 @@ function ConfigField({ fieldKey, def, value, entry, onSave }: {
             ))}
           </select>
         </div>
-        <SupervisorHint entry={entry} />
       </div>
     );
   }
@@ -666,7 +613,6 @@ function ConfigField({ fieldKey, def, value, entry, onSave }: {
           )}
         </div>
       </div>
-      <SupervisorHint entry={entry} />
     </div>
   );
 }
@@ -893,7 +839,6 @@ export function Config() {
                       fieldKey={e.key}
                       def={def}
                       value={e.value}
-                      entry={e}
                       onSave={(k, v) => onSave(k, v)}
                     />
                   </div>
@@ -949,7 +894,6 @@ export function Config() {
                         onChange={ev => setEdits(p => ({ ...p, [e.key]: ev.target.value }))}
                       />
                     )}
-                    <SupervisorHint entry={e} />
                   </td>
                   <td className="align-top pt-2">
                     {edits[e.key] !== undefined && edits[e.key] !== e.value && (

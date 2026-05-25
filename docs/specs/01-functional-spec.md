@@ -229,7 +229,7 @@ El sistema "aprende día a día" en un sentido **acotado y trazable**, no por en
 - **No es fine-tuning** del modelo LLM: si el provider actualiza la versión del modelo, no hay continuidad de pesos.
 - **No es memoria embeddings / RAG**: no hay vector store; la "memoria" del Decisor es texto markdown + las últimas 3 decisiones inyectadas en el contexto.
 - **No introduce confluencias A–H nuevas**: el catálogo base A–H permanece fijo en el prompt. Patrones aprendidos pueden promoverse a letras **I–Z** vía pipeline post-mortem (§F10), con trazabilidad en `confluence_registry` y aprobación Supervisor u operador.
-- **No ajusta `daily_stop_pct` ni `max_drawdown_pct`** automáticamente: están explícitamente excluidos de `_SAFE_BOUNDS`.
+- **No ajusta `daily_stop_pct`, `max_drawdown_pct`, `decisor_interval_min` ni `atr_timeframe`** automáticamente: están explícitamente excluidos del auto-apply del Supervisor.
 
 #### F5.bis.3 Memoria de corto, mediano y largo plazo
 

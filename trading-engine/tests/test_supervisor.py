@@ -700,6 +700,34 @@ async def test_apply_suggestions_rejects_removed_legacy_keys(session, fake_llm):
         assert "no elegible" in r["reject_reason"]
 
 
+async def test_apply_suggestions_rejects_atr_timeframe(session, fake_llm):
+    # GIVEN a Supervisor and a suggestion to modify atr_timeframe
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    current_config = {"atr_timeframe": "15m"}
+
+    suggestions = {
+        "suggestions": [
+            {"key": "atr_timeframe", "current": "15m", "suggested": "5m",
+             "reason": "Mayor granularidad para scalping."},
+        ],
+        "summary": "",
+    }
+
+    # WHEN we apply
+    applied, rejected = await sup._apply_config_suggestions(suggestions, current_config)
+
+    # THEN the suggestion is rejected — el Supervisor no puede modificar el timeframe del ATR
+    assert len(applied) == 0
+    assert len(rejected) == 1
+    assert "no elegible" in rejected[0]["reject_reason"]
+
+    # AND nothing is persisted in config_history
+    persisted = (await session.execute(
+        select(ConfigHistory).where(ConfigHistory.key == "atr_timeframe")
+    )).scalars().all()
+    assert len(persisted) == 0
+
+
 async def test_apply_suggestions_rejects_decisor_interval_min(session, fake_llm):
     # GIVEN a Supervisor and a suggestion to modify decisor_interval_min
     sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
