@@ -109,3 +109,57 @@ def test_format_block_k_dedupes_and_limits():
     assert "linea A dup" not in text
     assert "linea B" in text
     assert "no visible" not in text
+
+
+def test_remap_splits_long_text_by_misapplied_code():
+    long_notes = (
+        "La confluencia 'H' (RANGE_SUPPORT_TOUCH) fue declarada, pero el precio "
+        "($77,161.66) no estaba tocando el soporte de rango (BB_lower_1h en $76,247). "
+        "La confluencia 'B' (MACD_BULLISH_CROSS) fue declarada sin cruce real en 15m."
+    )
+    lesson = _base_lesson(
+        classification="MISSED_OPPORTUNITY",
+        confluence_analysis={"misapplied_codes": ["H", "B"], "notes": long_notes},
+        proposed_pattern=None,
+    )
+    result = normalize(lesson, decision_ts="2026-05-25T04:36Z")
+    assert result.route == "remap"
+    assert "MACD_BULLISH_CROSS" in result.block_k_line or any(
+        "MACD_BULLISH_CROSS" in line for line in result.block_k_lines
+    )
+    assert "RANGE_SUPPORT_TOUCH" in result.block_k_line
+    all_lines = [result.block_k_line, *result.block_k_lines]
+    rendered = format_block_k_lessons(
+        [{"lesson_normalized": result.model_dump()}],
+        max_lines=5,
+    )
+    assert "MACD_BULLISH_CROSS" in rendered
+    assert "RANGE_SUPPORT_TOUCH" in rendered
+    assert len(all_lines) >= 2
+
+
+def test_remap_single_code_not_truncated_at_200():
+    text = "x" * 350
+    lesson = _base_lesson(
+        confluence_analysis={"misapplied_codes": ["H"], "notes": text},
+        proposed_pattern=None,
+    )
+    result = normalize(lesson, decision_ts="2026-05-25T04:36Z")
+    assert len(result.block_k_line) > 200
+    assert "…" not in result.block_k_line
+
+
+def test_format_block_k_respects_max_lines_with_split_lesson():
+    rows = [{
+        "lesson_normalized": {
+            "route": "remap",
+            "confidence": 0.9,
+            "block_k_line": "linea 1",
+            "block_k_lines": ["linea 2", "linea 3"],
+            "dedupe_key": "k1",
+        },
+    }]
+    text = format_block_k_lessons(rows, max_lines=2)
+    assert "linea 1" in text
+    assert "linea 2" in text
+    assert "linea 3" not in text

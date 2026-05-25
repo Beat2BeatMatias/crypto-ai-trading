@@ -89,6 +89,7 @@ class LessonNormalized(BaseModel):
     candidate: CandidatePayload | None = None
     guidance: GuidancePayload | None = None
     block_k_line: str
+    block_k_lines: list[str] = Field(default_factory=list)
     dedupe_key: str
 
 
