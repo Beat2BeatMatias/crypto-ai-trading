@@ -1,7 +1,9 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.3 — 2026-05-24.
+> Versión: 1.4 — 2026-05-25.
+>
+> Cambios v1.4: Nota en §2.7 — claves post-mortem (`postmortem_provider`, `postmortem_fallback_providers`) configurables vía UI `/config` (select + `FallbackChain`); mismas opciones que Decisor/Supervisor.
 
 Servicio: **`web`** (FastAPI). Base URL local: `http://localhost:8100`. Todas las rutas REST viven bajo el prefijo `/api`. WebSocket en `/ws` (sin prefijo).
 
@@ -416,6 +418,8 @@ Errores:
 - `404`: clave no seedada (apply migrations + seed defaults).
 
 > Toda actualización inserta una fila en `config_history` con `changed_by="user"`.
+
+> **Post-mortem (UI)**: la sección "Post-mortem — Aprendizaje" en `/config` expone `postmortem_provider` (select) y `postmortem_fallback_providers` (componente `FallbackChain`, CSV ordenado). También: `postmortem_enabled`, `postmortem_max_per_tick`, `block_k_max_lines`, `block_k_window_hours`.
 
 #### `GET /api/config/suggestions`
 

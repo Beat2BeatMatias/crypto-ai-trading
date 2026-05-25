@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.6 — 2026-05-24.
+> Versión: 1.7 — 2026-05-25.
+>
+> Cambios v1.7: `postmortem_fallback_providers` (config + migración 013). `coerce_lesson_raw()` en `postmortem_schemas.py`. Reintento post-mortem (`failed` re-elegible, máx. 3 intentos, `_meta` en `lesson_raw`). UI `/config` sección Post-mortem + `FallbackChain`. Documentada semántica 1 LLM call / decisión.
 >
 > Cambios v1.6: Pipeline post-mortem encadenado a outcome attribution (`postmortem_job`, `PostMortemAgent`, `lesson_normalizer`, Bloque K). Catálogo extendido I–Z (`confluence_candidates`, `confluence_registry`, `shared/confluence_registry_ops.py`). API y UI `/confluence`. CoherenceChecker C7/C8. `_filter_confluence_codes` acepta registry dinámico. Migraciones 011–012. Nuevas config keys post-mortem y promoción.
 >
@@ -142,8 +144,9 @@ run():
 | `agents/supervisor.py` | Métricas 24h, ratificación/regeneración playbook, config suggestions, persistencia. |
 | `agents/outcome_attribution.py` | Función pura `attribute()` — clasificación contrafactual MFE/MAE (sin I/O). |
 | `agents/outcome_attribution_job.py` | Job scheduler: query candidates → OHLCV → UPSERT `decision_outcomes`. |
-| `agents/postmortem_agent.py` | LLM analiza outcomes negativos → `PostMortemLesson` (Pydantic). |
-| `agents/postmortem_job.py` | Encadenado tras attribution: post-mortem → normalizador → Bloque K / candidatos. |
+| `agents/postmortem_schemas.py` | `LessonRaw`, `coerce_lesson_raw()`, elegibilidad y `severity_score`. |
+| `agents/postmortem_agent.py` | LLM 1× por decisión; primary `postmortem_provider` + fallbacks desde config. |
+| `agents/postmortem_job.py` | Encadenado tras attribution; ranking por severidad; retry (máx. 3); upsert candidatos. |
 | `agents/lesson_normalizer.py` | Rutas `remap` / `candidate` / `guidance`; formatea Bloque K. |
 | `agents/confluence_registry.py` | Upsert candidatos, promoción Supervisor, lectura registry activo. |
 | `shared/confluence_registry_ops.py` | Ops compartidas engine+web: promote/reject/deactivate, `verify_spec_testable()`. |
@@ -182,10 +185,10 @@ APScheduler ──▶ decisor_tick()
 
 ### 2.4 Cascade de LLM providers
 
-| Slot | Default Decisor | Default Supervisor |
-|------|----------------|--------------------|
-| primary | `groq-llama-3.3-70b` | `gemini-2.5-pro` |
-| fallback CSV | `gemini-2.5-flash,groq-llama-4-scout,groq-gpt-oss-120b,groq-qwen3-32b,groq-llama-3.1-8b` | `groq-llama-3.3-70b,groq-llama-4-scout,groq-gpt-oss-120b,gemini-2.5-flash` |
+| Slot | Default Decisor | Default Supervisor | Default Post-mortem |
+|------|----------------|--------------------|---------------------|
+| primary | `groq-llama-3.3-70b` | `gemini-2.5-pro` | `gemini-2.5-flash` |
+| fallback CSV | `gemini-2.5-flash,groq-llama-4-scout,...` | `groq-llama-3.3-70b,groq-llama-4-scout,...` | `groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b` |
 
 `LLMClient._is_rate_limit` reconoce 429 / `ResourceExhausted` / "rate limit" en el mensaje y **salta sin retries** al siguiente provider.
 
@@ -466,6 +469,40 @@ Implementada en `Supervisor._evaluate_ratification()`. Cortocircuita la segunda 
 - `ratify` → `supervisor_ran` con `{ratified: true, ratify_reason, ts}`.
 - `regenerate` → `playbook_updated` (preexistente) + `supervisor_ran` con `{ratified: false}`.
 
+#### 2.7.bis Post-mortem — detalles técnicos
+
+Complementa `01-functional-spec.md §F10`.
+
+**Encadenamiento** (`main.py` → `outcome_attribution_tick_wrapper`):
+
+```text
+outcome_attribution_tick()
+  └─ if postmortem_enabled:
+       outcome_postmortem_tick(provider, fallback_providers, max_per_tick)
+```
+
+**Selección de candidatos** (`postmortem_job._fetch_candidates`):
+
+- `classification IN (BAD_BUY, BAD_SELL, MISSED_OPPORTUNITY, BLOCKED_GOOD_TRADE)`
+- `matured = true`
+- `postmortem_status IS NULL OR postmortem_status = 'failed'` (con `_meta.attempts < 3`)
+- Orden por `severity_score` DESC; slice `[:postmortem_max_per_tick]`
+
+**1 decisión = 1 llamada LLM** (`PostMortemAgent.analyze`):
+
+| Slot | Config key | Default |
+|------|------------|---------|
+| Primary | `postmortem_provider` | `gemini-2.5-flash` |
+| Fallback CSV | `postmortem_fallback_providers` | `groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b` |
+
+Parseo vía `_parse_providers()` (mismo helper que Decisor/Supervisor). Cascade en `LLMClient.call(fallbacks=...)`.
+
+**Parseo defensivo**: `coerce_lesson_raw()` → `LessonRaw.model_validate()`. Errores de validación no consumen fallback adicional (la respuesta ya llegó); se reintenta en el próximo tick.
+
+**Reintento**: `_record_failure()` incrementa `lesson_raw._meta.attempts`; status permanece `NULL` hasta 3 fallos, luego `failed`.
+
+**Logs clave**: `postmortem.job.completed`, `postmortem.job.no_candidates`, `postmortem.job.validation_failed`, `postmortem.completed`, `postmortem.job.failed`.
+
 ---
 
 ## 3. Servicio `web`
@@ -552,7 +589,7 @@ frontend/src/
 │   ├── Trades.tsx       ← listado + cerrar
 │   ├── Decisions.tsx    ← historial con input/output JSON
 │   ├── Playbook.tsx     ← markdown + rollback + edit
-│   ├── Config.tsx       ← 60+ parámetros tipados + kill switch + modo
+│   ├── Config.tsx       ← 60+ parámetros; secciones LLM (Decisor/Supervisor/Post-mortem) + FallbackChain
 │   ├── Confluence.tsx   ← candidatos post-mortem, registry I–Z, promote/reject/deactivate
 │   └── Health.tsx       ← estado motor/DB/Binance/LLM/outcome attribution
 └── types/index.ts       ← interfaces TS espejo de los Pydantic
@@ -619,7 +656,7 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
 | Coherence / two-pass | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`. |
 | Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_coverage_threshold_pct`. |
-| Post-mortem / Bloque K | `postmortem_enabled`, `postmortem_max_per_tick`, `postmortem_provider`, `block_k_max_lines`, `block_k_window_hours`. |
+| Post-mortem / Bloque K | `postmortem_enabled`, `postmortem_max_per_tick`, `postmortem_provider`, `postmortem_fallback_providers`, `block_k_max_lines`, `block_k_window_hours`. |
 | Confluencias I–Z | `confluence_promotion_min_occurrences`, `confluence_promotion_window_days`, `confluence_registry_max_active`. |
 | Engine interno | `engine_paused`, `engine_pause_reason`, `drawdown_reset_ts`. |
 
@@ -710,6 +747,7 @@ docker-compose logs -f trading-engine
 | 010 | `balance_snapshots.usdt_locked`, `balance_snapshots.btc_locked`. |
 | 011 | `decision_outcomes`: `postmortem_status`, `lesson_raw`, `lesson_normalized`, `postmortem_at` + índice parcial pending. |
 | 012 | Tablas `confluence_candidates`, `confluence_registry`. |
+| 013 | Seed config `postmortem_fallback_providers` (idempotente). |
 
 ### 8.4 Operaciones rutinarias
 

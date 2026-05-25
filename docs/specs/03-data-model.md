@@ -1,7 +1,9 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.2 — 2026-05-24.
+> Versión: 1.3 — 2026-05-25.
+>
+> Cambios v1.3: Migración 013 — seed `postmortem_fallback_providers`. Documentadas claves post-mortem en `config` (incl. fallback CSV). Índice post-mortem pending incluye reintento de `failed`.
 
 Base de datos: **Postgres 17** (imagen `postgres:17-alpine`).
 SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migraciones en `trading-engine/alembic/versions/`.
@@ -136,7 +138,7 @@ Atribución contrafactual 1:1 con `decisions.id`. Poblada por `outcome_attributi
 | `lesson_normalized` | JSONB | YES | Salida del normalizador (`route`, `dedupe_key`, `block_k_line`, …) |
 | `postmortem_at` | TIMESTAMPTZ | YES | Timestamp del análisis post-mortem |
 
-- Índices: `idx_decision_outcomes_classification (classification, computed_at)`, `idx_decision_outcomes_pending (matured) WHERE matured = false`, `idx_decision_outcomes_postmortem_pending` (parcial: outcomes elegibles sin post-mortem).
+- Índices: `idx_decision_outcomes_classification (classification, computed_at)`, `idx_decision_outcomes_pending (matured) WHERE matured = false`, `idx_decision_outcomes_postmortem_pending` (parcial: outcomes elegibles sin post-mortem **o** `failed` con `< 3` intentos en `lesson_raw._meta.attempts`).
 
 ### 2.3.ter `confluence_candidates` (migration 012)
 
@@ -268,6 +270,18 @@ Versionado de playbook escrito por el Supervisor.
 
 Toda actualización vía `ConfigStore.set` escribe una fila aquí.
 
+**Claves post-mortem** (migration 011 + defaults en código; 013 agrega fallback):
+
+| Key | Tipo | Default | Notas |
+|-----|------|---------|-------|
+| `postmortem_enabled` | bool | `true` | Kill switch del job. |
+| `postmortem_max_per_tick` | int | `5` | Máx. **decisiones** analizadas por tick (1 LLM call c/u). |
+| `postmortem_provider` | string | `gemini-2.5-flash` | Primary LLM. |
+| `postmortem_fallback_providers` | string (CSV) | ver migration 013 | Cascada ordenada; editable desde `/config`. |
+| `postmortem_interval_min` | int | `60` | Reservado; hoy el job corre encadenado al tick de attribution. |
+| `block_k_max_lines` | int | `8` | Límite de líneas en Bloque K del prompt Decisor. |
+| `block_k_window_hours` | int | `72` | Ventana temporal de lecciones `remap`/`guidance`. |
+
 ### 2.8 `daily_stats`
 
 Snapshot agregado por fecha (UTC).
@@ -333,6 +347,7 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 010 | `010_add_balance_locked_fields.py` | `balance_snapshots.usdt_locked`, `btc_locked`. |
 | 011 | `011_add_decision_outcome_postmortem.py` | Columnas post-mortem en `decision_outcomes` + índice parcial pending. |
 | 012 | `012_add_confluence_registry.py` | Tablas `confluence_candidates`, `confluence_registry`. |
+| 013 | `013_add_postmortem_fallback_providers.py` | Seed idempotente `postmortem_fallback_providers` en `config`. |
 
 Comandos:
 
@@ -359,7 +374,7 @@ alembic downgrade -1        # rollback granular
 | Insert `Decision` | 1/tick + 1/día | Sin update salvo `rejected_reason`. |
 | Read `Decision` últimos 3 | 1/tick | `WHERE agent='decisor' ORDER BY ts DESC LIMIT 3`. |
 | Insert/UPSERT `DecisionOutcome` | 1/h (configurable) | UPSERT por `decision_id`. |
-| Update post-mortem columns | encadenado a attribution | Máx. `postmortem_max_per_tick` por tick. |
+| Update post-mortem columns | encadenado a attribution | Máx. `postmortem_max_per_tick` decisiones/tick; reintento de `failed` hasta 3 intentos. |
 | UPSERT `ConfluenceCandidate` | encadenado a post-mortem | Por `pattern_tag`. |
 | Read `ConfluenceRegistry WHERE active` | 1/tick Decisor | Pequeño (≤5 filas típico). |
 | Read `Position WHERE status='open'` | 1/tick + 2/min (WS) | Pequeño. |

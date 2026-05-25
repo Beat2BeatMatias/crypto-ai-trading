@@ -1,7 +1,9 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.5 — 2026-05-24.
+> Versión: 1.6 — 2026-05-25.
+>
+> Cambios v1.6: Claves post-mortem (`postmortem_provider`, `postmortem_fallback_providers`, `postmortem_max_per_tick`) son **solo operador** — excluidas del auto-apply del Supervisor (§7.2). Costo LLM acotado por `postmortem_max_per_tick` (default 5 decisiones/tick).
 >
 > Cambios v1.5: CoherenceChecker C7 (R:R real ≤ mínimo, siempre critical) y C8 (confluencia I–Z con `verify_spec` no cumplido). Catálogo extendido I–Z vía `confluence_registry`; filtro `_filter_confluence_codes` acepta letras activas.
 >
@@ -241,8 +243,9 @@ _VALID_ATR_TIMEFRAMES = {"5m", "15m", "1h"}
 
 - `daily_stop_pct`
 - `max_drawdown_pct`
+- `postmortem_provider`, `postmortem_fallback_providers`, `postmortem_enabled`, `postmortem_max_per_tick` (configuración de aprendizaje — solo operador vía `/config`)
 
-Estas son **explícitamente** marcadas como demasiado críticas. El Supervisor puede sugerirlas en el reporte, pero el código rechaza la aplicación automática y deja constancia en `output.config_rejected`.
+Estas son **explícitamente** marcadas como demasiado críticas o fuera del dominio de optimización automática. El Supervisor puede sugerirlas en el reporte (salvo post-mortem), pero el código rechaza la aplicación automática y deja constancia en `output.config_rejected`.
 
 ### 7.3 Diagnostic mode
 
@@ -285,7 +288,7 @@ El design doc original describía un auto-rollback automático: "si 7 días post
 | Binance REST caído (fees) | Usa último `fee_snapshot` o `(0.001, 0.001)` por defecto. |
 | Binance REST caído (orden) | `cb.record_exchange_failure()`; 5 consecutivos ⇒ pausa engine. |
 | Binance WS (order book) caído | `OrderBookCollector` reintenta cada 2 s; `snapshot()` devuelve `None`; el Decisor opera con valores neutros (`spread=0`, `imbalance=1.0`, etc.). |
-| LLM provider caído / 429 | Cascade. 5 fallas seguidas (todos los providers) ⇒ pausa engine. |
+| LLM provider caído / 429 | Cascade por agente (Decisor, Supervisor, Post-mortem tienen CSV independientes). Post-mortem: primary + `postmortem_fallback_providers`. Validación Pydantic fallida → reintento en próximo tick (máx. 3). 5 fallas seguidas en Decisor/Supervisor ⇒ pausa engine. |
 | Web service caído | Engine sigue operando autónomamente; UI no muestra datos. |
 | Frontend caído | Sin impacto operativo. |
 

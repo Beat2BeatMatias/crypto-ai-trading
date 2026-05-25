@@ -1,7 +1,7 @@
 # Patrones de Implementación — Crypto AI Trading
 
 > Audiencia: Devs / Tech leads.
-> Versión: 1.2 — 2026-05-24.
+> Versión: 1.3 — 2026-05-25.
 
 Catálogo de **18 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
 
@@ -458,30 +458,38 @@ async def _evaluate_ratification(self, metrics, active_playbook, cfg) -> dict:
 
 **Categoría**: LLM / Learning
 
-**Evidencia**: `trading-engine/main.py` (post-mortem encadenado tras `outcome_attribution_tick`); `agents/postmortem_job.py`; `agents/lesson_normalizer.py`; `agents/context_builder.py` (Bloque K); `agents/confluence_registry.py`.
+**Evidencia**: `trading-engine/main.py` (post-mortem encadenado tras `outcome_attribution_tick`); `agents/postmortem_job.py`; `agents/postmortem_schemas.py` (`coerce_lesson_raw`); `agents/postmortem_agent.py`; `agents/lesson_normalizer.py`; `agents/context_builder.py` (Bloque K); `frontend/src/pages/Config.tsx` (sección Post-mortem).
 
 ```python
 async def outcome_attribution_tick(...):
     await run_outcome_attribution(...)
     if postmortem_enabled:
-        await outcome_postmortem_tick(session, llm, max_per_tick=...)
+        await outcome_postmortem_tick(
+            session, llm,
+            provider=postmortem_provider,
+            fallback_providers=postmortem_fallback_providers,
+            max_per_tick=postmortem_max_per_tick,
+        )
 ```
 
 Flujo interno del tick post-mortem:
 
-1. Query outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) sin `postmortem_status`.
-2. `PostMortemAgent` → `lesson_raw` (JSONB validado).
-3. `lesson_normalizer.normalize()` → ruta `remap` | `candidate` | `guidance`.
-4. Persistir en `decision_outcomes.lesson_normalized`.
-5. Si `candidate` → upsert `confluence_candidates` por `pattern_tag`.
-6. Bloque K lee lecciones `remap`/`guidance` en ventana configurable (`block_k_window_hours`).
+1. Query outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) con `postmortem_status IS NULL` **o** `failed` con `< 3` intentos (`lesson_raw._meta.attempts`).
+2. Orden por `severity_score` DESC; tomar hasta `postmortem_max_per_tick` (**1 llamada LLM por decisión**).
+3. `PostMortemAgent` con cascade primary + `postmortem_fallback_providers` → `coerce_lesson_raw()` → `LessonRaw`.
+4. `lesson_normalizer.normalize()` → ruta `remap` | `candidate` | `guidance`.
+5. Persistir en `decision_outcomes.lesson_normalized`; status `completed` o reintento/`failed`.
+6. Si `candidate` → upsert `confluence_candidates` por `pattern_tag`.
+7. Bloque K lee lecciones `remap`/`guidance` en ventana configurable (`block_k_window_hours`).
 
 **Cuándo usar**: cuando el sistema debe aprender de errores **sin** mutar el playbook ni el catálogo A–H directamente. Requisitos:
 
 1. Job encadenado (no scheduler separado) para garantizar orden attribution → post-mortem.
-2. Límite por tick (`postmortem_max_per_tick`) para controlar costo LLM.
-3. Normalizador determinístico que clasifica la salida en rutas con efectos distintos (prompt vs. candidato vs. remap).
-4. Promoción a producción (I–Z) separada con criterios P1–P6 y aprobación Supervisor u operador.
+2. Límite por tick (`postmortem_max_per_tick`) = límite de **decisiones**, no de llamadas batch.
+3. Parseo defensivo (`coerce_lesson_raw`) antes de Pydantic — tolera arrays heterogéneos del LLM.
+4. Fallback CSV configurable independiente del Decisor/Supervisor (evita agotar cuota de un solo modelo).
+5. Normalizador determinístico que clasifica la salida en rutas con efectos distintos (prompt vs. candidato vs. remap).
+6. Promoción a producción (I–Z) separada con criterios P1–P6 y aprobación Supervisor u operador.
 
 ---
 

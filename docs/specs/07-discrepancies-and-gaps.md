@@ -1,8 +1,8 @@
 # Discrepancias y Gaps de Documentación — Crypto AI Trading
 
 > Audiencia: Tech leads / SRE / Risk.
-> Versión: 1.2 — 2026-05-24.
-> Base de comparación: design doc 2026-05-02 vs. código en HEAD (2026-05-24).
+> Versión: 1.3 — 2026-05-25.
+> Base de comparación: design doc 2026-05-02 vs. código en HEAD (2026-05-25).
 
 Este documento consolida el resultado del cross-validation entre la documentación de diseño existente y la implementación real. La **regla de oro**: cuando un campo difiere entre design doc y código, **el código manda**. Las discrepancias se registran para que el equipo decida si actualizar el código a la spec o la spec al código.
 
@@ -26,10 +26,10 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | 🔴 CRÍTICO | 3 | D-001, D-002, D-003 |
 | 🟠 ALTO | 5 | D-004, D-005, D-006, D-009, D-013 |
 | 🟡 MEDIO | 8 | D-007, D-008, D-010, D-011, D-014, D-015, D-019, D-021 |
-| 🟢 INFO | 8 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032 |
-| **Total** | **24** | |
+| 🟢 INFO | 9 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032, D-033 |
+| **Total** | **25** | |
 
-### 1.3 Estado de resolución (actualizado 2026-05-24)
+### 1.3 Estado de resolución (actualizado 2026-05-25)
 
 Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desde la revisión 2026-05-17 se incorporaron features nuevas no cubiertas por el design doc original:
 
@@ -39,9 +39,10 @@ Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desd
 | D-023 | 🟢 INFO | ✅ ENTREGADO | Telegram notifications opcionales (`notifications/telegram.py`). |
 | D-024 | 🟢 INFO | ✅ ENTREGADO | Bracket OCO con `order_id_sl/tp` (migration 007). |
 | D-025 | 🟢 INFO | ✅ ENTREGADO | Balance snapshots con `usdt_locked`/`btc_locked` (migration 010). |
-| D-030 | 🟢 INFO | ✅ ENTREGADO | Post-mortem learning: job LLM encadenado, Bloque K, columnas en `decision_outcomes` (migration 011). |
+| D-030 | 🟢 INFO | ✅ ENTREGADO | Post-mortem learning: job LLM encadenado, Bloque K, columnas en `decision_outcomes` (migration 011). Endurecido 2026-05-25: coerce, retry, fallback (013). |
 | D-031 | 🟢 INFO | ✅ ENTREGADO | Catálogo extendido I–Z: `confluence_candidates`, `confluence_registry`, promoción Supervisor (migration 012). |
 | D-032 | 🟢 INFO | ✅ ENTREGADO | UI operador `/confluence` + API POST promote/reject/deactivate. |
+| D-033 | 🟢 INFO | ✅ RESUELTO | Post-mortems `failed` por JSON heterogéneo del LLM y 429 Groq: `coerce_lesson_raw`, prompts con schema, `postmortem_fallback_providers`, reintento hasta 3 intentos. |
 | D-026 | 🟡 MEDIO | ⏳ PENDIENTE | Filtros avanzados frontend `/trades` y `/decisions` (date range, export CSV). |
 | D-027 | 🟡 MEDIO | ⏳ PENDIENTE | Diff viewer playbook a nivel de palabra. |
 | D-028 | 🟡 MEDIO | 📋 DOCUMENTADA | `daily_stats` sigue sin job batch; query on-the-fly OK para volúmenes actuales. |

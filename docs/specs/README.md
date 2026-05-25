@@ -26,10 +26,10 @@ Carpeta de especificaciones funcionales y técnicas del proyecto **Crypto AI Tra
 
 | Campo | Valor |
 |-------|-------|
-| Versión | 1.6 |
+| Versión | 1.7 |
 | Fecha de generación | 2026-05-14 |
 | Fecha de unificación | 2026-05-15 (incorpora reverse-engineering de `meli/specs/`) |
-| Última revisión | 2026-05-24 (post-mortem learning, catálogo confluencias I–Z, UI `/confluence`, migraciones 011–012, CoherenceChecker C7/C8) |
+| Última revisión | 2026-05-25 (post-mortem: fallback configurable, coerce JSON, retry de failed, UI Config; migración 013) |
 | Alcance | Bot autónomo en paper trading (PAPER_TRADING) sobre Binance Testnet, con roadmap a LIVE (mainnet). |
 | Owner | Equipo Crypto AI Trading |
 
@@ -43,7 +43,7 @@ Carpeta de especificaciones funcionales y técnicas del proyecto **Crypto AI Tra
 - **Si estás haciendo onboarding o auditando estado actual**: `07-discrepancies-and-gaps.md` resume qué se prometió y qué se entregó.
 - **Si vas a tomar trabajo del backlog**: ver § Pendientes activos abajo.
 
-## Pendientes activos (2026-05-24)
+## Pendientes activos (2026-05-25)
 
 Trabajo conocido que **no bloquea** paper trading. Detalle completo en [`07-discrepancies-and-gaps.md`](./07-discrepancies-and-gaps.md) §10.
 

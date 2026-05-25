@@ -1,7 +1,9 @@
 # Especificación Funcional — Crypto AI Trading
 
 > Audiencia: Product, Risk, Trading, Stakeholders.
-> Versión: 1.5 — 2026-05-24.
+> Versión: 1.7 — 2026-05-25.
+>
+> Cambios v1.7: Post-mortem endurecido: `coerce_lesson_raw` antes de Pydantic, reintento de `failed` (máx. 3 intentos), `postmortem_fallback_providers` configurable (UI + config). Semántica documentada: 1 llamada LLM por decisión, `postmortem_max_per_tick` limita decisiones/tick. UI `/config` sección Post-mortem. Migración 013.
 >
 > Cambios v1.5: Aprendizaje desde post-mortem (§F10): job LLM encadenado a outcome attribution, Bloque K, normalizador de lecciones, catálogo extendido I–Z (`confluence_registry`), promoción Supervisor + UI operador (`/confluence`). CoherenceChecker C7/C8. Migraciones 011–012.
 >
@@ -319,7 +321,7 @@ Páginas (React + Tailwind):
 - **`/decisions`** — historial detallado con input/output JSON.
 - **`/confluence`** — cola de candidatos post-mortem, catálogo I–Z activo, promover/rechazar/desactivar.
 - **`/playbook`** — markdown del playbook activo + historial con rollback y edición inline.
-- **`/config`** — formulario de los ~60 parámetros tipados, con descripciones, validación, kill switch y switch de modo.
+- **`/config`** — formulario de los ~60 parámetros tipados; incluye sección **Post-mortem — Aprendizaje** (provider LLM, fallback chain, Bloque K) además de Decisor/Supervisor.
 - **`/health`** — estado de motor, DB, Binance.
 
 WebSocket `/ws` empuja:
@@ -354,6 +356,18 @@ outcome_attribution → post-mortem LLM → normalizador → remap | candidate |
 
 **Elegibilidad post-mortem** (clasificaciones): `BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`.
 
+**Granularidad LLM**: **1 decisión elegible = 1 llamada LLM** (no batching). Cada análisis recibe el snapshot completo `decisions.input` + output + métricas forward de esa decisión. Motivo: calidad del razonamiento causal, trazabilidad 1:1 en BD y aislamiento de fallos de parseo.
+
+**Throughput por tick**: `postmortem_max_per_tick` (default **5**) = máximo de **decisiones** analizadas por ejecución del job (no llamadas extra por decisión). Las elegibles se ordenan por `severity_score` descendente; el resto espera ticks futuros. Con intervalo 60 min → hasta ~5 post-mortems/hora.
+
+**Providers LLM** (configurables en `/config`, igual patrón que Decisor/Supervisor):
+- Primary: `postmortem_provider` (default `gemini-2.5-flash`).
+- Fallback: `postmortem_fallback_providers` (CSV ordenado; default modelos Groq livianos + sin duplicar el primary).
+
+**Robustez**:
+- `coerce_lesson_raw()` normaliza JSON del LLM (arrays como strings, `proposed_pattern.tag` faltante) antes de validar con Pydantic.
+- Reintento: outcomes con `postmortem_status = failed` o sin status vuelven a la cola; tras **3 intentos** fallidos quedan `failed` permanentes (`lesson_raw._meta.attempts`).
+
 **Salidas persistidas** en `decision_outcomes`:
 - `postmortem_status`: `completed` | `failed` | `null`
 - `lesson_raw`: JSON del PostMortemAgent (validado Pydantic)
@@ -363,7 +377,7 @@ outcome_attribution → post-mortem LLM → normalizador → remap | candidate |
 
 **Bloque dinámico `{confluence_registry_block}`**: definiciones operacionales de letras I–Z activas, mismo estilo que A–H en system prompt.
 
-**Kill switch**: `postmortem_enabled` (default `true`). Límite por tick: `postmortem_max_per_tick` (default 5).
+**Kill switch operativo**: `postmortem_enabled` (default `true`).
 
 > Diseño detallado: `docs/superpowers/specs/2026-05-24-decision-postmortem-learning-design.md`
 
@@ -588,6 +602,7 @@ En testnet, los fees suelen ser 0, por lo que la regla R10 (movimiento TP cubre 
 | AC-18 | Tras outcome attribution, el pipeline post-mortem procesa outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) y persiste `postmortem_status`, `lesson_raw` y `lesson_normalized` en `decision_outcomes`. |
 | AC-19 | Lecciones `remap`/`guidance` aparecen en Bloque K del Decisor; candidatos `candidate` hacen upsert en `confluence_candidates`. El Supervisor (o operador vía UI) puede promover candidatos a `confluence_registry` cumpliendo P1–P6. |
 | AC-20 | La página `/confluence` lista candidatos y registry I–Z; `POST …/promote`, `POST …/reject` y `POST …/deactivate` responden 400 con código estructurado ante reglas de negocio violadas. |
+| AC-21 | `postmortem_provider` y `postmortem_fallback_providers` son configurables desde `/config` (select + cadena de fallback). El engine usa la cascada en cada análisis; errores de validación reintentan hasta 3 veces antes de marcar `failed`. |
 
 ### 8.2 No funcionales
 
