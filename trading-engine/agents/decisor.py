@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Decision
 from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
 from agents.context_builder import ContextBuilder
-from agents.llm_client import LLMClient, LLMProvider
+from agents.llm_client import LLMClient, LLMProvider, AllProvidersExhaustedError
 from agents.prompt_manager import PromptManager
 from collectors.orderbook_collector import OrderBookSnapshot
 from risk.coherence_checker import CoherenceChecker, CoherenceWarning
@@ -106,6 +106,7 @@ class Decisor:
         coherence_warnings: list[CoherenceWarning] = []
         rejected_reason: str | None = None
         two_pass_triggered = False
+        llm_error_tried: list[dict] | None = None
 
         try:
             # ── PASS 1: decisión inicial ───────────────────────────────────
@@ -213,10 +214,14 @@ class Decisor:
             logger.error("decisor.llm_error", error=str(e))
             validated = _hold_decision("llm_error")
             rejected_reason = f"llm_error: {type(e).__name__}"
+            if isinstance(e, AllProvidersExhaustedError):
+                llm_error_tried = e.tried
 
         output_dict = validated.model_dump()
         output_dict["coherence_warnings"] = [w.to_dict() for w in coherence_warnings]
         output_dict["two_pass_triggered"] = two_pass_triggered
+        if llm_error_tried is not None:
+            output_dict["llm_error_tried"] = llm_error_tried
 
         # Tokens totales = pass 1 + pass 2 (si hubo)
         tokens_in = (resp.tokens_in if resp else 0) + (resp_review.tokens_in if resp_review else 0)

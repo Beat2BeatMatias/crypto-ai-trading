@@ -67,6 +67,7 @@ class LLMClient:
                    json_mode: bool = True) -> LLMResponse:
         cascade = [provider] + (fallbacks or ([fallback] if fallback else []))
         last_err: Exception | None = None
+        failures: list[dict] = []
         for idx, p in enumerate(cascade):
             try:
                 return await self._call_with_retry(p, system_prompt, user_prompt,
@@ -74,6 +75,11 @@ class LLMClient:
             except Exception as e:
                 last_err = e
                 is_rl = _is_rate_limit(e)
+                failures.append({
+                    "provider": p.value,
+                    "rate_limited": is_rl,
+                    "too_large": _is_too_large(e),
+                })
                 remaining = cascade[idx + 1:]
                 if remaining:
                     logger.warning("llm.provider_failed_trying_next",
@@ -83,7 +89,7 @@ class LLMClient:
                     logger.error("llm.all_providers_exhausted",
                                  tried=[c.value for c in cascade], error=str(e))
         assert last_err is not None
-        raise last_err
+        raise AllProvidersExhaustedError(tried=failures, last_err=last_err)
 
     async def _call_with_retry(self, provider: LLMProvider, system_prompt: str,
                                 user_prompt: str, *, json_mode: bool = True) -> LLMResponse:
@@ -152,6 +158,18 @@ class LLMClient:
                 "tokens_out": response.usage.completion_tokens}
 
 
+class AllProvidersExhaustedError(Exception):
+    """Se lanza cuando todos los providers del cascade fallaron.
+
+    Atributo ``tried``: lista de dicts con keys ``provider``, ``rate_limited``,
+    ``too_large`` para cada intento fallido (en orden).
+    """
+    def __init__(self, tried: list[dict], last_err: Exception) -> None:
+        self.tried = tried
+        self.last_err = last_err
+        super().__init__(f"All providers exhausted: {[t['provider'] for t in tried]}")
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     """Detecta errores 429 de Groq y Gemini para saltar directo al siguiente provider."""
     name = type(exc).__name__.lower()
@@ -163,3 +181,8 @@ def _is_rate_limit(exc: Exception) -> bool:
         or "resource_exhausted" in msg
         or "rate limit" in msg
     )
+
+
+def _is_too_large(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "413" in msg or "request too large" in msg or "too large" in msg

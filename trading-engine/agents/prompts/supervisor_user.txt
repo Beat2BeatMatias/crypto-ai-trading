@@ -67,4 +67,19 @@ DECISIONES Y OUTCOMES (últimas {decisions_sample_count} de {total_decisions}):
 PLAYBOOK ANTERIOR (v{previous_version}):
 {previous_playbook}
 
+════════════════════════════════════════════
+LECCIONES POST-MORTEM (últimos 7 días — remap y guidance)
+════════════════════════════════════════════
+Patrones de error identificados al analizar decisiones con outcome negativo.
+Son hechos observados en datos reales, no sugerencias.
+
+{postmortem_lessons_block}
+
+INSTRUCCIÓN: si un pattern_tag aparece con confianza ≥ 0.85, o si el mismo error
+conceptual se repite en ≥ 2 entradas distintas, convertilo en una regla explícita
+bajo "## Reglas específicas" con el prefijo [APRENDIDO].
+Ejemplo: "[APRENDIDO] No declarar H si precio > banda_inferior + 300 puntos."
+Entradas con confianza < 0.80: incluir en "## Contexto" solo si refuerzan algo
+ya visible en las métricas del período.
+
 === Generá el nuevo playbook v{new_version} comenzando con la CABECERA REQUERIDA. ===

@@ -223,6 +223,13 @@ class ContextBuilder:
         expected_holding_max = cal.get("expected_holding_max_min", 240)
         min_position_size = cal.get("min_position_size", 0.005)
 
+        # R11: piso de position_size_pct para que el notional >= min_notional_usdt.
+        # El LLM no conoce este filtro de Binance; exponerlo evita rechazos silenciosos.
+        _binance_min_notional = 5.0
+        min_position_size_pct_notional = (
+            _binance_min_notional / usdt_balance if usdt_balance > 0 else max_position_pct
+        )
+
         # ------------------------------------------------------------------ #
         # Order book derived
         # ------------------------------------------------------------------ #
@@ -385,6 +392,8 @@ class ContextBuilder:
             "adj_spread_threshold_pct": adj_spread_threshold,
             "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
             "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
+            "binance_min_notional_usdt": _binance_min_notional,
+            "min_position_size_pct_notional": min_position_size_pct_notional,
 
             # ---- Block J: Playbook ----
             "playbook": playbook_content,

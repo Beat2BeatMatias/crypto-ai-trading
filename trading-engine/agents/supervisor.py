@@ -577,10 +577,13 @@ class Supervisor:
             if mode == "diagnostic" else ""
         )
 
+        postmortem_lessons_block = await self._fetch_postmortem_lessons(window_days=7)
+
         ctx = {
             **metrics,
             "mode": mode,
             "mode_header": mode_header,
+            "postmortem_lessons_block": postmortem_lessons_block,
             "previous_version": previous_version_num,
             "new_version": (previous_version_num + 1) if active_playbook else 0,
             "previous_playbook": previous_content,
@@ -1241,6 +1244,61 @@ class Supervisor:
             "open_confluence_candidates": open_confluence_candidates,
             "active_confluence_registry": active_confluence_registry,
         }
+
+    async def _fetch_postmortem_lessons(self, *, window_days: int = 7, max_lessons: int = 10) -> str:
+        """Fetch completed remap/guidance lessons from the last `window_days` days.
+
+        Deduplicates by pattern_tag keeping the highest-confidence entry.
+        Returns a formatted block ready for the supervisor prompt.
+        """
+        since = datetime.now(tz=timezone.utc) - timedelta(days=window_days)
+        rows = (await self.session.execute(
+            select(DecisionOutcome)
+            .where(
+                DecisionOutcome.postmortem_status == "completed",
+                DecisionOutcome.computed_at >= since,
+                DecisionOutcome.lesson_normalized.isnot(None),
+            )
+            .order_by(DecisionOutcome.computed_at.desc())
+            .limit(50)
+        )).scalars().all()
+
+        _ROUTES = frozenset({"remap", "guidance"})
+        by_tag: dict[str, dict] = {}
+        for row in rows:
+            norm = row.lesson_normalized or {}
+            if norm.get("route") not in _ROUTES:
+                continue
+            tag = norm.get("pattern_tag") or norm.get("dedupe_key") or "unknown"
+            conf = float(norm.get("confidence") or 0)
+            prev = by_tag.get(tag)
+            if prev is None or conf > float(prev.get("confidence") or 0):
+                by_tag[tag] = norm
+
+        if not by_tag:
+            return "  (sin lecciones remap/guidance en los últimos 7 días)"
+
+        ordered = sorted(by_tag.values(), key=lambda x: float(x.get("confidence") or 0), reverse=True)
+        lines: list[str] = []
+        for norm in ordered[:max_lessons]:
+            route = norm.get("route", "?")
+            tag = norm.get("pattern_tag", "?")
+            conf = float(norm.get("confidence") or 0)
+            if route == "remap":
+                payload = norm.get("remap") or {}
+                codes = ", ".join(payload.get("misapplied_confluences") or []) or "n/d"
+                correction = (payload.get("correction") or norm.get("block_k_line") or "")[:200]
+                lines.append(f"  [{route}] pattern={tag} conf={conf:.2f} | confluencias_mal_usadas={codes}")
+                lines.append(f"    → {correction}")
+            else:
+                payload = norm.get("guidance") or {}
+                message = (payload.get("message") or norm.get("block_k_line") or "")[:200]
+                applies = payload.get("applies_when") or {}
+                ctx_str = f" (aplica cuando: {applies})" if applies else ""
+                lines.append(f"  [{route}] pattern={tag} conf={conf:.2f}{ctx_str}")
+                lines.append(f"    → {message}")
+
+        return "\n".join(lines)
 
     async def _promote_confluence_candidates(
         self,

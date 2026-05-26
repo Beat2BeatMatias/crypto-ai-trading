@@ -91,10 +91,13 @@ export function Decisions() {
     return list;
   }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo, liveSinceIso]);
 
+  type LLMErrorAttempt = { provider: string; rate_limited: boolean; too_large: boolean };
+
   const out = (d: Decision) => d.output as {
     action?: string; confidence?: number; reasoning?: string;
     stop_loss?: number; take_profit?: number; position_size_pct?: number; confluences?: string[];
     mode?: string;
+    llm_error_tried?: LLMErrorAttempt[];
   };
 
   const isBuyRejected = (d: Decision) =>
@@ -324,8 +327,30 @@ export function Decisions() {
 
             {/* Motivo de bloqueo genérico (no BUY) */}
             {!isBuyRejected(selected) && selected.rejected_reason && (
-              <div className="mb-4 rounded-lg bg-zinc-800 p-3">
-                <p className="text-xs text-red-400">Rechazada: {selected.rejected_reason}</p>
+              <div className="mb-4 rounded-lg bg-zinc-800 p-3 space-y-2">
+                <p className="text-xs text-red-400 font-mono">{selected.rejected_reason}</p>
+                {explainRejection(selected.rejected_reason) && (
+                  <p className="text-xs text-zinc-500">{explainRejection(selected.rejected_reason)}</p>
+                )}
+                {out(selected).llm_error_tried && (
+                  <div className="mt-2">
+                    <p className="text-xs text-zinc-500 uppercase mb-1">Providers intentados</p>
+                    <div className="space-y-1">
+                      {out(selected).llm_error_tried!.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs font-mono">
+                          <span className="text-zinc-600">{i + 1}.</span>
+                          <span className="text-zinc-300 w-44">{t.provider}</span>
+                          {t.rate_limited
+                            ? <span className="text-amber-400">429 rate limit</span>
+                            : t.too_large
+                              ? <span className="text-orange-400">413 prompt muy grande</span>
+                              : <span className="text-red-400">error</span>
+                          }
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

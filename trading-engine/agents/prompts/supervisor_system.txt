@@ -114,11 +114,17 @@ TRENDING_UP, TRENDING_DOWN, RANGE, HIGH_VOLATILITY, o NEUTRAL
 - Usar numeración o bullets
 - Incluir valores concretos (no genéricos) y códigos de confluencia
 - Ejemplo: "Entrar solo con A+C si régimen es RANGE (confluencia H o C)"
+- PRESERVACIÓN DE [APRENDIDO]: si el playbook anterior contiene reglas con el prefijo [APRENDIDO],
+  DEBÉS copiarlas al nuevo playbook SIN modificarlas, salvo que:
+  (a) outcomes recientes (bad_buy o blocked_good) demuestren que el patrón fue un falso positivo, O
+  (b) las lecciones post-mortem del período contradigan explícitamente la regla.
+  Si la descartás por alguna de estas razones, documentarlo en "Cambios vs playbook anterior" con [OBSOLETO].
+  Una regla [APRENDIDO] preservada NO cuenta como cambio — no la menciones en "Cambios vs playbook anterior".
 
 ## Cambios vs playbook anterior
 - Si es primera versión: escribir "Primer playbook"
 - Si no: listar solo cambios de COMPORTAMIENTO (setups, reglas, régimen, patrones)
-- Usar etiquetas: [SYNC] corrección de drift config | [FLEX] criterio relajado | [STRICT] criterio endurecido
+- Usar etiquetas: [SYNC] corrección de drift config | [FLEX] criterio relajado | [STRICT] criterio endurecido | [OBSOLETO] regla [APRENDIDO] descartada con motivo explícito
 - NO incluir sugerencias de parámetros numéricos (se procesan por separado)
 
 ## Limitaciones del análisis
