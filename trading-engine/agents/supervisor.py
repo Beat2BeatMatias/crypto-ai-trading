@@ -437,6 +437,12 @@ class Supervisor:
                     int(metrics.get("total_decisions") or 0),
                 ),
                 "expected_holding_max_min": (current_config or {}).get("expected_holding_max_min", 240),
+                "winners_confluences": self._format_confluence_histogram(
+                    metrics.get("winners_confluences") or {}
+                ),
+                "losers_confluences": self._format_confluence_histogram(
+                    metrics.get("losers_confluences") or {}
+                ),
             }
             system_prompt = self.prompt_manager.load_system_prompt("supervisor_eval")
             user_prompt = self.prompt_manager.render_user_prompt(
@@ -609,6 +615,12 @@ class Supervisor:
             "atr_timeframe_cfg": atr_timeframe_cfg,
             "expected_holding_max_min": expected_holding_max,
             "weekly_gate_block": self._format_weekly_gate(weekly_gate),
+            "winners_confluences": self._format_confluence_histogram(
+                metrics.get("winners_confluences") or {}
+            ),
+            "losers_confluences": self._format_confluence_histogram(
+                metrics.get("losers_confluences") or {}
+            ),
         }
         system_prompt = self.prompt_manager.load_system_prompt("supervisor")
         user_prompt = self.prompt_manager.render_user_prompt("supervisor", ctx, strict=False)
@@ -756,11 +768,13 @@ class Supervisor:
 
     @staticmethod
     def _format_coherence_breakdown(breakdown: dict, total_decisions: int) -> str:
-        """Render coherence warnings (C1-C6) for the audit block in the supervisor prompt.
+        """Render coherence warnings (C1-C8) for the audit block in the supervisor prompt.
 
-        Rules C1-C3 are factual inconsistencies — high counts signal that the playbook
-        is leading the LLM into hallucinations. C4-C6 are operational drifts (cooldown,
-        confluences, holding).
+        C1-C3: factual inconsistencies — high counts signal the playbook is leading the LLM
+               into hallucinations. In strict_mode these become rejections.
+        C4-C6: operational drifts (low-confluence confidence, low-confidence BUY, holding range).
+        C7: R:R real below min_rr_ratio — always critical, LLM cannot self-correct in two-pass.
+        C8: extended confluence from registry declared without verify_spec evidence.
         """
         if not breakdown:
             return "  Sin warnings en el período (LLM coherente)"
@@ -770,6 +784,13 @@ class Supervisor:
             lines.append(f"  {rid}: {cnt} ({cnt / total_decisions * 100:.1f}% de decisiones)" if total_decisions else f"  {rid}: {cnt}")
         lines.append(f"  TOTAL: {sum(breakdown.values())} warnings ({rate_total:.1f}% rate)")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_confluence_histogram(histogram: dict) -> str:
+        if not histogram:
+            return "(sin datos)"
+        sorted_items = sorted(histogram.items(), key=lambda x: x[1], reverse=True)
+        return " | ".join(f"{code}:{count}" for code, count in sorted_items)
 
     @staticmethod
     def _format_config_changes(changes: list) -> str:
@@ -914,7 +935,9 @@ class Supervisor:
         trimmed = "\n".join(kept)
         note = f"\n[Secciones abreviadas — playbook completo ({len(content)} chars) en BD v{version}]"
         if len(trimmed) > max_chars:
-            trimmed = trimmed[:max_chars]
+            cut = trimmed.rfind('\n', 0, max_chars)
+            trimmed = trimmed[:cut if cut > 0 else max_chars]
+            trimmed += "\n[... truncado ...]"
         return trimmed + note
 
     async def _generate_config_suggestions(self, metrics: dict, current_config: dict) -> dict:
@@ -1129,6 +1152,21 @@ class Supervisor:
         bad_buy_rate = (bad_buy_count / max(good_buy_count + bad_buy_count, 1) * 100)
 
         decisions_by_id = {d.id: d for d in decisions}
+
+        winners_confluences: dict[str, int] = {}
+        losers_confluences: dict[str, int] = {}
+        for o in outcome_rows:
+            d_out = decisions_by_id.get(o.decision_id)
+            if not d_out:
+                continue
+            confs = (d_out.output or {}).get("confluences") or []
+            if o.classification == "GOOD_BUY":
+                for c in confs:
+                    winners_confluences[c] = winners_confluences.get(c, 0) + 1
+            elif o.classification == "BAD_BUY":
+                for c in confs:
+                    losers_confluences[c] = losers_confluences.get(c, 0) + 1
+
         top_misses = sorted(
             [o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"],
             key=lambda o: float(o.mfe_pct or 0),
@@ -1150,6 +1188,7 @@ class Supervisor:
             bb_pct = _safe_float(inp.get("bb_pct_15m") or inp.get("bb_pct_5m"))
             cross_tf = (inp.get("block_f_cross_tf") or {}).get("alignment") or "?"
             conf_str = f"{confidence:.2f}" if isinstance(confidence, float) else str(confidence)
+            confluences_str = "+".join(confluences) if confluences else "—"
             indicators = (
                 f"RSI15m={rsi_15m:.0f}" if rsi_15m is not None else ""
             ) + (
@@ -1167,7 +1206,7 @@ class Supervisor:
                 f"  [{(d.ts.strftime('%H:%M') if d else '?')} UTC] "
                 f"miss +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
                 f"(mae {float(o.mae_pct or 0):+.2f}%) | "
-                f"régimen={regime} conf={conf_str} confluencias={confluences}\n"
+                f"régimen={regime} conf={conf_str} confluencias={confluences_str}\n"
                 f"    indicadores: {indicators.strip()}\n"
                 f"    reasoning: {reasoning}"
             )
@@ -1241,6 +1280,8 @@ class Supervisor:
             "missed_rate": round(missed_rate, 1),
             "bad_buy_rate": round(bad_buy_rate, 1),
             "top_misses_block": top_misses_block,
+            "winners_confluences": winners_confluences,
+            "losers_confluences": losers_confluences,
             "open_confluence_candidates": open_confluence_candidates,
             "active_confluence_registry": active_confluence_registry,
         }

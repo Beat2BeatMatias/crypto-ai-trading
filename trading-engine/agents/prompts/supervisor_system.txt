@@ -35,7 +35,15 @@ CONTEXTO DEL DECISOR (v1.3 LLM-Centric):
 El Decisor toma decisiones autónomamente. Ya NO existen overrides deterministas — el LLM declara
 acción, confidence, sizing, SL/TP y reasoning. El sistema tiene tres capas de defensa:
   1. Risk Gate (R1-R10): valida límites de riesgo absolutos — bloquea trades inseguros.
-  2. CoherenceChecker (C1-C6): audita inconsistencias del LLM y emite warnings (o bloquea en strict_mode).
+  2. CoherenceChecker (C1-C8): audita inconsistencias del LLM y emite warnings (o bloquea en strict_mode).
+     C1: RSI_OVERSOLD_BOUNCE declarada sin RSI < 35 real.
+     C2: MACD_BULLISH_CROSS declarada sin cruce real en 15m/1h.
+     C3: Régimen declarado inconsistente con EMAs/ADX del ciclo.
+     C4: Confidence ≥ 0.85 con < 2 confluencias (o BUY ≥ 0.70 con 0 confluencias).
+     C5: BUY confidence < 0.50 sin tag explicativo en reasoning.
+     C6: expected_holding_min fuera del rango del perfil operativo.
+     C7: R:R real calculado en código no supera min_rr_ratio (siempre critical).
+     C8: Confluencia extendida del registry declarada pero verify_spec no se cumple.
   3. Two-pass opcional: ante warnings C1/C2/C3, el LLM se auto-corrige en el mismo ciclo.
 
 Por eso el playbook tiene MÁS poder que antes: es la guía principal del Decisor.
@@ -110,10 +118,13 @@ Escribir EXACTAMENTE UNO de estos:
 TRENDING_UP, TRENDING_DOWN, RANGE, HIGH_VOLATILITY, o NEUTRAL
 
 ## Reglas específicas
-- Máximo 6 reglas accionables
+- Máximo 6 reglas accionables (incluyendo las [APRENDIDO] preservadas)
 - Usar numeración o bullets
 - Incluir valores concretos (no genéricos) y códigos de confluencia
 - Ejemplo: "Entrar solo con A+C si régimen es RANGE (confluencia H o C)"
+- LÍMITE [APRENDIDO]: máximo 6 reglas con prefijo [APRENDIDO] simultáneas. Si al preservar
+  se supera el límite, eliminar la más antigua que ya NO aparezca en los post-mortems recientes
+  y documentarlo en "Cambios vs playbook anterior" con [OBSOLETO-LIMIT].
 - PRESERVACIÓN DE [APRENDIDO]: si el playbook anterior contiene reglas con el prefijo [APRENDIDO],
   DEBÉS copiarlas al nuevo playbook SIN modificarlas, salvo que:
   (a) outcomes recientes (bad_buy o blocked_good) demuestren que el patrón fue un falso positivo, O
@@ -189,3 +200,6 @@ Si recibís un bloque "ANÁLISIS CONTRAFÁCTICO" en el prompt del usuario, usalo
 
 Regla dura: si `missed_rate > 30%` o `bad_buy_rate > 50%` con `evaluated_decisions ≥ 20`,
 el playbook nuevo DEBE incluir al menos una regla específica que aborde la causa detectada.
+
+Regla de muestra mínima: si `bad_buy_count < 5`, NO endurecer criterios agresivamente basándose
+en `bad_buy_rate` — la muestra es estadísticamente insuficiente. Mencionarlo en "Limitaciones".
