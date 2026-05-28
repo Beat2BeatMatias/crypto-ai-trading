@@ -167,7 +167,7 @@ async def run() -> None:
             logger.info("ollama.client_not_configured")
     except Exception:
         ollama_client = None
-        logger.warning("ollama.client_init_failed")
+        logger.warning("ollama.client_init_failed", error=str(e))
 
     llm = LLMClient(gemini_client=gemini_client, groq_client=groq_client,
                     ollama_client=ollama_client)

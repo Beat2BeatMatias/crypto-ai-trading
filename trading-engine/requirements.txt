@@ -18,7 +18,7 @@ numpy==1.26.4
 # LLMs
 google-genai==0.3.0
 groq==0.13.1
-openai>=1.30.0
+openai==1.82.0
 
 # HTTP
 httpx==0.28.1

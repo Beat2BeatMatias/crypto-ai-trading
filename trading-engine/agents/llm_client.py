@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -52,11 +53,9 @@ _OLLAMA_MODEL_IDS: dict[str, str] = {
 }
 
 _OLLAMA_THINKING_MODEL_IDS: frozenset[str] = frozenset({
-    "ollama-deepseek-v3.2",
     "ollama-deepseek-v4-flash",
     "ollama-deepseek-v4-pro",
     "ollama-kimi-k2-thinking",
-    "ollama-kimi-k2.6",
 })
 
 
@@ -257,12 +256,19 @@ class LLMClient:
             kwargs["extra_body"] = {"think": True}
         response = await self.ollama.chat.completions.create(**kwargs)
         message = response.choices[0].message
-        reasoning: str | None = getattr(message, "thinking", None) or None
+        raw_content = message.content or ""
+        think_match = re.search(r"<think>(.*?)</think>", raw_content, re.DOTALL)
+        if think_match:
+            reasoning: str | None = think_match.group(1).strip()
+            text = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+        else:
+            reasoning = None
+            text = raw_content
         if reasoning:
             logger.debug("llm.reasoning_received", model=model_id,
                          reasoning_chars=len(reasoning))
         return {
-            "text": message.content or "",
+            "text": text,
             "tokens_in": response.usage.prompt_tokens,
             "tokens_out": response.usage.completion_tokens,
             "reasoning": reasoning,
