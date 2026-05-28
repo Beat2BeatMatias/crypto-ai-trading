@@ -34,6 +34,31 @@ _GROQ_REASONING_CONFIG: dict[str, str] = {
     "openai/gpt-oss-20b":  "include",
 }
 
+_OLLAMA_MODEL_IDS: dict[str, str] = {
+    "ollama-deepseek-v3.2":      "deepseek-v3.2",
+    "ollama-deepseek-v4-flash":  "deepseek-v4-flash",
+    "ollama-deepseek-v4-pro":    "deepseek-v4-pro",
+    "ollama-kimi-k2-thinking":   "kimi-k2-thinking",
+    "ollama-kimi-k2.6":          "kimi-k2.6",
+    "ollama-qwen3.5-32b":        "qwen3.5:32b",
+    "ollama-qwen3.5-122b":       "qwen3.5:122b",
+    "ollama-qwen3-next-80b":     "qwen3-next:80b",
+    "ollama-gemma4-27b":         "gemma4:27b",
+    "ollama-nemotron-3-super":   "nemotron-3-super:120b",
+    "ollama-gpt-oss-20b":        "gpt-oss:20b",
+    "ollama-gpt-oss-120b":       "gpt-oss:120b",
+    "ollama-glm-5":              "glm-5",
+    "ollama-minimax-m2":         "minimax-m2",
+}
+
+_OLLAMA_THINKING_MODEL_IDS: frozenset[str] = frozenset({
+    "ollama-deepseek-v3.2",
+    "ollama-deepseek-v4-flash",
+    "ollama-deepseek-v4-pro",
+    "ollama-kimi-k2-thinking",
+    "ollama-kimi-k2.6",
+})
+
 
 class LLMProvider(str, Enum):
     # Gemini
@@ -49,11 +74,33 @@ class LLMProvider(str, Enum):
     GROQ_QWEN3_32B        = "groq-qwen3-32b"         # supports reasoning_format=parsed
     GROQ_LLAMA_8B         = "groq-llama-3.1-8b"
 
+    # Ollama Cloud+Thinking — ordered roughly by reasoning capability
+    OLLAMA_DEEPSEEK_V3_2       = "ollama-deepseek-v3.2"
+    OLLAMA_DEEPSEEK_V4_FLASH   = "ollama-deepseek-v4-flash"
+    OLLAMA_DEEPSEEK_V4_PRO     = "ollama-deepseek-v4-pro"
+    OLLAMA_KIMI_K2_THINKING    = "ollama-kimi-k2-thinking"
+    OLLAMA_KIMI_K2_6           = "ollama-kimi-k2.6"
+    OLLAMA_QWEN35_32B          = "ollama-qwen3.5-32b"
+    OLLAMA_QWEN35_122B         = "ollama-qwen3.5-122b"
+    OLLAMA_QWEN3_NEXT_80B      = "ollama-qwen3-next-80b"
+    OLLAMA_GEMMA4_27B          = "ollama-gemma4-27b"
+    OLLAMA_NEMOTRON_3_SUPER    = "ollama-nemotron-3-super"
+    OLLAMA_GPT_OSS_20B         = "ollama-gpt-oss-20b"
+    OLLAMA_GPT_OSS_120B        = "ollama-gpt-oss-120b"
+    OLLAMA_GLM_5               = "ollama-glm-5"
+    OLLAMA_MINIMAX_M2          = "ollama-minimax-m2"
+
     def is_groq(self) -> bool:
         return self.value in _GROQ_MODEL_IDS
 
     def groq_model_id(self) -> str:
         return _GROQ_MODEL_IDS[self.value]
+
+    def is_ollama(self) -> bool:
+        return self.value in _OLLAMA_MODEL_IDS
+
+    def ollama_model_id(self) -> str:
+        return _OLLAMA_MODEL_IDS[self.value]
 
 
 @dataclass(frozen=True)
