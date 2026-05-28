@@ -118,14 +118,16 @@ async def test_no_fallback_raises():
     client = LLMClient(gemini_client=gemini_client, max_retries=1, backoff_base=0.0)
 
     # WHEN calling with no fallback
-    # THEN the original exception propagates
-    with pytest.raises(RuntimeError, match="Gemini unavailable"):
+    # THEN AllProvidersExhaustedError is raised, wrapping the original error
+    from agents.llm_client import AllProvidersExhaustedError
+    with pytest.raises(AllProvidersExhaustedError) as exc_info:
         await client.call(
             provider=LLMProvider.GEMINI_FLASH,
             system_prompt="system",
             user_prompt="user",
             fallback=None,
         )
+    assert "Gemini unavailable" in str(exc_info.value.last_err)
 
 
 @pytest.mark.asyncio
@@ -265,13 +267,15 @@ async def test_call_when_ollama_client_is_none_should_raise_runtime_error():
     client = LLMClient(ollama_client=None, max_retries=1)
 
     # WHEN calling with an Ollama provider
-    # THEN a RuntimeError is raised mentioning OLLAMA_API_KEY
-    with pytest.raises(RuntimeError, match="OLLAMA_API_KEY"):
+    # THEN AllProvidersExhaustedError is raised, wrapping a RuntimeError about OLLAMA_API_KEY
+    from agents.llm_client import AllProvidersExhaustedError
+    with pytest.raises(AllProvidersExhaustedError) as exc_info:
         await client.call(
             provider=LLMProvider.OLLAMA_DEEPSEEK_V4_PRO,
             system_prompt="system",
             user_prompt="user",
         )
+    assert "OLLAMA_API_KEY" in str(exc_info.value.last_err)
 
 
 @pytest.mark.asyncio
