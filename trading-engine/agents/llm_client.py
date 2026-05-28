@@ -115,9 +115,11 @@ class LLMResponse:
 
 class LLMClient:
     def __init__(self, gemini_client: Any | None = None, groq_client: Any | None = None,
+                 ollama_client: Any | None = None,
                  *, max_retries: int = 3, backoff_base: float = 0.5):
         self.gemini = gemini_client
         self.groq = groq_client
+        self.ollama = ollama_client
         self.max_retries = max_retries
         self.backoff_base = backoff_base
 
@@ -180,6 +182,9 @@ class LLMClient:
         elif provider in (LLMProvider.GEMINI_FLASH, LLMProvider.GEMINI_PRO):
             resp = await self._call_gemini(provider, system_prompt, user_prompt,
                                            json_mode=json_mode)
+        elif provider.is_ollama():
+            resp = await self._call_ollama(provider, system_prompt, user_prompt,
+                                           json_mode=json_mode)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -229,6 +234,35 @@ class LLMClient:
                          reasoning_chars=len(reasoning))
         return {
             "text": message.content,
+            "tokens_in": response.usage.prompt_tokens,
+            "tokens_out": response.usage.completion_tokens,
+            "reasoning": reasoning,
+        }
+
+    async def _call_ollama(self, provider: LLMProvider, system_prompt: str,
+                            user_prompt: str, *, json_mode: bool = True) -> dict[str, Any]:
+        if self.ollama is None:
+            raise RuntimeError("Ollama client not configured (missing OLLAMA_API_KEY)")
+        model_id = provider.ollama_model_id()
+        is_thinking = provider.value in _OLLAMA_THINKING_MODEL_IDS
+        kwargs: dict[str, Any] = {
+            "model": model_id,
+            "messages": [{"role": "system", "content": system_prompt},
+                         {"role": "user", "content": user_prompt}],
+            "temperature": 0.6 if is_thinking else 0.4,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        if is_thinking:
+            kwargs["extra_body"] = {"think": True}
+        response = await self.ollama.chat.completions.create(**kwargs)
+        message = response.choices[0].message
+        reasoning: str | None = getattr(message, "thinking", None) or None
+        if reasoning:
+            logger.debug("llm.ollama_reasoning_received", model=model_id,
+                         reasoning_chars=len(reasoning))
+        return {
+            "text": message.content or "",
             "tokens_in": response.usage.prompt_tokens,
             "tokens_out": response.usage.completion_tokens,
             "reasoning": reasoning,
