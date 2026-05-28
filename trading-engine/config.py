@@ -16,6 +16,8 @@ class EngineSettings(BaseSettings):
 
     gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
     groq_api_key: str = Field(..., alias="GROQ_API_KEY")
+    ollama_base_url: str = Field("https://ollama.com/api", alias="OLLAMA_BASE_URL")
+    ollama_api_key: str | None = Field(None, alias="OLLAMA_API_KEY")
 
     trading_mode: str = Field("PAPER_TRADING", alias="TRADING_MODE")
     log_level: str = Field("INFO", alias="LOG_LEVEL")

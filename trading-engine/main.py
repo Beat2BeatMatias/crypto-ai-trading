@@ -156,7 +156,21 @@ async def run() -> None:
         groq_client = None
         logger.warning("groq.client_init_failed")
 
-    llm = LLMClient(gemini_client=gemini_client, groq_client=groq_client)
+    try:
+        from openai import AsyncOpenAI
+        ollama_client = (
+            AsyncOpenAI(base_url=settings.ollama_base_url, api_key=settings.ollama_api_key)
+            if settings.ollama_api_key
+            else None
+        )
+        if ollama_client is None:
+            logger.info("ollama.client_not_configured")
+    except Exception:
+        ollama_client = None
+        logger.warning("ollama.client_init_failed")
+
+    llm = LLMClient(gemini_client=gemini_client, groq_client=groq_client,
+                    ollama_client=ollama_client)
     exchange = build_binance_client()
 
     # Bootstrap
