@@ -112,21 +112,21 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.SUPERVISOR_CRON: _Default("0 0 * * *", "string", "Supervisor schedule (UTC)"),
     ConfigKey.DECISOR_PROVIDER: _Default(
         "groq-llama-3.3-70b", "string",
-        "Primary LLM for decisor (chat). Options: groq-llama-3.3-70b | groq-compound-beta | groq-qwen3-32b* | groq-llama-4-scout | groq-gpt-oss-120b | gemini-2.5-flash  (* soporta reasoning_effort)",
+        "Primary LLM for decisor. Options: groq-* | gemini-* | ollama-* (ver LLMProvider enum)",
     ),
     ConfigKey.SUPERVISOR_PROVIDER: _Default(
         "gemini-2.5-pro", "string",
-        "LLM for supervisor (chat). Options: gemini-2.5-pro | groq-llama-3.3-70b | groq-compound-beta | groq-qwen3-32b* | groq-llama-4-scout | groq-gpt-oss-120b  (* soporta reasoning_effort)",
+        "Primary LLM for supervisor. Options: gemini-* | groq-* | ollama-* (ver LLMProvider enum)",
     ),
     ConfigKey.FALLBACK_PROVIDERS: _Default(
-        "gemini-2.5-flash,groq-llama-4-scout,groq-gpt-oss-120b,groq-qwen3-32b,groq-llama-3.1-8b",
+        "gemini-2.5-flash,groq-llama-4-scout,groq-gpt-oss-120b,groq-qwen3-32b,groq-llama-3.1-8b,ollama-deepseek-v4-flash,ollama-qwen3.5-32b",
         "string",
-        "Cascada de fallback para decisor (CSV ordenado). Opciones: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta | groq-compound-mini | groq-llama-4-scout | groq-gpt-oss-120b | groq-gpt-oss-20b | groq-qwen3-32b* | groq-llama-3.1-8b  (* soporta reasoning_effort)",
+        "Cascada de fallback para decisor (CSV ordenado). Opciones: gemini-* | groq-* | ollama-* (ver LLMProvider enum)",
     ),
     ConfigKey.SUPERVISOR_FALLBACK_PROVIDERS: _Default(
-        "groq-llama-3.3-70b,groq-llama-4-scout,groq-gpt-oss-120b,gemini-2.5-flash",
+        "groq-llama-3.3-70b,groq-llama-4-scout,groq-gpt-oss-120b,gemini-2.5-flash,ollama-deepseek-v4-pro",
         "string",
-        "Cascada de fallback para supervisor (CSV ordenado). Mismas opciones que fallback_providers",
+        "Cascada de fallback para supervisor (CSV ordenado). Opciones: gemini-* | groq-* | ollama-* (ver LLMProvider enum)",
     ),
     ConfigKey.LLM_MAX_RETRIES: _Default("3", "int", "Retries on LLM failure"),
     ConfigKey.LLM_TIMEOUT_SEC: _Default("30", "int", "LLM call timeout"),
@@ -290,9 +290,9 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Provider LLM primario para post-mortem (chat). Opciones: gemini-2.5-flash | gemini-2.5-pro | groq-llama-3.3-70b | groq-qwen3-32b* | groq-compound-beta | groq-llama-4-scout | groq-gpt-oss-120b  (* reasoning_effort)",
     ),
     ConfigKey.POSTMORTEM_FALLBACK_PROVIDERS: _Default(
-        "groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b",
+        "groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b,ollama-kimi-k2-thinking",
         "string",
-        "Cascada de fallback para post-mortem (CSV ordenado). Mismas opciones que fallback_providers.",
+        "Cascada de fallback para post-mortem (CSV ordenado). Opciones: gemini-* | groq-* | ollama-* (ver LLMProvider enum)",
     ),
     ConfigKey.POSTMORTEM_INTERVAL_MIN: _Default(
         "60", "int",
