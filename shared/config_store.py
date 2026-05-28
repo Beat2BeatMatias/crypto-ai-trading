@@ -112,16 +112,16 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.SUPERVISOR_CRON: _Default("0 0 * * *", "string", "Supervisor schedule (UTC)"),
     ConfigKey.DECISOR_PROVIDER: _Default(
         "groq-llama-3.3-70b", "string",
-        "Primary LLM for decisor. Options: groq-llama-3.3-70b | groq-compound-beta | gemini-2.5-flash",
+        "Primary LLM for decisor (chat). Options: groq-llama-3.3-70b | groq-compound-beta | groq-qwen3-32b* | groq-llama-4-scout | groq-gpt-oss-120b | gemini-2.5-flash  (* soporta reasoning_effort)",
     ),
     ConfigKey.SUPERVISOR_PROVIDER: _Default(
         "gemini-2.5-pro", "string",
-        "LLM for supervisor. Options: gemini-2.5-pro | groq-llama-3.3-70b | groq-compound-beta",
+        "LLM for supervisor (chat). Options: gemini-2.5-pro | groq-llama-3.3-70b | groq-compound-beta | groq-qwen3-32b* | groq-llama-4-scout | groq-gpt-oss-120b  (* soporta reasoning_effort)",
     ),
     ConfigKey.FALLBACK_PROVIDERS: _Default(
         "gemini-2.5-flash,groq-llama-4-scout,groq-gpt-oss-120b,groq-qwen3-32b,groq-llama-3.1-8b",
         "string",
-        "Cascada de fallback para decisor (CSV ordenado). Opciones: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta | groq-compound-mini | groq-llama-4-scout | groq-gpt-oss-120b | groq-gpt-oss-20b | groq-qwen3-32b | groq-llama-3.1-8b",
+        "Cascada de fallback para decisor (CSV ordenado). Opciones: gemini-2.5-flash | groq-llama-3.3-70b | groq-compound-beta | groq-compound-mini | groq-llama-4-scout | groq-gpt-oss-120b | groq-gpt-oss-20b | groq-qwen3-32b* | groq-llama-3.1-8b  (* soporta reasoning_effort)",
     ),
     ConfigKey.SUPERVISOR_FALLBACK_PROVIDERS: _Default(
         "groq-llama-3.3-70b,groq-llama-4-scout,groq-gpt-oss-120b,gemini-2.5-flash",
@@ -287,7 +287,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.POSTMORTEM_PROVIDER: _Default(
         "gemini-2.5-flash", "string",
-        "Provider LLM primario para post-mortem. Opciones: gemini-2.5-flash | gemini-2.5-pro | groq-llama-3.3-70b | …",
+        "Provider LLM primario para post-mortem (chat). Opciones: gemini-2.5-flash | gemini-2.5-pro | groq-llama-3.3-70b | groq-qwen3-32b* | groq-compound-beta | groq-llama-4-scout | groq-gpt-oss-120b  (* reasoning_effort)",
     ),
     ConfigKey.POSTMORTEM_FALLBACK_PROVIDERS: _Default(
         "groq-compound-mini,groq-llama-4-scout,groq-qwen3-32b,groq-gpt-oss-20b,groq-llama-3.1-8b",

@@ -11,14 +11,27 @@ logger = structlog.get_logger()
 # Maps each Groq provider enum value to the actual model ID in the Groq API.
 # Gemini providers use their enum value directly as model ID.
 _GROQ_MODEL_IDS: dict[str, str] = {
-    "groq-llama-3.3-70b":   "llama-3.3-70b-versatile",
-    "groq-compound-beta":   "compound-beta",
-    "groq-compound-mini":   "compound-beta-mini",
-    "groq-llama-3.1-8b":    "llama-3.1-8b-instant",
-    "groq-llama-4-scout":   "meta-llama/llama-4-scout-17b-16e-instruct",
-    "groq-gpt-oss-120b":    "openai/gpt-oss-120b",
-    "groq-gpt-oss-20b":     "openai/gpt-oss-20b",
-    "groq-qwen3-32b":       "qwen/qwen3-32b",
+    "groq-llama-3.3-70b":          "llama-3.3-70b-versatile",
+    "groq-compound-beta":          "compound-beta",
+    "groq-compound-mini":          "compound-beta-mini",
+    "groq-llama-3.1-8b":           "llama-3.1-8b-instant",
+    "groq-llama-4-scout":          "meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq-gpt-oss-120b":           "openai/gpt-oss-120b",
+    "groq-gpt-oss-20b":            "openai/gpt-oss-20b",
+    "groq-qwen3-32b":              "qwen/qwen3-32b",
+}
+
+# Reasoning config per Groq model ID.
+# "parsed"  → reasoning_format="parsed": reasoning separado en message.reasoning,
+#              content contiene solo la respuesta final. Compatible con json_mode.
+# "include" → include_reasoning=True: usado por modelos GPT-OSS.
+#              reasoning también queda en message.reasoning.
+# Ambos modos son compatibles con response_format=json_object.
+# "raw" no se usa: incompatible con json_mode (retorna 400).
+_GROQ_REASONING_CONFIG: dict[str, str] = {
+    "qwen/qwen3-32b":      "parsed",
+    "openai/gpt-oss-120b": "include",
+    "openai/gpt-oss-20b":  "include",
 }
 
 
@@ -27,14 +40,14 @@ class LLMProvider(str, Enum):
     GEMINI_FLASH = "gemini-2.5-flash"
     GEMINI_PRO   = "gemini-2.5-pro"
     # Groq — ordered roughly by reasoning capability (used as cascade suggestion)
-    GROQ_LLAMA        = "groq-llama-3.3-70b"
-    GROQ_COMPOUND     = "groq-compound-beta"
-    GROQ_COMPOUND_MINI = "groq-compound-mini"
-    GROQ_LLAMA4_SCOUT = "groq-llama-4-scout"
-    GROQ_GPT_OSS_120B = "groq-gpt-oss-120b"
-    GROQ_GPT_OSS_20B  = "groq-gpt-oss-20b"
-    GROQ_QWEN3_32B    = "groq-qwen3-32b"
-    GROQ_LLAMA_8B     = "groq-llama-3.1-8b"
+    GROQ_LLAMA            = "groq-llama-3.3-70b"
+    GROQ_COMPOUND         = "groq-compound-beta"
+    GROQ_COMPOUND_MINI    = "groq-compound-mini"
+    GROQ_LLAMA4_SCOUT     = "groq-llama-4-scout"
+    GROQ_GPT_OSS_120B     = "groq-gpt-oss-120b"      # supports include_reasoning
+    GROQ_GPT_OSS_20B      = "groq-gpt-oss-20b"       # supports include_reasoning
+    GROQ_QWEN3_32B        = "groq-qwen3-32b"         # supports reasoning_format=parsed
+    GROQ_LLAMA_8B         = "groq-llama-3.1-8b"
 
     def is_groq(self) -> bool:
         return self.value in _GROQ_MODEL_IDS
@@ -50,6 +63,7 @@ class LLMResponse:
     tokens_out: int
     latency_ms: int
     provider: str
+    reasoning: str | None = None
 
 
 class LLMClient:
@@ -124,7 +138,7 @@ class LLMClient:
         latency_ms = int((time.perf_counter() - t0) * 1000)
         return LLMResponse(text=resp["text"], tokens_in=resp["tokens_in"],
                            tokens_out=resp["tokens_out"], latency_ms=latency_ms,
-                           provider=provider.value)
+                           provider=provider.value, reasoning=resp.get("reasoning"))
 
     async def _call_gemini(self, provider: LLMProvider, system_prompt: str,
                             user_prompt: str, *, json_mode: bool = True) -> dict[str, Any]:
@@ -144,18 +158,34 @@ class LLMClient:
                           *, json_mode: bool = True) -> dict[str, Any]:
         if self.groq is None:
             raise RuntimeError("Groq client not configured")
+        reasoning_mode = _GROQ_REASONING_CONFIG.get(model)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": [{"role": "system", "content": system_prompt},
                          {"role": "user", "content": user_prompt}],
-            "temperature": 0.4,
+            # Groq docs recomiendan 0.5–0.7 para modelos con reasoning
+            "temperature": 0.6 if reasoning_mode else 0.4,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if reasoning_mode == "parsed":
+            # qwen3-32b: reasoning separado en message.reasoning, compatible con json_mode
+            kwargs["reasoning_format"] = "parsed"
+        elif reasoning_mode == "include":
+            # gpt-oss-120b / gpt-oss-20b: no soportan reasoning_format, usan include_reasoning
+            kwargs["include_reasoning"] = True
         response = await self.groq.chat.completions.create(**kwargs)
-        return {"text": response.choices[0].message.content,
-                "tokens_in": response.usage.prompt_tokens,
-                "tokens_out": response.usage.completion_tokens}
+        message = response.choices[0].message
+        reasoning: str | None = getattr(message, "reasoning", None) or None
+        if reasoning:
+            logger.debug("llm.reasoning_received", model=model,
+                         reasoning_chars=len(reasoning))
+        return {
+            "text": message.content,
+            "tokens_in": response.usage.prompt_tokens,
+            "tokens_out": response.usage.completion_tokens,
+            "reasoning": reasoning,
+        }
 
 
 class AllProvidersExhaustedError(Exception):
