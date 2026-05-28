@@ -158,6 +158,42 @@ RUN echo "X.X.X.X registry.npmjs.org" >> /etc/hosts && \
 
 ---
 
+### Trading-engine no buildea — `pip install` falla con DNS
+
+**Síntoma:** `docker-compose build` falla en el paso `RUN pip install` con errores como `Temporary failure in name resolution` o `Name or service not known` para `pypi.org` o `files.pythonhosted.org`.
+
+**Causa:** El mismo problema DNS que afecta a npm: el DNS local no resuelve los dominios de PyPI dentro del contenedor Docker.
+
+**Diagnóstico:**
+
+```bash
+# Confirmar que es un problema DNS (debe devolver HTTP 200)
+curl -I --resolve "pypi.org:443:151.101.192.223" https://pypi.org/simple/
+
+# Si devuelve 200, el problema es DNS. Si falla, es conectividad de red.
+```
+
+**Solución:** El `trading-engine/Dockerfile` ya incluye las IPs de PyPI fijadas. Si las IPs rotaron, actualizarlas:
+
+```bash
+# 1. Obtener la IP actual de pypi.org
+curl -s "https://dns.google/resolve?name=pypi.org&type=A" | grep -o '"data":"[^"]*"' | head -1
+
+# 2. Obtener la IP actual de files.pythonhosted.org
+curl -s "https://dns.google/resolve?name=files.pythonhosted.org&type=A" | grep -o '"data":"[^"]*"' | head -1
+```
+
+Actualizar las líneas correspondientes en `trading-engine/Dockerfile`:
+
+```dockerfile
+RUN echo "X.X.X.X pypi.org" >> /etc/hosts && \
+    echo "Y.Y.Y.Y files.pythonhosted.org" >> /etc/hosts && \
+```
+
+**Cuándo volver a hacer esto:** si en el futuro `pip install` vuelve a fallar con DNS, las IPs de Fastly/PyPI rotaron. Repetir los pasos de diagnóstico y actualizar el Dockerfile.
+
+---
+
 ## Roadmap hacia LIVE trading
 
 ### Estado actual
