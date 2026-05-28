@@ -233,7 +233,7 @@ class LLMClient:
             logger.debug("llm.reasoning_received", model=model,
                          reasoning_chars=len(reasoning))
         return {
-            "text": message.content,
+            "text": message.content or "",
             "tokens_in": response.usage.prompt_tokens,
             "tokens_out": response.usage.completion_tokens,
             "reasoning": reasoning,
@@ -259,7 +259,7 @@ class LLMClient:
         message = response.choices[0].message
         reasoning: str | None = getattr(message, "thinking", None) or None
         if reasoning:
-            logger.debug("llm.ollama_reasoning_received", model=model_id,
+            logger.debug("llm.reasoning_received", model=model_id,
                          reasoning_chars=len(reasoning))
         return {
             "text": message.content or "",
