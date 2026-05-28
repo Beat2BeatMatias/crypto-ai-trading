@@ -5,6 +5,11 @@ const ALL_PROVIDERS = [
     "groq-llama-3.3-70b", "groq-compound-beta", "groq-compound-mini",
     "groq-llama-4-scout", "groq-gpt-oss-120b", "groq-gpt-oss-20b",
     "groq-qwen3-32b", "groq-llama-3.1-8b", "gemini-2.5-flash", "gemini-2.5-pro",
+    "ollama-deepseek-v3.2", "ollama-deepseek-v4-flash", "ollama-deepseek-v4-pro",
+    "ollama-kimi-k2-thinking", "ollama-kimi-k2.6", "ollama-qwen3.5-32b",
+    "ollama-qwen3.5-122b", "ollama-qwen3-next-80b", "ollama-gemma4-27b",
+    "ollama-nemotron-3-super", "ollama-gpt-oss-20b", "ollama-gpt-oss-120b",
+    "ollama-glm-5", "ollama-minimax-m2",
 ];
 const PROVIDER_RPD = {
     "groq-llama-3.3-70b": "1K RPD · 12K TPM",
@@ -17,15 +22,34 @@ const PROVIDER_RPD = {
     "groq-llama-3.1-8b": "14.4K RPD · 6K TPM",
     "gemini-2.5-flash": "20 RPD (free)",
     "gemini-2.5-pro": "5 RPD (free)",
+    "ollama-deepseek-v3.2": "cloud · thinking ✓",
+    "ollama-deepseek-v4-flash": "cloud · thinking ✓",
+    "ollama-deepseek-v4-pro": "cloud · thinking ✓",
+    "ollama-kimi-k2-thinking": "cloud · thinking ✓",
+    "ollama-kimi-k2.6": "cloud",
+    "ollama-qwen3.5-32b": "cloud · 32b",
+    "ollama-qwen3.5-122b": "cloud · 122b",
+    "ollama-qwen3-next-80b": "cloud · 80b",
+    "ollama-gemma4-27b": "cloud · 27b",
+    "ollama-nemotron-3-super": "cloud · 120b",
+    "ollama-gpt-oss-20b": "cloud · 20b",
+    "ollama-gpt-oss-120b": "cloud · 120b",
+    "ollama-glm-5": "cloud",
+    "ollama-minimax-m2": "cloud",
 };
 const SELECT_OPTIONS = {
     decisor_provider: ["groq-llama-3.3-70b", "groq-compound-beta", "groq-compound-mini",
-        "groq-llama-4-scout", "groq-gpt-oss-120b", "gemini-2.5-flash"],
+        "groq-llama-4-scout", "groq-gpt-oss-120b", "gemini-2.5-flash",
+        "ollama-deepseek-v4-flash", "ollama-deepseek-v4-pro",
+        "ollama-kimi-k2-thinking", "ollama-qwen3.5-32b", "ollama-qwen3.5-122b"],
     supervisor_provider: ["gemini-2.5-pro", "groq-llama-3.3-70b", "groq-compound-beta",
-        "groq-llama-4-scout", "groq-gpt-oss-120b"],
+        "groq-llama-4-scout", "groq-gpt-oss-120b",
+        "ollama-deepseek-v4-pro", "ollama-kimi-k2-thinking",
+        "ollama-qwen3.5-122b", "ollama-nemotron-3-super"],
     postmortem_provider: ["gemini-2.5-flash", "gemini-2.5-pro", "groq-llama-3.3-70b",
         "groq-compound-beta", "groq-compound-mini", "groq-llama-4-scout",
-        "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3-32b", "groq-llama-3.1-8b"],
+        "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3-32b", "groq-llama-3.1-8b",
+        "ollama-kimi-k2-thinking", "ollama-deepseek-v4-flash", "ollama-qwen3.5-32b"],
     mode: ["PAPER_TRADING", "LIVE"],
     atr_timeframe: ["5m", "15m", "1h"],
 };
@@ -174,6 +198,12 @@ const FIELD_DEFS = {
         description: "Cuántos minutos hacia adelante se analizan las velas 1m después de cada decisión para calcular MFE/MAE. Debe ser mayor que el holding promedio esperado.",
         type: "slider", min: 60, max: 1440, step: 30, unit: "min",
         format: v => v >= 60 ? `${v / 60}h` : `${v}min`, parse: parseInt,
+    },
+    outcome_attribution_window_hours: {
+        label: "Ventana de análisis (attribution + post-mortem)",
+        description: "Solo decisiones de las últimas N horas entran al job de outcome attribution y a la cola post-mortem. Compartida entre ambos jobs. Default 25 h.",
+        type: "slider", min: 12, max: 72, step: 1, unit: "h",
+        format: v => `${v}h`, parse: parseInt,
     },
     outcome_coverage_threshold_pct: {
         label: "Umbral de cobertura OHLCV (máx. faltantes)",
@@ -424,7 +454,7 @@ const GROUPS = [
             "block_k_max_lines",
             "block_k_window_hours",
         ],
-        note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). La cadena de fallback se configura abajo.",
+        note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). Usa la misma ventana de análisis (`outcome_attribution_window_hours`). La cadena de fallback se configura abajo.",
     },
     {
         title: "Scheduler",
@@ -437,9 +467,10 @@ const GROUPS = [
         keys: [
             "outcome_attribution_interval_min",
             "outcome_attribution_horizon_min",
+            "outcome_attribution_window_hours",
             "outcome_coverage_threshold_pct",
         ],
-        note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). Los cambios toman efecto en el próximo tick del job.",
+        note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). La ventana en horas también limita la cola post-mortem. Los cambios toman efecto en el próximo tick.",
     },
 ];
 function SliderField({ fieldKey, def, value, onSave }) {
