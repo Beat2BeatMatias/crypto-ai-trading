@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -223,8 +222,8 @@ class LLMClient:
             # qwen3-32b: reasoning separado en message.reasoning, compatible con json_mode
             kwargs["reasoning_format"] = "parsed"
         elif reasoning_mode == "include":
-            # gpt-oss-120b / gpt-oss-20b: no soportan reasoning_format, usan include_reasoning
-            kwargs["include_reasoning"] = True
+            # gpt-oss-120b / gpt-oss-20b: usan include_reasoning vía extra_body (no tipado en SDK 0.13.x)
+            kwargs["extra_body"] = {"include_reasoning": True}
         response = await self.groq.chat.completions.create(**kwargs)
         message = response.choices[0].message
         reasoning: str | None = getattr(message, "reasoning", None) or None
@@ -244,33 +243,23 @@ class LLMClient:
             raise RuntimeError("Ollama client not configured (missing OLLAMA_API_KEY)")
         model_id = provider.ollama_model_id()
         is_thinking = provider.value in _OLLAMA_THINKING_MODEL_IDS
-        kwargs: dict[str, Any] = {
-            "model": model_id,
-            "messages": [{"role": "system", "content": system_prompt},
-                         {"role": "user", "content": user_prompt}],
-            "temperature": 0.6 if is_thinking else 0.4,
-        }
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        if is_thinking:
-            kwargs["extra_body"] = {"think": True}
-        response = await self.ollama.chat.completions.create(**kwargs)
-        message = response.choices[0].message
-        raw_content = message.content or ""
-        think_match = re.search(r"<think>(.*?)</think>", raw_content, re.DOTALL)
-        if think_match:
-            reasoning: str | None = think_match.group(1).strip()
-            text = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
-        else:
-            reasoning = None
-            text = raw_content
+        response = await self.ollama.chat(
+            model=model_id,
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}],
+            format="json" if json_mode else None,
+            options={"temperature": 0.6 if is_thinking else 0.4},
+            think=is_thinking,
+        )
+        text = response.message.content or ""
+        reasoning: str | None = getattr(response.message, "thinking", None) or None
         if reasoning:
             logger.debug("llm.reasoning_received", model=model_id,
                          reasoning_chars=len(reasoning))
         return {
             "text": text,
-            "tokens_in": response.usage.prompt_tokens,
-            "tokens_out": response.usage.completion_tokens,
+            "tokens_in": response.prompt_eval_count or 0,
+            "tokens_out": response.eval_count or 0,
             "reasoning": reasoning,
         }
 

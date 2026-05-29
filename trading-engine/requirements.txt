@@ -19,6 +19,7 @@ numpy==1.26.4
 google-genai==0.3.0
 groq==0.13.1
 openai==1.82.0
+ollama==0.4.6
 
 # HTTP
 httpx==0.28.1

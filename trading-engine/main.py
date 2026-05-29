@@ -157,15 +157,18 @@ async def run() -> None:
         logger.warning("groq.client_init_failed")
 
     try:
-        from openai import AsyncOpenAI
+        import ollama as ollama_lib
         ollama_client = (
-            AsyncOpenAI(base_url=settings.ollama_base_url, api_key=settings.ollama_api_key)
+            ollama_lib.AsyncClient(
+                host=settings.ollama_base_url,
+                headers={"Authorization": f"Bearer {settings.ollama_api_key}"},
+            )
             if settings.ollama_api_key
             else None
         )
         if ollama_client is None:
             logger.info("ollama.client_not_configured")
-    except Exception:
+    except Exception as e:
         ollama_client = None
         logger.warning("ollama.client_init_failed", error=str(e))
 
