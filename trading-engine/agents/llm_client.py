@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -249,10 +250,15 @@ class LLMClient:
                       {"role": "user", "content": user_prompt}],
             format="json" if json_mode else None,
             options={"temperature": 0.6 if is_thinking else 0.4},
-            think=is_thinking,
         )
-        text = response.message.content or ""
-        reasoning: str | None = getattr(response.message, "thinking", None) or None
+        raw_content = response.message.content or ""
+        think_match = re.search(r"<think>(.*?)</think>", raw_content, re.DOTALL)
+        if think_match:
+            reasoning: str | None = think_match.group(1).strip()
+            text = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+        else:
+            reasoning = None
+            text = raw_content
         if reasoning:
             logger.debug("llm.reasoning_received", model=model_id,
                          reasoning_chars=len(reasoning))
