@@ -76,6 +76,90 @@ def _ctx(**overrides) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# C6 — expected_holding_min vs rango del perfil
+# ---------------------------------------------------------------------------
+
+class TestC6HoldingVsProfile:
+
+    def test_c6_skipped_for_hold_with_holding_min_1(self):
+        """Regresión a4ca161b: HOLD con expected_holding_min=1 no debe generar C6."""
+        # GIVEN decisión HOLD con expected_holding_min=1 (valor por defecto del fallback)
+        decision = DecisorOutput(
+            action=DecisorAction.HOLD,
+            regime=MarketRegime.RANGE,
+            confluences=[],
+            confidence_base=0.55,
+            confidence_adjustment=0.0,
+            confidence=0.55,
+            stop_loss=None,
+            take_profit=None,
+            position_size_pct=0.0,
+            expected_holding_min=1,
+            reasoning="[DECISION] HOLD [MERCADO] test [SENALES] - [CONFIANZA] test",
+        )
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+
+        # THEN
+        assert c6 == []
+
+    def test_c6_no_warning_when_buy_holding_within_range(self):
+        # GIVEN BUY con holding dentro del rango del perfil
+        decision = _buy(expected_holding_min=60)
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+
+        # THEN
+        assert c6 == []
+
+    def test_c6_warning_when_buy_holding_below_range(self):
+        # GIVEN BUY con holding por debajo del mínimo del perfil
+        decision = _buy(expected_holding_min=10)
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+
+        # THEN
+        assert len(c6) == 1
+        assert c6[0].severity == "warning"
+        assert "expected_holding_min=10" in c6[0].message
+        assert c6[0].evidence["expected_holding_min"] == 10
+
+    def test_c6_warning_when_buy_holding_above_range(self):
+        # GIVEN BUY con holding por encima del máximo del perfil
+        decision = _buy(expected_holding_min=300)
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+
+        # THEN
+        assert len(c6) == 1
+        assert "expected_holding_min=300" in c6[0].message
+
+    def test_c6_boundary_exactly_at_minimum_passes(self):
+        # GIVEN BUY con holding exactamente en el mínimo del rango
+        decision = _buy(expected_holding_min=30)
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+
+        # WHEN
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+
+        # THEN
+        assert c6 == []
+
+
+# ---------------------------------------------------------------------------
 # C7 — R:R real calculado en código
 # ---------------------------------------------------------------------------
 

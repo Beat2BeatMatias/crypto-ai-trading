@@ -263,7 +263,11 @@ class CoherenceChecker:
                                ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
         C6: expected_holding_min fuera del rango del perfil operativo.
+        Solo aplica a BUY — para HOLD/SELL el campo es semánticamente irrelevante.
         """
+        if decision.action != DecisorAction.BUY:
+            return []
+
         holding = decision.expected_holding_min
         profile = ctx.get("block_a_profile", "HIBRIDO")
         min_hold = ctx.get("block_a_holding_range_min", 10)
