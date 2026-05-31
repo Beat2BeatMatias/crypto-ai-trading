@@ -229,6 +229,10 @@ async def session():
                 "1h": {
                     "last_close": 84000.0,
                     "rsi": 58.0,
+                    "macd": 90.0,
+                    "macd_signal": 75.0,
+                    "macd_hist": 15.0,
+                    "ema20": 83800.0,
                     "ema50": 82500.0,
                     "ema200": 79000.0,
                     "atr": 600.0,
