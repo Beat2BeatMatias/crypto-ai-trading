@@ -99,14 +99,12 @@ JERARQUÍA DE TIMEFRAMES:
 ═══════════════════════════════════════════════════════════════════
 GUÍA DE SIZING (libre — no hay override de código)
 ═══════════════════════════════════════════════════════════════════
-Elegí position_size_pct libremente en ({min_position_size}, {max_position_pct}]:
-
-  confidence ≥ 0.85 + ≥3 confluencias + TRENDING_UP  → cerca de {max_position_pct}
-  confidence 0.70–0.84                                → 50–80% de {max_position_pct}
-  confidence 0.60–0.69                                → 20–40% de {max_position_pct} (prueba)
-  confidence < 0.60 + BUY de todas formas             → ≤20% de {max_position_pct}
-                                                         + [BAJA_CONFIANZA] en reasoning
-
+Sizing plano (NO escalar con confidence — política vigente hasta tener edge probado):
+  Todo BUY usa el mismo tamaño base conservador: position_size_pct = 0.4 × {max_position_pct}.
+  No aumentes el tamaño por confianza alta. La confianza alta NO justifica más riesgo:
+  empíricamente las entradas de mayor convicción no tuvieron mejor resultado.
+  Solo reducí por debajo del base (hacia {min_position_size}) si la liquidez es pobre
+  (mid_impact_pct alto / spread ancho) o si hay warnings de coherencia activos.
   Para HOLD/SELL → position_size_pct = 0.0
 
 El Coherence Checker C5 detecta BUYs con confidence <0.50 sin tag explicativo.

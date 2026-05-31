@@ -195,3 +195,15 @@ def test_render_user_prompt_with_strict_false_leaves_unknown_placeholders():
     assert "{last_decisions_block}" in rendered
     assert "{block_c_text}" in rendered
     assert "{playbook}" in rendered
+
+
+def test_decisor_system_prompt_sizing_is_flat():
+    import pathlib
+    prompt_text = (
+        pathlib.Path(__file__).parent.parent / "agents" / "prompts" / "decisor_system.txt"
+    ).read_text(encoding="utf-8")
+    # El nuevo bloque debe contener "Sizing plano"
+    assert "Sizing plano" in prompt_text, "El prompt debe tener sizing plano"
+    # No debe quedar la guía vieja de confidence≥0.85
+    assert "confidence ≥ 0.85 + ≥3 confluencias" not in prompt_text, \
+        "La tabla de sizing por confidence debe haber sido removida"
