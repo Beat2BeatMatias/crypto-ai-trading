@@ -95,6 +95,31 @@ class Decisor:
         if ctx.get("playbook"):
             ctx["playbook"] = _safe_substitute(ctx["playbook"], ctx)
 
+        # ── Early-exit: critical indicators absent → HOLD without calling LLM ──
+        if ctx.get("critical_null_indicator"):
+            logger.warning("decisor.critical_null_indicator_early_exit")
+            validated = _hold_decision(
+                "[DATOS_INSUFICIENTES] Indicadores críticos nulos."
+            )
+            self.session.add(Decision(
+                agent="decisor",
+                model=self.provider.value,
+                tokens_in=0,
+                tokens_out=0,
+                latency_ms=0,
+                input={k: _serialize(v) for k, v in ctx.items()
+                       if not isinstance(v, dict) or k == "block_f_cross_tf"},
+                output={
+                    **validated.model_dump(),
+                    "coherence_warnings": [],
+                    "two_pass_triggered": False,
+                },
+                executed=False,
+                rejected_reason="critical_null_indicator",
+            ))
+            await self.session.commit()
+            return validated
+
         active_ext = frozenset(ctx.get("active_registry_confluence_codes") or [])
 
         system_prompt = self.prompt_manager.load_system_prompt("decisor")

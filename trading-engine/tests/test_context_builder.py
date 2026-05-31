@@ -822,3 +822,217 @@ async def test_block_k_lessons_injected_from_decision_outcomes(session: AsyncSes
 
     assert "no operar rebote RSI sin volumen" in ctx["block_k_lessons"]
     assert "ninguna confluencia promovida" in ctx["confluence_registry_block"]
+
+
+# ─────────────── P1-T3: null indicators ───────────────
+
+import copy as _copy
+from sqlalchemy import text as _sql_text
+
+
+def _ind_without_rsi(ind_data: dict) -> dict:
+    """Deep-copy of ind_data with 'rsi' removed from every timeframe."""
+    result = _copy.deepcopy(ind_data)
+    for tf in list(result.keys()):
+        result[tf].pop("rsi", None)
+    return result
+
+
+def _ind_without_critical(ind_data: dict) -> dict:
+    """Deep-copy with all critical keys (rsi, macd, ema20, ema50, atr) removed from 1h."""
+    result = _copy.deepcopy(ind_data)
+    for key in ("rsi", "macd", "ema20", "ema50", "atr"):
+        result.get("1h", {}).pop(key, None)
+    return result
+
+
+@pytest.fixture
+async def session_null_rsi():
+    """Session with Indicators that have NO rsi in any timeframe."""
+    event.listen(Indicators, "before_insert", _before_insert_indicators)
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(_sqlite_metadata.create_all)
+
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as sess:
+        sess.add(Indicators(
+            time=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            data={
+                "1h": {
+                    "last_close": 95000.0,
+                    # rsi intentionally absent
+                    "ema20": 94000.0,
+                    "ema50": 93000.0,
+                    "ema200": 90000.0,
+                    "macd": 10.0,
+                    "macd_signal": 8.0,
+                    "macd_hist": 2.0,
+                    "bb_upper": 96000.0,
+                    "bb_lower": 92000.0,
+                    "atr": 500.0,
+                },
+                "15m": {
+                    "last_close": 94900.0,
+                    # rsi intentionally absent
+                    "macd": 5.0,
+                    "macd_signal": 3.0,
+                    "macd_hist": 2.0,
+                    "ema20": 94500.0,
+                    "ema50": 93500.0,
+                    "atr": 250.0,
+                },
+                "5m": {
+                    "last_close": 94900.0,
+                    "rsi": 48.0,
+                    "bb_pct": 0.55,
+                },
+            },
+        ))
+        base_price = Decimal("94000.00")
+        for i in range(170):
+            candle_time = (
+                datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
+                - timedelta(hours=(169 - i))
+            )
+            sess.add(Ohlcv(
+                time=candle_time, timeframe="1h",
+                open=base_price, high=base_price + Decimal("100"),
+                low=base_price - Decimal("100"),
+                close=base_price + Decimal(str(i)),
+                volume=Decimal("10.0"),
+            ))
+        await sess.commit()
+        yield sess
+
+    event.remove(Indicators, "before_insert", _before_insert_indicators)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_context_builder_when_rsi_null_should_flag_critical_null_indicator(
+    session_null_rsi: AsyncSession,
+):
+    # GIVEN an Indicators row with no rsi in any timeframe (critical key absent)
+
+    # WHEN building the context
+    ctx = await _build(session_null_rsi)
+
+    # THEN critical_null_indicator is True
+    assert ctx["critical_null_indicator"] is True
+
+    # AND rsi_15m is None — not coerced to 0
+    assert ctx["rsi_15m"] is None
+
+    # AND rsi_1h is None — not coerced to 0
+    assert ctx["rsi_1h"] is None
+
+
+@pytest.mark.asyncio
+async def test_context_builder_when_all_indicators_present_should_not_flag_critical_null(
+    session: AsyncSession,
+):
+    # GIVEN the default session fixture which has all critical indicators present (1h only)
+    # NOTE: 15m rsi/macd are absent in the base fixture so critical_null_indicator will be True.
+    # We test the inverse: a fully-populated fixture.
+    from sqlalchemy import text as _t
+    await session.execute(_t("DELETE FROM indicators"))
+    await session.commit()
+    session.add(Indicators(
+        time=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        data={
+            "1h": {
+                "last_close": 95000.0,
+                "rsi": 55.0,
+                "ema20": 94000.0,
+                "ema50": 93000.0,
+                "ema200": 90000.0,
+                "macd": 10.0,
+                "macd_signal": 8.0,
+                "macd_hist": 2.0,
+                "bb_upper": 96000.0,
+                "bb_lower": 92000.0,
+                "atr": 500.0,
+            },
+            "15m": {
+                "last_close": 94900.0,
+                "rsi": 45.0,
+                "macd": 5.0,
+                "macd_signal": 3.0,
+                "macd_hist": 2.0,
+                "ema20": 94500.0,
+                "ema50": 93500.0,
+                "atr": 250.0,
+            },
+        },
+    ))
+    await session.commit()
+
+    # WHEN building the context
+    ctx = await _build(session)
+
+    # THEN critical_null_indicator is False — all critical keys are present
+    assert ctx["critical_null_indicator"] is False
+
+    # AND rsi values are the real numbers
+    assert ctx["rsi_15m"] == pytest.approx(45.0)
+    assert ctx["rsi_1h"] == pytest.approx(55.0)
+
+
+@pytest.mark.asyncio
+async def test_context_builder_when_rsi_absent_should_pass_none_not_zero(
+    session_null_rsi: AsyncSession,
+):
+    # GIVEN Indicators without rsi
+
+    # WHEN building the context
+    ctx = await _build(session_null_rsi)
+
+    # THEN rsi_15m and rsi_1h are None — not 0 (which would trigger false oversold)
+    assert ctx["rsi_15m"] is None, "rsi_15m must be None, not 0 — 0 causes false oversold"
+    assert ctx["rsi_1h"] is None, "rsi_1h must be None, not 0 — 0 causes false oversold"
+
+
+def test_fmt_when_value_is_none_should_return_nd():
+    # GIVEN None value
+    from agents.context_builder import _fmt
+
+    # WHEN formatting
+    result = _fmt(None)
+
+    # THEN returns "N/D"
+    assert result == "N/D"
+
+
+def test_fmt_when_value_is_none_with_spec_should_return_nd():
+    # GIVEN None value with format spec
+    from agents.context_builder import _fmt
+
+    # WHEN formatting with spec
+    result = _fmt(None, ".0f")
+
+    # THEN returns "N/D" regardless of spec
+    assert result == "N/D"
+
+
+def test_fmt_when_value_is_numeric_should_apply_spec():
+    # GIVEN a numeric value with spec
+    from agents.context_builder import _fmt
+
+    # WHEN formatting
+    result = _fmt(45.678, ".1f")
+
+    # THEN applies the format spec
+    assert result == "45.7"
+
+
+def test_fmt_when_value_is_numeric_without_spec_should_return_str():
+    # GIVEN a numeric value without spec
+    from agents.context_builder import _fmt
+
+    # WHEN formatting
+    result = _fmt(55.0)
+
+    # THEN returns string representation
+    assert result == "55.0"

@@ -224,15 +224,33 @@ async def session():
 
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as sess:
-        # Seed Indicators with 1h data so ContextBuilder gets a valid price
+        # Seed Indicators with all critical keys (1h + 15m) so the early-exit
+        # for critical_null_indicator does NOT fire and LLM is always reached.
         sess.add(Indicators(
             time=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
             data={
                 "1h": {
                     "last_close": 95000.0,
                     "rsi": 55.0,
+                    "ema20": 94000.0,
                     "ema50": 93000.0,
+                    "ema200": 90000.0,
+                    "macd": 10.0,
+                    "macd_signal": 8.0,
+                    "macd_hist": 2.0,
+                    "bb_upper": 96000.0,
+                    "bb_lower": 92000.0,
                     "atr": 500.0,
+                },
+                "15m": {
+                    "last_close": 94900.0,
+                    "rsi": 45.0,
+                    "macd": 5.0,
+                    "macd_signal": 3.0,
+                    "macd_hist": 2.0,
+                    "ema20": 94500.0,
+                    "ema50": 93500.0,
+                    "atr": 250.0,
                 },
             },
         ))
@@ -379,9 +397,22 @@ async def test_invalid_json_from_llm_persists_decision_with_action_hold(session:
 
 @pytest.mark.asyncio
 async def test_two_pass_triggered_when_coherence_warnings_on_c1_c2_c3(session: AsyncSession):
-    # GIVEN una respuesta LLM válida que va a generar warnings C2/C3 por el CoherenceChecker
-    # (la respuesta declara TRENDING_UP con confluencias que el contexto mínimo no puede confirmar)
-    llm = _make_llm_client(_VALID_LLM_RESPONSE)
+    # GIVEN una respuesta LLM que declara TRENDING_DOWN pero el precio (95000) está sobre
+    # EMA20(1h)=94000 y EMA50(1h)=93000 → CoherenceChecker dispara C3 → two-pass se activa.
+    _incoherent_response = json.dumps({
+        "regime": "TRENDING_DOWN",
+        "confluences": ["C"],
+        "action": "HOLD",
+        "confidence_base": 0.60,
+        "confidence_adjustment": 0.0,
+        "confidence": 0.60,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "expected_holding_min": 15,
+        "reasoning": "TRENDING_DOWN declarado aunque precio sobre EMAs.",
+    })
+    llm = _make_llm_client(_incoherent_response)
     pm = _make_prompt_manager()
     decisor = Decisor(
         session=session,
@@ -396,8 +427,8 @@ async def test_two_pass_triggered_when_coherence_warnings_on_c1_c2_c3(session: A
     # WHEN deciding con two_pass_enabled=True
     result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
 
-    # THEN el output sigue siendo BUY (el two-pass mantiene la misma respuesta del mock)
-    assert result.action == DecisorAction.BUY
+    # THEN el output es HOLD (el two-pass devuelve la misma respuesta del mock)
+    assert result.action == DecisorAction.HOLD
 
     # AND la fila persistida refleja el two-pass
     rows = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalars().all()
@@ -718,3 +749,109 @@ def test_extract_first_json_object_when_nested_braces_should_extract_outer():
     nested = '{"a": {"b": 1}, "c": 2}'
     result = _extract_first_json_object(nested)
     assert result == {"a": {"b": 1}, "c": 2}
+
+
+# ─────────────── P1-T3: early-exit on null critical indicators ───────────────
+
+@pytest.fixture
+async def session_missing_critical():
+    """Session seeded with Indicators that have 1h data but NO 15m rsi/macd (critical absent)."""
+    event.listen(Indicators, "before_insert", _before_insert_indicators)
+    event.listen(Decision, "before_insert", _before_insert_decision)
+    event.listen(PlaybookVersion, "before_insert", _before_insert_playbook)
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(_sqlite_metadata.create_all)
+
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as sess:
+        # Only 1h data — 15m rsi/macd absent → critical_null_indicator=True
+        sess.add(Indicators(
+            time=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            data={
+                "1h": {
+                    "last_close": 95000.0,
+                    "rsi": 55.0,
+                    "ema50": 93000.0,
+                    "atr": 500.0,
+                },
+            },
+        ))
+        sess.add(PlaybookVersion(
+            version=0,
+            content="# Playbook v0\nTest playbook.",
+            model="bootstrap",
+            active=True,
+        ))
+        await sess.commit()
+        yield sess
+
+    event.remove(Indicators, "before_insert", _before_insert_indicators)
+    event.remove(Decision, "before_insert", _before_insert_decision)
+    event.remove(PlaybookVersion, "before_insert", _before_insert_playbook)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_decisor_when_critical_null_indicator_should_early_exit_hold_without_llm(
+    session_missing_critical: AsyncSession,
+):
+    # GIVEN a session with Indicators missing 15m rsi/macd (critical_null_indicator=True)
+    llm = _make_llm_client(_VALID_LLM_RESPONSE)
+    pm = _make_prompt_manager()
+    decisor = Decisor(
+        session=session_missing_critical,
+        llm=llm,
+        symbol="BTC/USDT",
+        prompt_manager=pm,
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=False,
+    )
+
+    # WHEN deciding
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN result is HOLD (early-exit, not LLM decision)
+    assert result.action == DecisorAction.HOLD
+    assert "[DATOS_INSUFICIENTES]" in result.reasoning
+
+    # AND the LLM was never called
+    assert llm.call.call_count == 0
+
+    # AND the Decision row records the rejection reason
+    rows = (await session_missing_critical.execute(
+        select(Decision).where(Decision.agent == "decisor")
+    )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].rejected_reason == "critical_null_indicator"
+    assert rows[0].tokens_in == 0
+    assert rows[0].tokens_out == 0
+
+
+@pytest.mark.asyncio
+async def test_decisor_when_all_critical_indicators_present_should_call_llm(
+    session: AsyncSession,
+):
+    # GIVEN the default session with ALL critical indicators present (1h + 15m)
+    llm = _make_llm_client(_VALID_LLM_RESPONSE)
+    pm = _make_prompt_manager()
+    decisor = Decisor(
+        session=session,
+        llm=llm,
+        symbol="BTC/USDT",
+        prompt_manager=pm,
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=False,
+    )
+
+    # WHEN deciding
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    # THEN the LLM was called (no early-exit)
+    assert llm.call.call_count == 1
+
+    # AND the result is the LLM's decision (BUY)
+    assert result.action == DecisorAction.BUY

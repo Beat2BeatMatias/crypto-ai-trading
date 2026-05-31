@@ -37,6 +37,27 @@ _ALL_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
 # Candles per day per timeframe (for ATR 7d history query)
 _TF_ROWS_PER_DAY = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24, "4h": 6}
 
+# Critical indicators: if ANY of these is absent the decisor must early-exit to HOLD.
+# Ordered (tf, key) pairs covering the minimum viable signal set.
+_CRITICAL_INDICATOR_KEYS: tuple[tuple[str, str], ...] = (
+    ("15m", "rsi"),
+    ("1h",  "rsi"),
+    ("15m", "macd"),
+    ("1h",  "macd"),
+    ("1h",  "ema20"),
+    ("1h",  "ema50"),
+    ("1h",  "atr"),
+)
+
+
+def _fmt(value: object, spec: str = "") -> str:
+    """Format a numeric value for prompt rendering; returns 'N/D' when None."""
+    if value is None:
+        return "N/D"
+    if spec:
+        return format(float(value), spec)
+    return str(value)
+
 
 class ContextBuilder:
     def __init__(self, session: AsyncSession, *, symbol: str):
@@ -280,29 +301,35 @@ class ContextBuilder:
             # ---- Block C: Technical timeframes (per-TF blocks) ----
             "block_c_tf_blocks": tf_blocks,
             "block_c_tf_order": tf_order,
-            # Legacy flat keys still used by old prompt templates
-            "rsi_1m": self._get(ind, "1m", "rsi") or 0,
-            "rsi_5m": self._get(ind, "5m", "rsi") or 0,
-            "rsi_15m": self._get(ind, "15m", "rsi") or 0,
-            "rsi_1h": self._get(ind, "1h", "rsi") or 0,
-            "rsi_4h": self._get(ind, "4h", "rsi") or 0,
-            "bb_pct_1m": self._get(ind, "1m", "bb_pct") or 0,
-            "bb_pct_5m": self._get(ind, "5m", "bb_pct") or 0,
-            "macd_15m": self._get(ind, "15m", "macd") or 0,
-            "sig_15m": self._get(ind, "15m", "macd_signal") or 0,
-            "hist_15m": self._get(ind, "15m", "macd_hist") or 0,
-            "macd_1h": self._get(ind, "1h", "macd") or 0,
-            "sig_1h": self._get(ind, "1h", "macd_signal") or 0,
-            "ema20_1h": self._get(ind, "1h", "ema20") or 0,
+            # Legacy flat keys — None when absent (no `or 0` coercion)
+            # so labelers receive the real signal rather than a fake 0/oversold.
+            "rsi_1m": self._get(ind, "1m", "rsi"),
+            "rsi_5m": self._get(ind, "5m", "rsi"),
+            "rsi_15m": self._get(ind, "15m", "rsi"),
+            "rsi_1h": self._get(ind, "1h", "rsi"),
+            "rsi_4h": self._get(ind, "4h", "rsi"),
+            "bb_pct_1m": self._get(ind, "1m", "bb_pct"),
+            "bb_pct_5m": self._get(ind, "5m", "bb_pct"),
+            "macd_15m": self._get(ind, "15m", "macd"),
+            "sig_15m": self._get(ind, "15m", "macd_signal"),
+            "hist_15m": self._get(ind, "15m", "macd_hist"),
+            "macd_1h": self._get(ind, "1h", "macd"),
+            "sig_1h": self._get(ind, "1h", "macd_signal"),
+            "ema20_1h": self._get(ind, "1h", "ema20"),
             "ema50_1h": ema50_1h,
             "ema200_1h": ema200_1h,
-            "bb_up_1h": self._get(ind, "1h", "bb_upper") or 0,
-            "bb_lo_1h": self._get(ind, "1h", "bb_lower") or 0,
-            "ema20_4h": self._get(ind, "4h", "ema20") or 0,
+            "bb_up_1h": self._get(ind, "1h", "bb_upper"),
+            "bb_lo_1h": self._get(ind, "1h", "bb_lower"),
+            "ema20_4h": self._get(ind, "4h", "ema20"),
             "ema50_4h": ema50_4h,
             "ema200_4h": ema200_4h,
-            "atr_1h": self._get(ind, "1h", "atr") or 0,
-            "atr_pct_1h": ((self._get(ind, "1h", "atr") or 0) / price * 100) if price else 0,
+            "atr_1h": self._get(ind, "1h", "atr"),
+            "atr_pct_1h": (float(self._get(ind, "1h", "atr")) / price * 100) if (self._get(ind, "1h", "atr") and price) else 0,
+            # True when any critical indicator is absent — decisor must early-exit to HOLD.
+            "critical_null_indicator": any(
+                self._get(ind, tf, key) is None
+                for tf, key in _CRITICAL_INDICATOR_KEYS
+            ),
 
             # ---- Block D: Key levels ----
             "block_d_ema50_1h": ema50_1h,
