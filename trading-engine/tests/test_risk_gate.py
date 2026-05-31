@@ -330,10 +330,12 @@ def test_r10_buy_rejected_when_tp_move_insufficient_vs_fees():
 
 def test_r10_buy_passes_when_tp_move_covers_fees():
     # GIVEN roundtrip_fee_pct=0.2%, min_fees_to_tp_ratio=3.0
-    # take_profit=67500: move=(67500-67000)/67000*100=0.746% > 0.6% → passes R10
-    # sl_distance=200, atr_ref=300 ✓; reward=500, risk=200, R:R=2.5 > 1.3 ✓
+    # slippage cushion = _make_gate() default max_slippage_pct=0.005 -> 0.005*2*100=1.0%
+    # min_move = 3.0*0.2 + 1.0 = 1.6%
+    # take_profit=68139 (+1.7%): move=1.7% > 1.6% → passes R10
+    # sl_distance=200, atr_ref=300 ✓; reward=1139, risk=200, R:R=5.7 > 1.3 ✓
     gate = _make_gate()
-    decision = _buy_decision(stop_loss=66800.0, take_profit=67500.0)
+    decision = _buy_decision(stop_loss=66800.0, take_profit=68139.0)
     kwargs = {**_COMMON_KWARGS, "current_price": 67000.0, "atr_ref": 300.0,
               "roundtrip_fee_pct": 0.2, "min_fees_to_tp_ratio": 3.0}
 
@@ -544,3 +546,43 @@ def test_r11_all_notionals_pass_with_adequate_balance():
 
     # THEN pasa todas las validaciones incluyendo R11 para BUY, SL y TP
     assert verdict.passed is True
+
+
+def test_r10_rejects_when_tp_move_below_fees_plus_slippage():
+    # round-trip fee 0.20% + slippage 2x0.05%=0.10% -> min_move = 0.30%
+    # TP a +0.25% del precio (80200) -> insuficiente -> R10
+    # sl_distance=100, atr_ref=200: sl_min=60 < 100 < sl_max=300 -> R4 ✓
+    # R:R = 200/100 = 2.0 > 1.3 -> R5 ✓  ;  move_pct=0.25% < 0.30% -> R10 ✗
+    gate = _make_gate(max_slippage_pct=0.0005)
+    price = 80000.0
+    decision = _buy_decision(
+        stop_loss=price - 100.0,
+        take_profit=price * 1.0025,   # +0.25%
+        position_size_pct=0.05,
+    )
+    verdict = gate.validate(
+        decision=decision, current_price=price, atr_ref=200.0,
+        open_positions_count=0, daily_pnl_pct=0.0, total_drawdown_pct=0.0,
+        kill_switch=False, usdt_balance=1000.0, btc_held=0.0,
+        roundtrip_fee_pct=0.20, min_fees_to_tp_ratio=1.0,
+    )
+    assert not verdict.passed
+    assert verdict.rule_id == "R10"
+
+
+def test_r10_passes_when_tp_move_covers_fees_plus_slippage():
+    # colchón = 0.30%, TP a +1.0% -> cubre de sobra
+    gate = _make_gate(max_slippage_pct=0.0005)
+    price = 80000.0
+    decision = _buy_decision(
+        stop_loss=price - 320.0,
+        take_profit=price + 800.0,   # +1.0%
+        position_size_pct=0.05,
+    )
+    verdict = gate.validate(
+        decision=decision, current_price=price, atr_ref=800.0,
+        open_positions_count=0, daily_pnl_pct=0.0, total_drawdown_pct=0.0,
+        kill_switch=False, usdt_balance=1000.0, btc_held=0.0,
+        roundtrip_fee_pct=0.20, min_fees_to_tp_ratio=1.0,
+    )
+    assert verdict.passed

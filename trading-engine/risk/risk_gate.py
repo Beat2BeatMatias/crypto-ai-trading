@@ -149,22 +149,26 @@ class RiskGate:
                 f"take_profit {decision.take_profit} <= current_price {current_price}",
             )
 
-        # R5 — R:R mínimo
+        # R5 — R:R mínimo (el ratio debe SUPERAR el mínimo, no igualarlo)
         reward = decision.take_profit - current_price
-        if sl_distance > 0 and reward / sl_distance <= self.min_rr_ratio:
+        if sl_distance > 0 and reward / sl_distance < self.min_rr_ratio:
             return self._reject(
                 "R5",
-                f"R:R ratio {reward/sl_distance:.2f} <= {self.min_rr_ratio}",
+                f"R:R ratio {reward/sl_distance:.2f} < {self.min_rr_ratio}",
             )
 
-        # R10 — movimiento al TP cubre fees (no aplica en testnet con fees=0)
+        # R10 — el movimiento al TP debe cubrir fees round-trip + colchón de slippage.
+        # El slippage de entrada+salida (market orders + SL guardian) erosiona el P&L
+        # igual que los fees, por eso se suma 2×max_slippage_pct al umbral.
         if roundtrip_fee_pct > 0:
             move_pct = (decision.take_profit - current_price) / current_price * 100
-            min_move = min_fees_to_tp_ratio * roundtrip_fee_pct
+            slippage_cushion_pct = self.max_slippage_pct * 2 * 100
+            min_move = min_fees_to_tp_ratio * roundtrip_fee_pct + slippage_cushion_pct
             if move_pct < min_move:
                 return self._reject(
                     "R10",
-                    f"TP move ({move_pct:.3f}%) < {min_fees_to_tp_ratio}×fees ({min_move:.3f}%)",
+                    f"TP move ({move_pct:.3f}%) < {min_fees_to_tp_ratio}×fees + slippage "
+                    f"({min_move:.3f}%)",
                 )
 
         return RiskVerdict(passed=True)
