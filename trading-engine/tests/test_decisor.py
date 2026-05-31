@@ -662,3 +662,59 @@ def test_build_review_ctx_no_c7_block_when_no_c7():
     assert ctx["review_has_c7"] is False
     assert ctx["review_c7_block"] == ""
     assert ctx["review_block_d"] == "  EMA50(1h): $93,000"
+
+
+# ─────────────── P1-T1: parser JSON robusto ───────────────
+from agents.decisor import _parse_llm_output, _extract_first_json_object
+
+
+def _hold_json_str() -> str:
+    return json.dumps({
+        "regime": "RANGE", "confluences": [], "action": "HOLD",
+        "confidence_base": 0.0, "confidence_adjustment": 0.0,
+        "confidence": 0.0, "stop_loss": None, "take_profit": None,
+        "position_size_pct": 0.0, "expected_holding_min": 1,
+        "reasoning": "Test HOLD",
+    })
+
+
+def test_parse_llm_output_when_plain_json_should_parse():
+    result = _parse_llm_output(_hold_json_str())
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_json_fence_should_parse():
+    result = _parse_llm_output(f"```json\n{_hold_json_str()}\n```")
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_uppercase_JSON_fence_should_parse():
+    result = _parse_llm_output(f"```JSON\n{_hold_json_str()}\n```")
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_prose_before_json_should_parse():
+    result = _parse_llm_output(f"Aquí mi análisis.\n\n{_hold_json_str()}")
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_prose_after_json_should_parse():
+    result = _parse_llm_output(f"{_hold_json_str()}\n\nEso es todo.")
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_think_tags_before_json_should_parse():
+    result = _parse_llm_output(f"<think>Pensando...</think>\n{_hold_json_str()}")
+    assert result.action == DecisorAction.HOLD
+
+
+def test_parse_llm_output_when_no_json_should_raise():
+    with pytest.raises(Exception):
+        _parse_llm_output("No hay JSON aquí.")
+
+
+def test_extract_first_json_object_when_nested_braces_should_extract_outer():
+    # JSON con objetos anidados — debe extraer el objeto completo
+    nested = '{"a": {"b": 1}, "c": 2}'
+    result = _extract_first_json_object(nested)
+    assert result == {"a": {"b": 1}, "c": 2}

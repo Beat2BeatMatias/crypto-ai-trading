@@ -201,7 +201,7 @@ class Decisor:
                 two_pass=two_pass_triggered,
             )
 
-        except (json.JSONDecodeError, ValidationError) as e:
+        except (json.JSONDecodeError, ValidationError, ValueError) as e:
             raw_text = resp.text if resp else None
             logger.warning(
                 "decisor.parse_error",
@@ -256,17 +256,63 @@ class Decisor:
         return validated
 
 
-# ---------------------------------------------------------------------------
-# Parsing del output LLM (reutilizado en pass 1 y pass 2)
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Parsing del output LLM — extrae el primer objeto JSON balanceado tolerando
+# prosa, fences markdown, y tags <think>.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_first_json_object(text: str) -> dict:
+    """Encuentra el primer objeto JSON balanceado en `text`.
+
+    Tolera prosa antes/después, fences markdown (```json/```JSON),
+    y tags de razonamiento <think>...</think>.
+    """
+    # 1. Eliminar tags <think> que algunos modelos emiten antes del JSON
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
+    # 2. Si el texto comienza con un fence markdown, extraer el bloque interior
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        parts = stripped.split("```")
+        if len(parts) >= 3:
+            block = parts[1]
+            # Quitar etiqueta de lenguaje (json, JSON, python…) si la hay
+            block = re.sub(r"^[a-zA-Z]+\s*\n?", "", block)
+            text = block
+
+    # 3. Buscar el primer '{' y extraer el objeto JSON balanceado
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No se encontró objeto JSON en el texto del LLM")
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start : i + 1])
+
+    raise ValueError("Objeto JSON sin cerrar en el texto del LLM")
+
 
 def _parse_llm_output(text: str) -> DecisorOutput:
-    raw = text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    parsed = json.loads(raw.strip())
+    parsed = _extract_first_json_object(text)
     return DecisorOutput.model_validate(parsed)
 
 
