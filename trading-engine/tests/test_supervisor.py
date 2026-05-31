@@ -806,3 +806,21 @@ async def test_supervisor_force_regen_when_regime_changes(session):
     assert "RANGE" in out["force_regen_reason"]
     # LLM eval skipped → 1 call (regeneration only)
     assert llm.call.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Safe bounds tests
+# ---------------------------------------------------------------------------
+
+from agents.supervisor import _SAFE_BOUNDS
+
+
+def test_safe_bounds_allow_sl_atr_multiplier_up_to_2():
+    lo, hi = _SAFE_BOUNDS["sl_atr_multiplier"]
+    assert lo <= 1.0 <= hi
+    assert hi >= 2.0
+
+
+def test_safe_bounds_min_rr_allows_2():
+    lo, hi = _SAFE_BOUNDS["min_rr_ratio"]
+    assert lo <= 2.0 <= hi

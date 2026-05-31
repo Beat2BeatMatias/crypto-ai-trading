@@ -29,7 +29,7 @@ logger = structlog.get_logger()
 #    cambiar el threshold es cosmético, no modifica comportamiento real.
 _SAFE_BOUNDS: dict[str, tuple] = {
     # ENFORCEMENT (Risk Gate los aplica)
-    "sl_atr_multiplier":           (0.1, 0.8),
+    "sl_atr_multiplier":           (0.1, 2.0),
     "sl_atr_max_multiplier":       (0.5, 20.0),
     "min_rr_ratio":                (1.0, 3.0),
     "max_position_pct":            (0.01, 0.20),
