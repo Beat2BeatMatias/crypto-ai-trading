@@ -101,6 +101,26 @@ _trades_table = Table(
     Column("close_requested", Boolean, default=False),  # migration 002
 )
 
+_decision_outcomes_table = Table(
+    "decision_outcomes", _sqlite_metadata,
+    Column("decision_id", String(36), primary_key=True),
+    Column("horizon_min", Integer, nullable=False),
+    Column("matured", Boolean, nullable=False),
+    Column("forward_return_pct", Numeric(10, 5)),
+    Column("mfe_pct", Numeric(10, 5)),
+    Column("mae_pct", Numeric(10, 5)),
+    Column("time_to_mfe_min", Integer),
+    Column("time_to_mae_min", Integer),
+    Column("sl_dist_pct", Numeric(10, 5)),
+    Column("tp_target_pct", Numeric(10, 5)),
+    Column("classification", String(32), nullable=False),
+    Column("computed_at", DateTime, nullable=False),
+    Column("postmortem_status", String(16)),
+    Column("lesson_raw", JSON),
+    Column("lesson_normalized", JSON),
+    Column("postmortem_at", DateTime),
+)
+
 _playbook_versions_table = Table(
     "playbook_versions", _sqlite_metadata,
     Column("id", String(36), primary_key=True),
@@ -131,6 +151,36 @@ _config_history_table = Table(
     Column("old_value", Text),
     Column("new_value", Text, nullable=False),
     Column("changed_by", String(60), default="system"),
+)
+
+_confluence_candidates_table = Table(
+    "confluence_candidates", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("pattern_tag", String(64), nullable=False),
+    Column("proposed_code", String(1)),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("occurrence_count", Integer, nullable=False, default=1),
+    Column("first_seen_at", DateTime, nullable=False),
+    Column("last_seen_at", DateTime, nullable=False),
+    Column("source_decision_ids", JSON, nullable=False),
+    Column("status", String(16), nullable=False, default="open"),
+    Column("promoted_at", DateTime),
+    Column("reject_reason", Text),
+)
+
+_confluence_registry_table = Table(
+    "confluence_registry", _sqlite_metadata,
+    Column("code", String(1), primary_key=True),
+    Column("slug", String(64), nullable=False),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("promoted_from", String(36)),
+    Column("created_at", DateTime, nullable=False),
+    Column("deactivated_at", DateTime),
 )
 
 

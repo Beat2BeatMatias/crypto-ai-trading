@@ -41,18 +41,17 @@ def _make_groq_client(response: MagicMock) -> MagicMock:
 
 def _make_ollama_response(text: str = '{"action": "HOLD"}',
                            tokens_in: int = 90, tokens_out: int = 45) -> MagicMock:
-    """Build a mock Ollama API response (OpenAI-compatible format)."""
+    """Build a mock Ollama native library response."""
     response = MagicMock()
-    response.choices[0].message.content = text
-    response.choices[0].message.thinking = None
-    response.usage.prompt_tokens = tokens_in
-    response.usage.completion_tokens = tokens_out
+    response.message.content = text
+    response.prompt_eval_count = tokens_in
+    response.eval_count = tokens_out
     return response
 
 
 def _make_ollama_client(response: MagicMock) -> MagicMock:
     client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
+    client.chat = AsyncMock(return_value=response)
     return client
 
 
@@ -213,9 +212,9 @@ async def test_call_ollama_when_provider_is_deepseek_should_send_think_true():
         user_prompt="user",
     )
 
-    # THEN think=True is sent in extra_body
-    call_kwargs = ollama_client.chat.completions.create.call_args[1]
-    assert call_kwargs.get("extra_body", {}).get("think") is True
+    # THEN ollama.chat is called with higher temperature for thinking models
+    call_kwargs = ollama_client.chat.call_args[1]
+    assert call_kwargs.get("options", {}).get("temperature") == 0.6
     assert result.provider == LLMProvider.OLLAMA_DEEPSEEK_V4_FLASH.value
     assert result.text == '{"action": "HOLD"}'
 
@@ -234,9 +233,9 @@ async def test_call_ollama_when_non_thinking_model_should_not_send_think():
         user_prompt="user",
     )
 
-    # THEN extra_body with think is NOT sent
-    call_kwargs = ollama_client.chat.completions.create.call_args[1]
-    assert "think" not in call_kwargs.get("extra_body", {})
+    # THEN ollama.chat is called with standard temperature (not thinking mode)
+    call_kwargs = ollama_client.chat.call_args[1]
+    assert call_kwargs.get("options", {}).get("temperature") == 0.4
 
 
 @pytest.mark.asyncio
@@ -254,9 +253,9 @@ async def test_call_ollama_when_json_mode_should_send_response_format():
         json_mode=True,
     )
 
-    # THEN response_format=json_object is sent
-    call_kwargs = ollama_client.chat.completions.create.call_args[1]
-    assert call_kwargs.get("response_format") == {"type": "json_object"}
+    # THEN format="json" is sent to ollama.chat
+    call_kwargs = ollama_client.chat.call_args[1]
+    assert call_kwargs.get("format") == "json"
     assert result.tokens_in == 110
     assert result.tokens_out == 55
 
@@ -302,4 +301,4 @@ async def test_cascade_when_ollama_in_fallbacks_should_call_ollama_after_groq_fa
     assert result.provider == LLMProvider.OLLAMA_QWEN35_32B.value
     assert result.text == '{"action": "HOLD"}'
     assert result.tokens_in == 70
-    ollama_client.chat.completions.create.assert_called_once()
+    ollama_client.chat.assert_called_once()

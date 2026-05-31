@@ -57,6 +57,10 @@ _decision_outcomes_table = Table(
     Column("tp_target_pct", Numeric(10, 5)),
     Column("classification", String(32), nullable=False),
     Column("computed_at", DateTime, nullable=False),
+    Column("postmortem_status", String(16)),
+    Column("lesson_raw", JSON),
+    Column("lesson_normalized", JSON),
+    Column("postmortem_at", DateTime),
 )
 
 _trades_table = Table(
@@ -151,6 +155,36 @@ _balance_snapshots_table = Table(
     Column("usdt_locked", Numeric(18, 4), nullable=False, server_default="0"),
     Column("btc_locked", Numeric(18, 8), nullable=False, server_default="0"),
     Column("source", String(20), nullable=False, default="binance"),
+)
+
+_confluence_candidates_table = Table(
+    "confluence_candidates", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("pattern_tag", String(64), nullable=False),
+    Column("proposed_code", String(1)),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("occurrence_count", Integer, nullable=False, default=1),
+    Column("first_seen_at", DateTime, nullable=False),
+    Column("last_seen_at", DateTime, nullable=False),
+    Column("source_decision_ids", JSON, nullable=False),
+    Column("status", String(16), nullable=False, default="open"),
+    Column("promoted_at", DateTime),
+    Column("reject_reason", Text),
+)
+
+_confluence_registry_table = Table(
+    "confluence_registry", _sqlite_metadata,
+    Column("code", String(1), primary_key=True),
+    Column("slug", String(64), nullable=False),
+    Column("title", String(128), nullable=False),
+    Column("definition_md", Text, nullable=False),
+    Column("verify_spec", JSON, nullable=False),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("promoted_from", String(36)),
+    Column("created_at", DateTime, nullable=False),
+    Column("deactivated_at", DateTime),
 )
 
 

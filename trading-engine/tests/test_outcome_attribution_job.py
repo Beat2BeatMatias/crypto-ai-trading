@@ -97,6 +97,10 @@ _decision_outcomes_table = Table(
     Column("tp_target_pct", Numeric(10, 5)),
     Column("classification", String(32), nullable=False),
     Column("computed_at", DateTime, nullable=False),
+    Column("postmortem_status", String(16)),
+    Column("lesson_raw", JSON),
+    Column("lesson_normalized", JSON),
+    Column("postmortem_at", DateTime),
 )
 
 
