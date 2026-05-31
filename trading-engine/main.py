@@ -605,7 +605,7 @@ async def run() -> None:
     sched.add_fee_refresh(fees_tick, hours=24)
     sched.add_balance_refresh(balance_tick, seconds=60)
     sched.add_position_refresh(positions_tick, seconds=30)
-    sched.add_order_tracker(order_tracker_tick, seconds=30)
+    sched.add_order_tracker(order_tracker_tick, seconds=10)
     sched.add_outcome_attribution(outcome_attribution_tick_wrapper, interval_min=outcome_interval_min)
     logger.info(
         "scheduler.outcome_attribution_registered",
