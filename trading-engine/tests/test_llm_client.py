@@ -277,6 +277,62 @@ async def test_call_when_ollama_client_is_none_should_raise_runtime_error():
     assert "OLLAMA_API_KEY" in str(exc_info.value.last_err)
 
 
+# ─────────────── P1-T4: reasoning estructurado ───────────────
+
+@pytest.mark.asyncio
+async def test_call_ollama_when_structured_thinking_field_should_use_it():
+    """Campo .thinking poblado → usarlo como reasoning, content queda intacto."""
+    ollama_resp = _make_ollama_response(text='{"action": "HOLD"}')
+    ollama_resp.message.thinking = "Pensando profundo..."
+    ollama_client = _make_ollama_client(ollama_resp)
+    client = LLMClient(ollama_client=ollama_client, max_retries=1)
+
+    result = await client.call(
+        provider=LLMProvider.OLLAMA_QWEN35_32B,
+        system_prompt="sys", user_prompt="usr",
+    )
+
+    assert result.text == '{"action": "HOLD"}'
+    assert result.reasoning == "Pensando profundo..."
+
+
+@pytest.mark.asyncio
+async def test_call_ollama_when_no_structured_thinking_but_think_tags_should_extract():
+    """Sin .thinking, regex <think> como fallback."""
+    ollama_resp = _make_ollama_response(
+        text='<think>Razonamiento</think>{"action": "HOLD"}'
+    )
+    ollama_resp.message.thinking = None
+    ollama_client = _make_ollama_client(ollama_resp)
+    client = LLMClient(ollama_client=ollama_client, max_retries=1)
+
+    result = await client.call(
+        provider=LLMProvider.OLLAMA_QWEN35_32B,
+        system_prompt="sys", user_prompt="usr",
+    )
+
+    assert '{"action": "HOLD"}' in result.text
+    assert result.reasoning is not None
+    assert "Razonamiento" in result.reasoning
+
+
+@pytest.mark.asyncio
+async def test_call_ollama_when_no_thinking_at_all_should_return_none_reasoning():
+    """Sin .thinking ni tags → reasoning=None, text=content completo."""
+    ollama_resp = _make_ollama_response(text='{"action": "HOLD"}')
+    ollama_resp.message.thinking = None
+    ollama_client = _make_ollama_client(ollama_resp)
+    client = LLMClient(ollama_client=ollama_client, max_retries=1)
+
+    result = await client.call(
+        provider=LLMProvider.OLLAMA_QWEN35_32B,
+        system_prompt="sys", user_prompt="usr",
+    )
+
+    assert result.text == '{"action": "HOLD"}'
+    assert result.reasoning is None
+
+
 @pytest.mark.asyncio
 async def test_cascade_when_ollama_in_fallbacks_should_call_ollama_after_groq_fails():
     # GIVEN a Groq client that always fails and an Ollama client that succeeds

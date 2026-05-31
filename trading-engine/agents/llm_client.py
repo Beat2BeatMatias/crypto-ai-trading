@@ -252,13 +252,25 @@ class LLMClient:
             options={"temperature": 0.6 if is_thinking else 0.4},
         )
         raw_content = response.message.content or ""
-        think_match = re.search(r"<think>(.*?)</think>", raw_content, re.DOTALL)
-        if think_match:
-            reasoning: str | None = think_match.group(1).strip()
-            text = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
-        else:
-            reasoning = None
+
+        # Estrategia 1: campo estructurado .thinking (Ollama >= 0.5 con QwQ/DeepSeek).
+        # Si está disponible, el reasoning llega limpio y `content` no lo trae.
+        structured_thinking: str | None = getattr(response.message, "thinking", None) or None
+
+        if structured_thinking:
+            reasoning: str | None = structured_thinking.strip() or None
             text = raw_content
+        else:
+            # Estrategia 2: regex <think> como fallback para modelos que embeben
+            # el razonamiento en content.
+            think_match = re.search(r"<think>(.*?)</think>", raw_content, re.DOTALL)
+            if think_match:
+                reasoning = think_match.group(1).strip() or None
+                text = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+            else:
+                reasoning = None
+                text = raw_content
+
         if reasoning:
             logger.debug("llm.reasoning_received", model=model_id,
                          reasoning_chars=len(reasoning))
