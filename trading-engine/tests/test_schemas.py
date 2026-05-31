@@ -164,3 +164,37 @@ def test_reasoning_above_1000_chars_truncated():
     # THEN reasoning is truncated to 1000 chars (997 + "...")
     assert len(output.reasoning) == 1000
     assert output.reasoning.endswith("...")
+
+
+# ─────────────── P1-T2: coerciones ───────────────
+
+def test_confidence_adjustment_when_slightly_above_max_should_clamp_to_010():
+    payload = _valid_buy_payload()
+    payload["confidence_adjustment"] = 0.101
+    output = DecisorOutput(**payload)
+    assert output.confidence_adjustment == pytest.approx(0.10)
+
+
+def test_confidence_adjustment_when_below_min_should_clamp_to_minus_010():
+    payload = _valid_buy_payload()
+    payload["confidence_adjustment"] = -0.15
+    output = DecisorOutput(**payload)
+    assert output.confidence_adjustment == pytest.approx(-0.10)
+
+
+def test_confidence_adjustment_when_none_should_default_to_zero():
+    payload = _valid_buy_payload()
+    payload["confidence_adjustment"] = None
+    output = DecisorOutput(**payload)
+    assert output.confidence_adjustment == 0.0
+
+
+def test_market_regime_neutral_should_be_accepted():
+    payload = _valid_buy_payload()
+    payload["regime"] = "NEUTRAL"
+    payload["action"] = "HOLD"
+    payload["stop_loss"] = None
+    payload["take_profit"] = None
+    payload["position_size_pct"] = 0.0
+    output = DecisorOutput(**payload)
+    assert output.regime == MarketRegime.NEUTRAL

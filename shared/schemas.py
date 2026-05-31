@@ -15,6 +15,7 @@ class MarketRegime(str, Enum):
     TRENDING_DOWN = "TRENDING_DOWN"
     RANGE = "RANGE"
     HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    NEUTRAL = "NEUTRAL"
 
 
 class DecisorOutput(BaseModel):
@@ -40,6 +41,17 @@ class DecisorOutput(BaseModel):
     @classmethod
     def _coerce_null_holding(cls, v: Any) -> int:
         return 1 if (v is None or v == 0) else v
+
+    @field_validator("confidence_adjustment", mode="before")
+    @classmethod
+    def _clamp_confidence_adjustment(cls, v: Any) -> float:
+        if v is None:
+            return 0.0
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(-0.10, min(0.10, v))
 
     @field_validator("reasoning", mode="before")
     @classmethod
