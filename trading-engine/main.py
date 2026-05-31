@@ -18,6 +18,7 @@ from agents.prompt_manager import PromptManager
 from agents.decisor import Decisor
 from agents.supervisor import Supervisor
 from risk.risk_gate import RiskGate
+from risk.fees import effective_roundtrip_fee_pct
 from risk.circuit_breaker import CircuitBreaker
 from scheduler import EngineScheduler
 from notifications import notify, TelegramEvent
@@ -267,6 +268,7 @@ async def run() -> None:
                 "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
                 "block_k_max_lines": await store.get_typed(ConfigKey.BLOCK_K_MAX_LINES),
                 "block_k_window_hours": await store.get_typed(ConfigKey.BLOCK_K_WINDOW_HOURS),
+                "min_roundtrip_fee_pct": await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT),
             }
             coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
             two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
@@ -410,7 +412,10 @@ async def run() -> None:
                 open_positions_count=open_count, daily_pnl_pct=daily_pnl_frac,
                 total_drawdown_pct=total_drawdown_frac, kill_switch=kill,
                 usdt_balance=usdt, btc_held=btc,
-                roundtrip_fee_pct=fees.taker * 2 * 100,
+                roundtrip_fee_pct=effective_roundtrip_fee_pct(
+                    taker_fee=fees.taker,
+                    floor_pct=float(calibration.get("min_roundtrip_fee_pct", 0.20)),
+                ),
                 min_fees_to_tp_ratio=float(calibration.get("min_fees_to_tp_ratio", 3.0)),
             )
             if not verdict.passed:

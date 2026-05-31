@@ -91,6 +91,7 @@ class ConfigKey(str, Enum):
     CONFLUENCE_PROMOTION_WINDOW_DAYS = "confluence_promotion_window_days"
     CONFLUENCE_REGISTRY_MAX_ACTIVE = "confluence_registry_max_active"
     LIVE_SINCE_TS = "live_since_ts"
+    MIN_ROUNDTRIP_FEE_PCT = "min_roundtrip_fee_pct"
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,11 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.MIN_FEES_TO_TP_RATIO: _Default(
         "3.0", "float",
         "Min TP movement as multiple of round-trip fees for BUY approval (R10). Range 1.5–6.0.",
+    ),
+    ConfigKey.MIN_ROUNDTRIP_FEE_PCT: _Default(
+        "0.20", "float",
+        "Piso del round-trip fee (puntos %) usado por R10 cuando el exchange "
+        "reporta fees 0 (testnet). 0.20 = equivalente LIVE (0.1% taker/lado). Rango 0.0–0.5.",
     ),
     ConfigKey.MIN_CONFLUENCES_BUY: _Default(
         "2", "int",
