@@ -193,8 +193,32 @@ class OrderTracker:
                         trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
                     )
                 except Exception as e:
-                    logger.error("order_tracker.sl_guardian_failed",
-                                 trade_id=str(trade.id), error=str(e))
+                    error_str = str(e)
+                    if "-1013" in error_str and "NOTIONAL" in error_str:
+                        logger.warning(
+                            "order_tracker.sl_guardian_notional_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        try:
+                            price = current_price or await self._fetch_current_price()
+                            if price:
+                                await self.executor.force_close_trade(
+                                    trade_id=trade.id,
+                                    market_price=price,
+                                    close_reason="force_closed_notional",
+                                )
+                            else:
+                                logger.error(
+                                    "order_tracker.sl_guardian_notional_price_unavailable",
+                                    trade_id=str(trade.id),
+                                )
+                        except Exception as fe:
+                            logger.error("order_tracker.sl_guardian_force_close_failed",
+                                         trade_id=str(trade.id), error=str(fe))
+                    else:
+                        logger.error("order_tracker.sl_guardian_failed",
+                                     trade_id=str(trade.id), error=error_str)
                 continue
 
             # --- Mecanismo 4: software TP guardian ---
@@ -221,8 +245,32 @@ class OrderTracker:
                         trade_id=trade.id, decision_id=None, close_reason="tp_triggered",
                     )
                 except Exception as e:
-                    logger.error("order_tracker.tp_guardian_failed",
-                                 trade_id=str(trade.id), error=str(e))
+                    error_str = str(e)
+                    if "-1013" in error_str and "NOTIONAL" in error_str:
+                        logger.warning(
+                            "order_tracker.tp_guardian_notional_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        try:
+                            price = current_price or await self._fetch_current_price()
+                            if price:
+                                await self.executor.force_close_trade(
+                                    trade_id=trade.id,
+                                    market_price=price,
+                                    close_reason="force_closed_notional",
+                                )
+                            else:
+                                logger.error(
+                                    "order_tracker.tp_guardian_notional_price_unavailable",
+                                    trade_id=str(trade.id),
+                                )
+                        except Exception as fe:
+                            logger.error("order_tracker.tp_guardian_force_close_failed",
+                                         trade_id=str(trade.id), error=str(fe))
+                    else:
+                        logger.error("order_tracker.tp_guardian_failed",
+                                     trade_id=str(trade.id), error=error_str)
 
     async def _fetch_current_price(self) -> float | None:
         """Obtiene el precio actual del mercado para el guardian de SL."""

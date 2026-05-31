@@ -715,7 +715,74 @@ async def test_manual_close_without_bracket_orders_closes_directly(session):
 
 
 # ---------------------------------------------------------------------------
-# Tests — Force close por NOTIONAL insuficiente
+# Tests — Force close por NOTIONAL en SL/TP guardian
+# ---------------------------------------------------------------------------
+
+async def test_sl_guardian_force_close_on_notional_error(session):
+    """Regresión 96521bc4: SL guardian debe usar force_close cuando Binance rechaza por NOTIONAL."""
+    # GIVEN trade sub-notional (0.00006 BTC × ~73674 = $4.42 < $5 mínimo Binance)
+    trade = _make_open_trade(session, qty=0.00006, entry=73674.40, stop_loss=73502.0)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 73450.0})  # < SL 73502
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00006, "USDT": 100.0},
+        "total": {"BTC": 0.00006},
+    })
+    exchange.create_market_order = AsyncMock(
+        side_effect=Exception('binance {"code":-1013,"msg":"Filter failure: NOTIONAL"}')
+    )
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra con force_closed_notional
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "force_closed_notional"
+    assert trade.exit_price is None
+    assert trade.pnl_usdt is None
+
+
+async def test_tp_guardian_force_close_on_notional_error(session):
+    """TP guardian debe usar force_close cuando Binance rechaza por NOTIONAL."""
+    # GIVEN trade sub-notional sin order_id_tp (TP guardian activo) y precio >= TP
+    trade = _make_open_trade(session, qty=0.00006, entry=73674.40, stop_loss=73502.0,
+                             take_profit=74514.0)
+    await session.commit()
+    await session.refresh(trade)
+
+    exchange = _make_exchange_no_fills()
+    exchange.fetch_ticker = AsyncMock(return_value={"last": 74600.0})  # > TP 74514
+    exchange.fetch_balance = AsyncMock(return_value={
+        "free": {"BTC": 0.00006, "USDT": 100.0},
+        "total": {"BTC": 0.00006},
+    })
+    exchange.create_market_order = AsyncMock(
+        side_effect=Exception('binance {"code":-1013,"msg":"Filter failure: NOTIONAL"}')
+    )
+
+    executor = Executor(exchange, session, symbol="BTC/USDT")
+    tracker = OrderTracker(exchange, session, executor, symbol="BTC/USDT")
+
+    # WHEN polleamos
+    await tracker.poll_once()
+
+    # THEN el trade se cierra con force_closed_notional
+    await session.refresh(trade)
+    assert trade.status == "closed"
+    assert trade.close_reason == "force_closed_notional"
+    assert trade.exit_price is None
+    assert trade.pnl_usdt is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — Force close por NOTIONAL insuficiente (manual close)
 # ---------------------------------------------------------------------------
 
 async def test_force_close_triggered_on_notional_error_during_manual_close(session):
