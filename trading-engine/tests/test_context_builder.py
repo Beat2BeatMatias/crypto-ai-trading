@@ -326,6 +326,50 @@ async def test_roundtrip_fee_pct_equals_taker_times_two(session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_context_builder_roundtrip_fee_uses_floor_in_testnet(session: AsyncSession):
+    # GIVEN testnet taker_fee_pct=0 (Binance Spot Testnet devuelve fee=0)
+    # and the default min_roundtrip_fee_pct floor of 0.20%
+    # Esta combinación reproduce el bug: el LLM ve fee=0 pero el Risk Gate
+    # aplica el floor 0.20 → rechazos silenciosos de R10 que el LLM no puede anticipar.
+
+    # WHEN building the context con taker_fee=0 (testnet) y sin override del floor
+    ctx = await _build(session, taker_fee_pct=0.0)
+
+    # THEN roundtrip_fee_pct en el contexto debe ser el floor (0.20%), no 0
+    assert ctx["roundtrip_fee_pct"] == pytest.approx(0.20), (
+        "Con taker_fee=0 (testnet), el contexto debe mostrar el floor 0.20% "
+        "para que el LLM vea el mismo fee que aplica el Risk Gate."
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_builder_roundtrip_fee_floor_overridable_via_calibration(session: AsyncSession):
+    # GIVEN testnet taker_fee_pct=0 y un floor customizado de 0.30% en calibration
+
+    # WHEN building the context con calibration override
+    ctx = await _build(
+        session,
+        taker_fee_pct=0.0,
+        calibration={"min_roundtrip_fee_pct": 0.30},
+    )
+
+    # THEN roundtrip_fee_pct usa el floor de calibration, no el default
+    assert ctx["roundtrip_fee_pct"] == pytest.approx(0.30)
+
+
+@pytest.mark.asyncio
+async def test_context_builder_roundtrip_fee_real_fee_beats_floor(session: AsyncSession):
+    # GIVEN taker_fee_pct=0.002 (0.4% round-trip) con floor por defecto 0.20%
+    # El fee real (0.4%) supera el floor (0.20%) → debe usar el real
+
+    # WHEN building the context
+    ctx = await _build(session, taker_fee_pct=0.002)
+
+    # THEN roundtrip_fee_pct es el fee real (0.4%), no el floor (0.20%)
+    assert ctx["roundtrip_fee_pct"] == pytest.approx(0.40)
+
+
+@pytest.mark.asyncio
 async def test_atr_timeframe_key_in_context(session: AsyncSession):
     # GIVEN atr_timeframe="5m"
     ctx = await _build(session, atr_timeframe="5m")

@@ -150,7 +150,7 @@ CONFIGURACIÓN ACTUAL:
 OPCIONES VÁLIDAS (con criterio LLM-Centric):
 
 ENFORCEMENT — Risk Gate los aplica con dureza:
-- sl_atr_multiplier: 0.1 a 0.8 (cuanto menor, SL más cerca; debe ser < sl_atr_max_multiplier).
+- sl_atr_multiplier: 0.1 a 2.0 (cuanto menor, SL más cerca; debe ser < sl_atr_max_multiplier).
   Criterio: bajar si los SL llegan tarde y dejan grandes pérdidas; subir si te sacan con ruido.
 - sl_atr_max_multiplier: 0.5 a 20.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
 - min_rr_ratio: 1.0 a 3.0 — subir si avg_loss > avg_win con persistencia.

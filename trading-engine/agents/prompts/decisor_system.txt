@@ -56,8 +56,9 @@ R6.  action=SELL → requiere posición LONG abierta
 R7.  NUNCA shortear (mercado SPOT — SELL solo cierra LONGs)
 R8.  Si open_positions ≥ {max_simultaneous_trades}: solo HOLD o SELL
 R9.  Si daily_pnl_pct ≤ {daily_stop_pct}%: solo HOLD
-R10. action=BUY → (TP − precio)/precio × 100 ≥ {min_fees_to_tp_ratio} × {roundtrip_fee_pct:.4f}%
-     [Si roundtrip_fee_pct == 0 → R10 no aplica (testnet)]
+R10. action=BUY → (TP − precio)/precio × 100 ≥ {min_fees_to_tp_ratio} × {roundtrip_fee_pct:.4f}% + {slippage_cushion_pct:.4f}%
+     [donde slippage_cushion_pct = 2 × max_slippage_pct × 100]
+     [Si roundtrip_fee_pct == 0 estás en testnet — verificá config min_roundtrip_fee_pct]
 
 ═══════════════════════════════════════════════════════════════════
 CATÁLOGO CERRADO DE CONFLUENCIAS (códigos EXACTOS A–H)

@@ -313,8 +313,9 @@ def test_decisor_output_accepts_new_v2_fields():
 
 
 def test_r10_buy_rejected_when_tp_move_insufficient_vs_fees():
-    # GIVEN roundtrip_fee_pct=0.2%, min_fees_to_tp_ratio=3.0
-    # take_profit=67400: move=(67400-67000)/67000*100=0.597% < 3.0*0.2=0.6% → R10 rejects
+    # GIVEN roundtrip_fee_pct=0.2%, min_fees_to_tp_ratio=3.0, max_slippage_pct=0.005
+    # min_move = 3.0×0.2 + slippage_cushion (2×0.005×100=1.0) = 0.6 + 1.0 = 1.6%
+    # take_profit=67400: move=(67400-67000)/67000*100=0.597% < 1.6% → R10 rejects
     # sl_distance=200, atr_ref=300: 0.3*300=90 < 200 ✓, 1.5*300=450 > 200 ✓
     # reward=400, risk=200, R:R=2.0 > 1.3 ✓ → passes R5, fails R10
     gate = _make_gate()

@@ -136,7 +136,8 @@ class ContextBuilder:
         pct_24h = self._pct_change(ohlcv_1h_rows, offset=24, current_price=price)
         pct_7d  = self._pct_change(ohlcv_1h_rows, offset=168, current_price=price)
         sl_atr_max = cal.get("sl_atr_max_multiplier", 1.5)
-        roundtrip_fee_pct = taker_fee_pct * 2
+        _min_roundtrip_fee_pct = float(cal.get("min_roundtrip_fee_pct", 0.20))
+        roundtrip_fee_pct = max(taker_fee_pct * 2 * 100, _min_roundtrip_fee_pct) / 100
 
         atr_ref_val = float(
             self._get(ind, atr_timeframe, "atr")
@@ -394,6 +395,9 @@ class ContextBuilder:
             "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
             "binance_min_notional_usdt": _binance_min_notional,
             "min_position_size_pct_notional": min_position_size_pct_notional,
+            # slippage_cushion_pct: expuesto para que R10 en el prompt del Decisor
+            # incluya el mismo término que aplica el Risk Gate (2×max_slippage_pct×100).
+            "slippage_cushion_pct": float(cal.get("max_slippage_pct", 0.003)) * 2 * 100,
 
             # ---- Block J: Playbook ----
             "playbook": playbook_content,
