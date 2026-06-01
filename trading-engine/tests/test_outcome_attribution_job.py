@@ -83,6 +83,15 @@ _ohlcv_table = Table(
     Column("volume", Numeric(24, 8)),
 )
 
+_config_table = Table(
+    "config", _sqlite_metadata,
+    Column("key", String(60), primary_key=True),
+    Column("value", String(500), nullable=False),
+    Column("value_type", String(20), nullable=False),
+    Column("description", String(500)),
+    Column("updated_at", DateTime),
+)
+
 _decision_outcomes_table = Table(
     "decision_outcomes", _sqlite_metadata,
     Column("decision_id", String(36), ForeignKey("decisions.id"), primary_key=True),
