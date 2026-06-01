@@ -61,6 +61,10 @@ _INVARIANTS: list[tuple[str, str, str]] = [
     ("conf_threshold_range",       "conf_threshold_high_vol", "conf_threshold_range <= conf_threshold_high_vol"),
 ]
 
+_REVERT_WR_DELTA     = 10.0   # pp: si WR bajó > 10 puntos → revertir
+_REVERT_PF_DELTA     = 0.30   # absoluto: si PF bajó > 0.30 → revertir
+_REVERT_WINDOW_HOURS = 48     # horas para buscar baseline previo
+
 # Defaults used when current_config does not provide the ratification keys.
 # Mirror shared/config_store.py DEFAULTS for MAX_PLAYBOOK_AGE_DAYS / PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT.
 _RATIFY_DEFAULTS: dict[str, float] = {
@@ -249,6 +253,11 @@ class Supervisor:
             op_ctx = await self._compute_operational_context(since)
             metrics["kill_switch_in_period"] = op_ctx.get("kill_switch_in_period", False)
 
+            # ----- Closed-loop revert: check if prior config changes degraded metrics -----
+            reverted = await self._maybe_revert_degraded_config(metrics)
+            if reverted:
+                logger.info("supervisor.reverted_degraded_config_keys", keys=reverted)
+
             active_playbook = await self.prompt_manager.get_active_playbook()
 
             # ----- Phase 1: ratification verdict -----
@@ -305,6 +314,13 @@ class Supervisor:
                     output["config_suggestions"] = suggestions
                     output["config_applied"] = applied
                     output["config_rejected"] = rejected
+                    if applied:
+                        output["config_applied_baseline"] = {
+                            "win_rate": float(metrics.get("win_rate", 0.0)),
+                            "profit_factor": float(metrics.get("profit_factor", 0.0)),
+                            "applied_keys": [s["key"] for s in applied],
+                            "ts": datetime.now(tz=timezone.utc).isoformat(),
+                        }
                     logger.info("supervisor.suggestions_processed",
                                 total=len(suggestions.get("suggestions", [])),
                                 applied=len(applied), rejected=len(rejected))
@@ -635,6 +651,76 @@ class Supervisor:
             pnl_summary={"pnl_usdt": metrics["total_pnl"], "avg_win": metrics["avg_win"]},
         )
         return ctx, resp
+
+    async def _maybe_revert_degraded_config(self, current_metrics: dict) -> list[str]:
+        """Busca el último baseline del Supervisor y revierte las claves si las
+        métricas actuales degradaron significativamente.
+        Retorna lista de claves revertidas (vacía si no hay degradación).
+        """
+        from sqlalchemy import desc
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=_REVERT_WINDOW_HOURS)
+
+        rows = (await self.session.execute(
+            select(Decision)
+            .where(Decision.agent == "supervisor", Decision.ts >= cutoff)
+            .order_by(desc(Decision.ts))
+            .limit(10)
+        )).scalars().all()
+
+        prev = next(
+            (r for r in rows if r.output and "config_applied_baseline" in r.output),
+            None,
+        )
+        if prev is None:
+            return []
+
+        baseline     = prev.output["config_applied_baseline"]
+        baseline_wr  = baseline.get("win_rate")
+        baseline_pf  = baseline.get("profit_factor")
+        applied_keys = baseline.get("applied_keys", [])
+
+        if baseline_wr is None or baseline_pf is None or not applied_keys:
+            return []
+
+        current_wr = float(current_metrics.get("win_rate", 0.0))
+        current_pf = float(current_metrics.get("profit_factor", 0.0))
+        wr_degraded = current_wr < float(baseline_wr) - _REVERT_WR_DELTA
+        pf_degraded = current_pf < float(baseline_pf) - _REVERT_PF_DELTA
+
+        if not (wr_degraded or pf_degraded):
+            return []
+
+        logger.warning(
+            "supervisor.config_degradation_detected",
+            baseline_wr=baseline_wr, current_wr=current_wr,
+            baseline_pf=baseline_pf, current_pf=current_pf,
+            applied_keys=applied_keys,
+        )
+
+        store = ConfigStore(self.session)
+        reverted: list[str] = []
+        for key in applied_keys:
+            try:
+                history_entry = (await self.session.execute(
+                    select(ConfigHistory)
+                    .where(
+                        ConfigHistory.key == key,
+                        ConfigHistory.changed_by == "supervisor",
+                        ConfigHistory.ts >= cutoff,
+                    )
+                    .order_by(ConfigHistory.ts)
+                    .limit(1)
+                )).scalar_one_or_none()
+                if history_entry and history_entry.old_value:
+                    await store.set(ConfigKey(key), history_entry.old_value,
+                                    changed_by="supervisor:revert")
+                    reverted.append(key)
+                    logger.warning("supervisor.config_reverted", key=key,
+                                   reverted_to=history_entry.old_value)
+            except Exception as e:
+                logger.error("supervisor.config_revert_failed", key=key, error=str(e))
+
+        return reverted
 
     async def _apply_config_suggestions(
         self, suggestions: dict, current_config: dict

@@ -858,3 +858,129 @@ def test_safe_bounds_allow_sl_atr_multiplier_up_to_2():
 def test_safe_bounds_min_rr_allows_2():
     lo, hi = _SAFE_BOUNDS["min_rr_ratio"]
     assert lo <= 2.0 <= hi
+
+
+# ---------------------------------------------------------------------------
+# P2-T2: Closed-loop — baseline de métricas + auto-revert
+# ---------------------------------------------------------------------------
+
+async def test_supervisor_stores_baseline_when_config_applied(session):
+    """Cuando el supervisor aplica una sugerencia de config, Decision.output
+    debe tener 'config_applied_baseline' con win_rate, profit_factor y applied_keys."""
+    # GIVEN: ConfigEntry seeded con un valor que el supervisor puede cambiar
+    await session.execute(delete(ConfigEntry).where(ConfigEntry.key == "min_rr_ratio"))
+    await session.execute(delete(ConfigEntry).where(ConfigEntry.key == "default_rr_ratio"))
+    session.add(ConfigEntry(key="min_rr_ratio", value="1.5", value_type="float",
+                            description="test", updated_at=datetime.now(tz=timezone.utc)))
+    session.add(ConfigEntry(key="default_rr_ratio", value="2.5", value_type="float",
+                            description="test", updated_at=datetime.now(tz=timezone.utc)))
+    await session.commit()
+
+    # LLM responde: regenerar + sugerencia de config válida
+    config_suggestion = json.dumps({
+        "suggestions": [
+            {"key": "min_rr_ratio", "current": 1.5, "suggested": 2.0, "reason": "mejorar RR"},
+        ],
+        "summary": "subir R:R",
+    })
+    llm = _llm_with_sequence(
+        '{"ratify": false, "reason": "métricas bajas"}',
+        (
+            "# Playbook v2\n\n"
+            "## Métricas del período\n- test\n\n"
+            "## Setups que funcionaron\n- A\n\n"
+            "## Patrones a evitar\n- B\n\n"
+            "## Contexto de mercado actual\n- RANGE\n\n"
+            "## Régimen esperado próximas 24h\nNEUTRAL\n\n"
+            "## Reglas específicas\n1. test\n\n"
+            "## Cambios vs playbook anterior\n- test\n"
+        ),
+        config_suggestion,
+    )
+
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=0)
+    current_cfg = {"min_rr_ratio": 1.5, "default_rr_ratio": 2.5}
+    await sup.run(current_config=current_cfg)
+
+    # THEN: la Decision del supervisor tiene el baseline
+    decisions = (await session.execute(
+        select(Decision).where(Decision.agent == "supervisor")
+    )).scalars().all()
+    assert len(decisions) >= 1
+    sup_dec = decisions[-1]
+    baseline = sup_dec.output.get("config_applied_baseline")
+    assert baseline is not None, f"Falta config_applied_baseline en: {sup_dec.output}"
+    assert "win_rate" in baseline
+    assert "profit_factor" in baseline
+    assert "min_rr_ratio" in baseline.get("applied_keys", [])
+
+
+async def test_supervisor_reverts_config_when_metrics_degraded(session):
+    """Si la Decision previa tiene un baseline con WR=60% y el WR actual es 0%
+    (bajó > 10pp), el supervisor revierte la clave aplicada."""
+    import uuid as _uuid
+
+    # GIVEN: ConfigEntry con valor actual (post-cambio del supervisor anterior)
+    await session.execute(delete(ConfigEntry).where(ConfigEntry.key == "min_rr_ratio"))
+    await session.execute(delete(ConfigEntry).where(ConfigEntry.key == "default_rr_ratio"))
+    session.add(ConfigEntry(key="min_rr_ratio", value="2.0", value_type="float",
+                            description="test", updated_at=datetime.now(tz=timezone.utc)))
+    session.add(ConfigEntry(key="default_rr_ratio", value="2.5", value_type="float",
+                            description="test", updated_at=datetime.now(tz=timezone.utc)))
+    await session.commit()
+
+    # Simular Decision previa con baseline (win_rate=60%)
+    prev_ts = datetime.now(tz=timezone.utc) - timedelta(hours=20)
+    session.add(Decision(
+        ts=prev_ts,
+        agent="supervisor",
+        model="test",
+        tokens_in=10, tokens_out=10, latency_ms=100,
+        input={},
+        output={
+            "ratified": False,
+            "config_applied_baseline": {
+                "win_rate": 60.0,
+                "profit_factor": 1.8,
+                "applied_keys": ["min_rr_ratio"],
+                "ts": prev_ts.isoformat(),
+            },
+        },
+        executed=False,
+    ))
+    # Simular entrada en config_history para poder revertir
+    session.add(ConfigHistory(
+        id=_uuid.uuid4(),
+        ts=prev_ts,
+        key="min_rr_ratio",
+        old_value="1.5",
+        new_value="2.0",
+        changed_by="supervisor",
+    ))
+    await session.commit()
+
+    # Borrar los trades existentes para que WR actual sea 0% (< 60% - 10pp = 50%)
+    await session.execute(delete(Trade))
+    await session.commit()
+
+    # LLM responde: ratificar (pero el revert ocurre antes, al inicio de run())
+    llm = _llm_with_sequence(
+        '{"ratify": true, "reason": "ok"}',
+        json.dumps({"suggestions": [], "summary": ""}),
+    )
+
+    sup = Supervisor(session=session, llm=llm, symbol="BTC/USDT", min_trades=0)
+    current_cfg = {"min_rr_ratio": 2.0, "default_rr_ratio": 2.5}
+    # win_rate actual = 0% (no hay trades) → bajó 60pp > threshold 10pp → revert
+    await sup.run(current_config=current_cfg)
+
+    # THEN: min_rr_ratio fue revertido a "1.5"
+    revert_entries = (await session.execute(
+        select(ConfigHistory)
+        .where(
+            ConfigHistory.key == "min_rr_ratio",
+            ConfigHistory.changed_by == "supervisor:revert",
+        )
+    )).scalars().all()
+    assert len(revert_entries) >= 1, "No se encontró entrada de revert en config_history"
+    assert revert_entries[-1].new_value == "1.5"
