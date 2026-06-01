@@ -126,6 +126,12 @@ async def outcome_attribution_tick(
             ts_to=now,
         )
         ohlcv_by_minute = _index_ohlcv_by_minute(ohlcv)
+        from shared.config_store import ConfigStore, ConfigKey
+        store = ConfigStore(session)
+        try:
+            net_fee_threshold = float(await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT))
+        except KeyError:
+            net_fee_threshold = 0.0
         processed = 0
         for d in candidates:
             window = _slice_window(
@@ -136,6 +142,7 @@ async def outcome_attribution_tick(
                 decision=d, ohlcv_1m=window, associated_trade=trade,
                 horizon_min=horizon_min, now=now,
                 coverage_threshold_pct=coverage_threshold_pct,
+                net_fee_threshold_pct=net_fee_threshold,
             )
             await _upsert_outcome(session, attr, dialect_name=_get_dialect_name(session))
             processed += 1

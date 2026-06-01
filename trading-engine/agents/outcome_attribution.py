@@ -46,6 +46,7 @@ def attribute(
     horizon_min: int,
     now: datetime,
     coverage_threshold_pct: float = _OHLCV_MISSING_THRESHOLD_PCT,
+    net_fee_threshold_pct: float = 0.0,
 ) -> DecisionAttribution:
     """Classify a decisor decision against the OHLCV evolution after `decision.ts`.
 
@@ -76,6 +77,7 @@ def attribute(
         sl_dist_pct=sl_dist_pct, tp_target_pct=tp_target_pct,
         matured=matured, associated_trade=associated_trade,
         candles=ohlcv_1m, horizon_min=horizon_min, ts0=decision.ts,
+        net_fee_threshold_pct=net_fee_threshold_pct,
     )
 
     return DecisionAttribution(
@@ -156,6 +158,7 @@ def _classify(
     candles: list[Any],
     horizon_min: int,
     ts0: datetime,
+    net_fee_threshold_pct: float = 0.0,
 ) -> Classification:
     action = (decision.output or {}).get("action")
     if mfe is None or mae is None:
@@ -172,7 +175,7 @@ def _classify(
             pnl = float(associated_trade.pnl_pct)
         except (TypeError, ValueError):
             return "UNKNOWN"
-        return "GOOD_BUY" if pnl > 0 else "BAD_BUY"
+        return "GOOD_BUY" if pnl > net_fee_threshold_pct else "BAD_BUY"
     if action == "SELL" and decision.executed:
         if associated_trade is None or getattr(associated_trade, "pnl_pct", None) is None:
             return "UNKNOWN"

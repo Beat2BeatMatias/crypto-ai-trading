@@ -7,6 +7,7 @@ import pytest
 
 from agents.outcome_attribution import (
     DecisionAttribution,
+    _classify,
     _compute_mfe_mae,
     attribute,
 )
@@ -566,3 +567,56 @@ def _make_decision(*, input: dict, output: dict, ts=None, executed=False):
         executed=executed,
         trade_id=None,
     )
+
+
+# ─────────────── P2-T1: threshold de fees en GOOD/BAD_BUY ───────────────
+
+def _buy_decision_exec(ts, price: float = 100.0):
+    from uuid import uuid4
+    return SimpleNamespace(
+        id=uuid4(), ts=ts,
+        output={"action": "BUY", "stop_loss": price * 0.99, "take_profit": price * 1.02},
+        executed=True, rejected_reason=None, trade_id=uuid4(),
+    )
+
+def _trade_pnl(pnl_pct: float):
+    return SimpleNamespace(pnl_pct=Decimal(str(pnl_pct)))
+
+
+def test_classify_buy_when_pnl_above_fee_threshold_should_be_good():
+    t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    candles = _dense_candles(t0, horizon_min=10, peaks=[])
+    result = _classify(
+        decision=_buy_decision_exec(t0), mfe=2.0, mae=-0.5,
+        t_mfe=5, t_mae=8, sl_dist_pct=1.0, tp_target_pct=2.0,
+        matured=True, associated_trade=_trade_pnl(0.30),
+        candles=candles, horizon_min=10, ts0=t0,
+        net_fee_threshold_pct=0.20,
+    )
+    assert result == "GOOD_BUY"
+
+
+def test_classify_buy_when_pnl_positive_but_below_fee_threshold_should_be_bad():
+    t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    candles = _dense_candles(t0, horizon_min=10, peaks=[])
+    result = _classify(
+        decision=_buy_decision_exec(t0), mfe=2.0, mae=-0.5,
+        t_mfe=5, t_mae=8, sl_dist_pct=1.0, tp_target_pct=2.0,
+        matured=True, associated_trade=_trade_pnl(0.10),
+        candles=candles, horizon_min=10, ts0=t0,
+        net_fee_threshold_pct=0.20,
+    )
+    assert result == "BAD_BUY"
+
+
+def test_classify_buy_default_threshold_zero_preserves_backward_compat():
+    t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    candles = _dense_candles(t0, horizon_min=10, peaks=[])
+    result = _classify(
+        decision=_buy_decision_exec(t0), mfe=2.0, mae=-0.5,
+        t_mfe=5, t_mae=8, sl_dist_pct=1.0, tp_target_pct=2.0,
+        matured=True, associated_trade=_trade_pnl(0.05),
+        candles=candles, horizon_min=10, ts0=t0,
+        # sin net_fee_threshold_pct → default 0.0
+    )
+    assert result == "GOOD_BUY"
