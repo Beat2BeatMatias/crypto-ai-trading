@@ -82,13 +82,41 @@ def _safe_float(value) -> float | None:
 
 
 def _parse_json_strict(text: str) -> dict:
-    """Parse JSON tolerating optional ```json fences emitted by some LLM providers."""
-    raw = text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    """Extrae el primer objeto JSON balanceado tolerando prosa, fences y tags <think>."""
+    import re as _re
+    text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.DOTALL)
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        parts = stripped.split("```")
+        if len(parts) >= 3:
+            block = parts[1]
+            block = _re.sub(r"^[a-zA-Z]+\s*\n?", "", block)
+            stripped = block.strip()
+    start = stripped.find("{")
+    if start == -1:
+        return json.loads(stripped)
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(stripped[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(stripped[start : i + 1])
+    return json.loads(stripped)
 
 _CONFIG_SUGGESTION_PROMPT = """Eres un analista cuantitativo de risk management. Basándote en las métricas
 de trading del período, sugiere los valores óptimos para los parámetros de configuración del sistema.

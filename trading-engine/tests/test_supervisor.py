@@ -984,3 +984,22 @@ async def test_supervisor_reverts_config_when_metrics_degraded(session):
     )).scalars().all()
     assert len(revert_entries) >= 1, "No se encontró entrada de revert en config_history"
     assert revert_entries[-1].new_value == "1.5"
+
+
+# ─────────────── P2-T3: parser JSON robusto ───────────────
+from agents.supervisor import _parse_json_strict
+
+
+def test_parse_json_strict_when_prose_before_json_should_parse():
+    result = _parse_json_strict('Análisis: \n\n{"ratify": true, "reason": "ok"}')
+    assert result["ratify"] is True
+
+
+def test_parse_json_strict_when_uppercase_JSON_fence_should_parse():
+    result = _parse_json_strict('```JSON\n{"suggestions": [], "summary": "nada"}\n```')
+    assert result["suggestions"] == []
+
+
+def test_parse_json_strict_when_think_tags_should_parse():
+    result = _parse_json_strict('<think>Pensando...</think>\n{"ratify": false, "reason": "mal"}')
+    assert result["ratify"] is False
