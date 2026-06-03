@@ -90,7 +90,7 @@ def test_apply_server_confidence_overrides_llm_base_and_recomputes_confidence():
 def test_hold_trending_down_futures_uses_short_regime_factor():
     decision = _hold_output(
         regime="TRENDING_DOWN",
-        confluences=["B", "C"],
+        confluences=["I", "J"],
     )
     updated, meta = apply_server_confidence(
         decision, calibration={}, trading_product="futures",
@@ -99,6 +99,21 @@ def test_hold_trending_down_futures_uses_short_regime_factor():
     assert meta.get("hold_signal_direction") == "SHORT"
     assert updated.confidence_base == pytest.approx(0.70 * 0.85 * 1.0)
     assert updated.confidence > 0.0
+
+
+def test_hold_trending_down_futures_b_and_j_counts_only_short():
+    decision = _hold_output(
+        regime="TRENDING_DOWN",
+        confluences=["B", "J"],
+    )
+    updated, meta = apply_server_confidence(
+        decision, calibration={}, trading_product="futures",
+    )
+    assert meta["confluence_count"] == 1
+    assert meta["confluences_counted"] == ["J"]
+    assert meta["confluences_excluded_direction"] == ["B"]
+    assert updated.confidence_base == pytest.approx(0.55 * 0.85 * 1.0)
+    assert meta["confidence_base_inflated"] == pytest.approx(0.70 * 0.85 * 1.0)
 
 
 def test_hold_trending_down_spot_uses_neutral_regime_factor():

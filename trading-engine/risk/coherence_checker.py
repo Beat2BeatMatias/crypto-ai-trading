@@ -3,6 +3,7 @@ CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Deci
 
 Reglas C1–C9 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
 En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7 se convierten en rechazos duros.
+C9 (mezcla alcista+bajista): en strict_mode filtra confluencias desalineadas y recalcula confianza.
 
 C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
 el R:R porque el código lo recalcula con el precio real del contexto.
@@ -19,10 +20,35 @@ from typing import Any
 import structlog
 
 from agents.confluence_registry import STATIC_CONFLUENCE_CODES, evaluate_verify_spec
-from shared.confluence_direction import registry_direction_allows_action
+from shared.confluence_direction import (
+    classify_confluences_by_direction,
+    filter_confluences_for_direction,
+    implied_signal_direction,
+    registry_direction_allows_action,
+)
 from shared.schemas import DecisorOutput, DecisorAction, Direction, direction_for_action
 
 logger = structlog.get_logger()
+
+
+def _confluence_verify_tfs(ctx: dict[str, Any]) -> tuple[str, str]:
+    primary = str(ctx.get("confluence_primary_tf") or "15m")
+    secondary = str(ctx.get("confluence_secondary_tf") or "1h")
+    if primary == secondary:
+        structural = str(ctx.get("confluence_structural_tf") or "1h")
+        if structural != primary:
+            secondary = structural
+    return primary, secondary
+
+
+def _ctx_tf_float(ctx: dict[str, Any], key_prefix: str, tf: str) -> float:
+    val = ctx.get(f"{key_prefix}_{tf}")
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @dataclass
@@ -73,6 +99,7 @@ class CoherenceChecker:
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
         warnings.extend(self._c7_rr_ratio_verification(decision, ctx))
         warnings.extend(self._c8_extended_confluence_verify(decision, ctx))
+        warnings.extend(self._c9_opposing_confluence_mix(decision, ctx))
         warnings.extend(self._c9_promoted_direction_vs_action(decision, ctx))
 
         if warnings:
@@ -98,14 +125,15 @@ class CoherenceChecker:
     def _c1_rsi_oversold_bounce(self, decision: DecisorOutput,
                                 ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
-        C1: El LLM declara confluencia "A" (RSI_OVERSOLD_BOUNCE) pero ninguno de
-        los RSI relevantes (15m y 1h) está por debajo de 35.
+        C1: Confluencia A declarada pero RSI no en sobreventa en TFs de verificación
+        (primary/secondary alineados a atr_timeframe + perfil).
         """
         if "A" not in decision.confluences:
             return []
-        rsi_15m = ctx.get("rsi_15m") or 0
-        rsi_1h = ctx.get("rsi_1h") or 0
-        if rsi_15m < 35 or rsi_1h < 35:
+        primary, secondary = _confluence_verify_tfs(ctx)
+        rsi_primary = _ctx_tf_float(ctx, "rsi", primary)
+        rsi_secondary = _ctx_tf_float(ctx, "rsi", secondary)
+        if rsi_primary < 35 or rsi_secondary < 35:
             return []
 
         severity = "critical" if self.strict_mode else "warning"
@@ -114,28 +142,31 @@ class CoherenceChecker:
             severity=severity,
             message=(
                 f"Confluencia 'A' (RSI_OVERSOLD_BOUNCE) declarada pero "
-                f"RSI(15m)={rsi_15m:.1f} y RSI(1h)={rsi_1h:.1f} — "
+                f"RSI({primary})={rsi_primary:.1f} y RSI({secondary})={rsi_secondary:.1f} — "
                 f"ninguno está en zona de sobreventa (<35)."
             ),
-            evidence={"rsi_15m": rsi_15m, "rsi_1h": rsi_1h},
+            evidence={
+                "rsi_primary": rsi_primary,
+                "rsi_secondary": rsi_secondary,
+                "confluence_primary_tf": primary,
+                "confluence_secondary_tf": secondary,
+            },
         )]
 
     def _c2_macd_bullish_cross(self, decision: DecisorOutput,
                                ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
-        C2: El LLM declara confluencia "B" (MACD_BULLISH_CROSS) pero MACD ≤ Signal
-        tanto en 15m como en 1h.
+        C2: Confluencia B declarada pero MACD ≤ Signal en TFs de verificación.
         """
         if "B" not in decision.confluences:
             return []
-        macd_15m = ctx.get("macd_15m") or 0
-        sig_15m = ctx.get("sig_15m") or 0
-        macd_1h = ctx.get("macd_1h") or 0
-        sig_1h = ctx.get("sig_1h") or 0
+        primary, secondary = _confluence_verify_tfs(ctx)
+        macd_p = _ctx_tf_float(ctx, "macd", primary)
+        sig_p = _ctx_tf_float(ctx, "sig", primary)
+        macd_s = _ctx_tf_float(ctx, "macd", secondary)
+        sig_s = _ctx_tf_float(ctx, "sig", secondary)
 
-        cross_15m = macd_15m > sig_15m
-        cross_1h = macd_1h > sig_1h
-        if cross_15m or cross_1h:
+        if macd_p > sig_p or macd_s > sig_s:
             return []
 
         severity = "critical" if self.strict_mode else "warning"
@@ -144,12 +175,14 @@ class CoherenceChecker:
             severity=severity,
             message=(
                 f"Confluencia 'B' (MACD_BULLISH_CROSS) declarada pero "
-                f"MACD(15m)={macd_15m:.2f}<={sig_15m:.2f} y "
-                f"MACD(1h)={macd_1h:.2f}<={sig_1h:.2f}."
+                f"MACD({primary})={macd_p:.2f}<={sig_p:.2f} y "
+                f"MACD({secondary})={macd_s:.2f}<={sig_s:.2f}."
             ),
             evidence={
-                "macd_15m": macd_15m, "sig_15m": sig_15m,
-                "macd_1h": macd_1h, "sig_1h": sig_1h,
+                "macd_primary": macd_p, "sig_primary": sig_p,
+                "macd_secondary": macd_s, "sig_secondary": sig_s,
+                "confluence_primary_tf": primary,
+                "confluence_secondary_tf": secondary,
             },
         )]
 
@@ -213,15 +246,15 @@ class CoherenceChecker:
     def _c1p_rsi_overbought_rejection(self, decision: DecisorOutput,
                                       ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
-        C1P (C1′): Confluencia I (RSI_OVERBOUGHT_REJECTION) declarada pero ningún RSI
-        relevante (15m y 1h) está en zona de sobrecompra (>65).
+        C1P: Confluencia I declarada pero RSI no en sobrecompra en TFs de verificación.
         """
         if "I" not in decision.confluences:
             return []
-        rsi_15m = ctx.get("rsi_15m") or 0
-        rsi_1h = ctx.get("rsi_1h") or 0
+        primary, secondary = _confluence_verify_tfs(ctx)
+        rsi_primary = _ctx_tf_float(ctx, "rsi", primary)
+        rsi_secondary = _ctx_tf_float(ctx, "rsi", secondary)
         overbought_threshold = float(ctx.get("rsi_overbought_threshold", 65))
-        if rsi_15m > overbought_threshold or rsi_1h > overbought_threshold:
+        if rsi_primary > overbought_threshold or rsi_secondary > overbought_threshold:
             return []
 
         severity = "critical" if self.strict_mode else "warning"
@@ -230,32 +263,32 @@ class CoherenceChecker:
             severity=severity,
             message=(
                 f"Confluencia 'I' (RSI_OVERBOUGHT_REJECTION) declarada pero "
-                f"RSI(15m)={rsi_15m:.1f} y RSI(1h)={rsi_1h:.1f} — "
+                f"RSI({primary})={rsi_primary:.1f} y RSI({secondary})={rsi_secondary:.1f} — "
                 f"ninguno está en zona de sobrecompra (>{overbought_threshold:.0f})."
             ),
             evidence={
-                "rsi_15m": rsi_15m,
-                "rsi_1h": rsi_1h,
+                "rsi_primary": rsi_primary,
+                "rsi_secondary": rsi_secondary,
                 "overbought_threshold": overbought_threshold,
+                "confluence_primary_tf": primary,
+                "confluence_secondary_tf": secondary,
             },
         )]
 
     def _c2p_macd_bearish_cross(self, decision: DecisorOutput,
                                 ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
-        C2P (C2′): Confluencia J (MACD_BEARISH_CROSS) declarada pero MACD ≥ Signal
-        tanto en 15m como en 1h.
+        C2P: Confluencia J declarada pero MACD ≥ Signal en TFs de verificación.
         """
         if "J" not in decision.confluences:
             return []
-        macd_15m = ctx.get("macd_15m") or 0
-        sig_15m = ctx.get("sig_15m") or 0
-        macd_1h = ctx.get("macd_1h") or 0
-        sig_1h = ctx.get("sig_1h") or 0
+        primary, secondary = _confluence_verify_tfs(ctx)
+        macd_p = _ctx_tf_float(ctx, "macd", primary)
+        sig_p = _ctx_tf_float(ctx, "sig", primary)
+        macd_s = _ctx_tf_float(ctx, "macd", secondary)
+        sig_s = _ctx_tf_float(ctx, "sig", secondary)
 
-        cross_15m = macd_15m < sig_15m
-        cross_1h = macd_1h < sig_1h
-        if cross_15m or cross_1h:
+        if macd_p < sig_p or macd_s < sig_s:
             return []
 
         severity = "critical" if self.strict_mode else "warning"
@@ -264,12 +297,14 @@ class CoherenceChecker:
             severity=severity,
             message=(
                 f"Confluencia 'J' (MACD_BEARISH_CROSS) declarada pero "
-                f"MACD(15m)={macd_15m:.2f}>={sig_15m:.2f} y "
-                f"MACD(1h)={macd_1h:.2f}>={sig_1h:.2f}."
+                f"MACD({primary})={macd_p:.2f}>={sig_p:.2f} y "
+                f"MACD({secondary})={macd_s:.2f}>={sig_s:.2f}."
             ),
             evidence={
-                "macd_15m": macd_15m, "sig_15m": sig_15m,
-                "macd_1h": macd_1h, "sig_1h": sig_1h,
+                "macd_primary": macd_p, "sig_primary": sig_p,
+                "macd_secondary": macd_s, "sig_secondary": sig_s,
+                "confluence_primary_tf": primary,
+                "confluence_secondary_tf": secondary,
             },
         )]
 
@@ -512,6 +547,45 @@ class CoherenceChecker:
             ))
         return warnings
 
+    def _c9_opposing_confluence_mix(
+        self,
+        decision: DecisorOutput,
+        ctx: dict[str, Any],
+    ) -> list[CoherenceWarning]:
+        """
+        C9: Mezcla de confluencias alcistas (A–H) y bajistas (I–J) en la misma decisión.
+        En strict_mode la severidad es critical para habilitar filtrado server-side.
+        """
+        registry = ctx.get("registry_direction_by_code") or {}
+        long_codes, short_codes, _ = classify_confluences_by_direction(
+            decision.confluences, registry,
+        )
+        if not long_codes or not short_codes:
+            return []
+
+        trading_product = str(ctx.get("trading_product") or "spot").lower()
+        preferred = implied_signal_direction(decision, trading_product=trading_product)
+        keep, drop = filter_confluences_for_direction(
+            decision.confluences, preferred, registry,
+        )
+        severity = "critical" if self.strict_mode else "warning"
+        return [CoherenceWarning(
+            rule_id="C9",
+            severity=severity,
+            message=(
+                f"Mezcla de confluencias alcistas ({long_codes}) y bajistas ({short_codes}). "
+                f"Declarar ambas infla la confianza sin señal operativa clara."
+            ),
+            evidence={
+                "kind": "opposing_mix",
+                "long_codes": long_codes,
+                "short_codes": short_codes,
+                "preferred_direction": preferred.value if preferred else None,
+                "confluences_to_keep": keep,
+                "confluences_to_drop": drop,
+            },
+        )]
+
     def _c9_promoted_direction_vs_action(
         self,
         decision: DecisorOutput,
@@ -541,6 +615,7 @@ class CoherenceChecker:
                     f"(trading_product={trading_product})."
                 ),
                 evidence={
+                    "kind": "registry_tag",
                     "code": code,
                     "direction": direction,
                     "action": decision.action,

@@ -6,6 +6,11 @@ import structlog
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.confidence import apply_server_confidence
+from shared.confluence_direction import (
+    detect_confidence_jump_opposing_mix,
+    resolve_opposing_confluences,
+    implied_signal_direction,
+)
 from shared.db.models import Decision
 from shared.position_sizing import apply_risk_based_sizing
 from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
@@ -31,6 +36,7 @@ def _apply_server_confidence(
     calibration: dict[str, Any],
     raw_confluences: list[str],
     trading_product: str = "spot",
+    registry_direction_by_code: dict[str, str] | None = None,
 ) -> tuple[DecisorOutput, dict[str, Any]]:
     dropped = [c for c in raw_confluences if c not in decision.confluences]
     return apply_server_confidence(
@@ -38,7 +44,48 @@ def _apply_server_confidence(
         calibration=calibration,
         confluences_dropped=dropped or None,
         trading_product=trading_product,
+        registry_direction_by_code=registry_direction_by_code,
     )
+
+
+def _apply_c9_strict_confluence_filter(
+    decision: DecisorOutput,
+    warnings: list[CoherenceWarning],
+    *,
+    calibration: dict[str, Any],
+    ctx: dict[str, Any],
+) -> tuple[DecisorOutput, dict[str, Any] | None, list[str]]:
+    """En strict_mode, descarta confluencias desalineadas ante mezcla C9."""
+    opposing = [
+        w for w in warnings
+        if w.rule_id == "C9"
+        and w.severity == "critical"
+        and w.evidence.get("kind") == "opposing_mix"
+    ]
+    if not opposing:
+        return decision, None, []
+
+    registry = ctx.get("registry_direction_by_code") or {}
+    trading_product = str(ctx.get("trading_product") or "spot").lower()
+    preferred = implied_signal_direction(decision, trading_product=trading_product)
+    kept, dropped = resolve_opposing_confluences(
+        decision.confluences,
+        direction=preferred,
+        registry_direction_by_code=registry,
+    )
+    if not dropped:
+        return decision, None, []
+
+    filtered = decision.model_copy(update={"confluences": kept})
+    updated, confidence_meta = _apply_server_confidence(
+        filtered,
+        calibration=calibration,
+        raw_confluences=list(decision.confluences),
+        trading_product=trading_product,
+        registry_direction_by_code=registry,
+    )
+    confidence_meta["c9_strict_filtered"] = dropped
+    return updated, confidence_meta, dropped
 
 
 def _filter_confluence_codes(
@@ -68,7 +115,7 @@ def _filter_confluence_codes(
 # encima de ese nivel. Si no existe → debe emitir HOLD. Si el LLM
 # vuelve a alucinarlo, C7 dispara de nuevo en la re-evaluación y
 # el has_critical() lo bloquea a HOLD antes de ejecutar.
-_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C1P", "C2P", "C3P", "C7"})
+_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C1P", "C2P", "C3P", "C7", "C9"})
 
 
 class Decisor:
@@ -187,6 +234,16 @@ class Decisor:
 
             coherence_warnings = self.coherence_checker.evaluate(validated, ctx)
 
+            validated, c9_meta, _ = _apply_c9_strict_confluence_filter(
+                validated,
+                coherence_warnings,
+                calibration=cal,
+                ctx=ctx,
+            )
+            if c9_meta is not None:
+                confidence_meta = {**(confidence_meta or {}), **c9_meta}
+                coherence_warnings = self.coherence_checker.evaluate(validated, ctx)
+
             # ── PASS 2: auto-revisión si hay inconsistencias factuales ─────
             trigger_warnings = [
                 w for w in coherence_warnings
@@ -292,6 +349,19 @@ class Decisor:
         output_dict["two_pass_triggered"] = two_pass_triggered
         if confidence_meta is not None:
             output_dict["confidence_meta"] = confidence_meta
+            jump_alert = detect_confidence_jump_opposing_mix(
+                current_confidence=validated.confidence,
+                previous_confidence=float(ctx.get("last_confidence") or 0),
+                confluences=list(validated.confluences),
+                registry_direction_by_code=ctx.get("registry_direction_by_code"),
+                inflated_confidence=confidence_meta.get("confidence_base_inflated"),
+            )
+            if jump_alert is not None:
+                output_dict["confidence_jump_alert"] = jump_alert
+                logger.warning(
+                    "decisor.confidence_jump_opposing_mix",
+                    **jump_alert,
+                )
         if position_size_meta is not None:
             output_dict["position_size_meta"] = position_size_meta
         if self_consistency_meta is not None:
@@ -374,6 +444,7 @@ class Decisor:
                 calibration=cal,
                 raw_confluences=raw_agg,
                 trading_product=ctx.get("trading_product", "spot"),
+                registry_direction_by_code=ctx.get("registry_direction_by_code"),
             )
             validated, position_meta = _apply_sizing_from_ctx(
                 validated, calibration=cal, ctx=ctx,
@@ -424,6 +495,7 @@ def _post_process_decision(
         calibration=calibration,
         raw_confluences=raw_confluences,
         trading_product=ctx.get("trading_product", "spot"),
+        registry_direction_by_code=ctx.get("registry_direction_by_code"),
     )
     position_meta = None
     if apply_sizing:

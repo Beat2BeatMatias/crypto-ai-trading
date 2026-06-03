@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.confluence_direction import filter_confluences_for_direction
 from shared.schemas import (
     DecisorAction,
     DecisorOutput,
@@ -99,22 +100,33 @@ def compute_confidence_base(
     *,
     direction: Direction | None = None,
     trading_product: str = "spot",
+    registry_direction_by_code: dict[str, str] | None = None,
+    direction_filter: bool = True,
 ) -> tuple[float, dict[str, Any]]:
     cal = calibration or {}
-    count = effective_confluence_count(confluences)
-    qf = quality_factor(confluences)
+    if direction_filter:
+        counted, excluded = filter_confluences_for_direction(
+            confluences, direction, registry_direction_by_code,
+        )
+    else:
+        counted, excluded = list(confluences), []
+    count = effective_confluence_count(counted)
+    qf = quality_factor(counted)
     rf = regime_factor(regime, cal, direction=direction, trading_product=trading_product)
     base_n = _conf_base_table_value(count, cal)
     base = max(0.0, min(1.0, base_n * qf * rf))
     meta: dict[str, Any] = {
         "confluence_count": count,
-        "confluences_counted": list(confluences),
+        "confluences_counted": list(counted),
+        "confluence_count_raw": len(confluences),
         "extended_confluence_weight": 1.0,
         "quality_factor": qf,
         "regime_factor": rf,
         "conf_base_table_value": base_n,
         "confidence_base_computed": base,
     }
+    if excluded:
+        meta["confluences_excluded_direction"] = list(excluded)
     return base, meta
 
 
@@ -124,6 +136,7 @@ def apply_server_confidence(
     calibration: dict[str, Any] | None = None,
     confluences_dropped: list[str] | None = None,
     trading_product: str = "spot",
+    registry_direction_by_code: dict[str, str] | None = None,
 ) -> tuple[DecisorOutput, dict[str, Any]]:
     direction = direction_for_action(decision.action)
     if direction is None and decision.action == DecisorAction.HOLD:
@@ -134,11 +147,23 @@ def apply_server_confidence(
         calibration,
         direction=direction,
         trading_product=trading_product,
+        registry_direction_by_code=registry_direction_by_code,
     )
     if decision.action == DecisorAction.HOLD and direction is not None:
         meta["hold_signal_direction"] = direction.value
     if confluences_dropped:
         meta["confluences_dropped"] = list(confluences_dropped)
+    if meta.get("confluences_excluded_direction"):
+        inflated_base, _ = compute_confidence_base(
+            decision.confluences,
+            decision.regime,
+            calibration,
+            direction=direction,
+            trading_product=trading_product,
+            registry_direction_by_code=registry_direction_by_code,
+            direction_filter=False,
+        )
+        meta["confidence_base_inflated"] = inflated_base
     payload = decision.model_dump()
     payload["confidence_base"] = base
     payload["confidence_adjustment"] = decision.confidence_adjustment

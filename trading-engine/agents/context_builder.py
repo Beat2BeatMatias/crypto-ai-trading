@@ -11,11 +11,16 @@ from shared.db.models import Indicators, Ohlcv, Position, Decision, Trade, Decis
 from shared.ohlcv_market import ohlcv_market_for_product
 from collectors.orderbook_collector import OrderBookSnapshot
 from agents.labelers import (
+    CANONICAL_TIMEFRAMES,
     get_operational_profile,
     get_tf_priority_order,
     get_profile_holding_range,
     format_profile_confluences_prompt,
     get_profile_confluences,
+    normalize_operational_timeframe,
+    confluence_verification_tfs,
+    format_confluence_tf_hierarchy,
+    critical_indicator_keys,
     rsi_label,
     macd_label,
     trend_label,
@@ -35,22 +40,10 @@ from agents.confluence_registry import (
 from agents.lesson_normalizer import format_block_k_lessons
 
 
-_ALL_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+_ALL_TIMEFRAMES = list(CANONICAL_TIMEFRAMES)
 
 # Candles per day per timeframe (for ATR 7d history query)
-_TF_ROWS_PER_DAY = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24, "4h": 6}
-
-# Critical indicators: if ANY of these is absent the decisor must early-exit to HOLD.
-# Ordered (tf, key) pairs covering the minimum viable signal set.
-_CRITICAL_INDICATOR_KEYS: tuple[tuple[str, str], ...] = (
-    ("15m", "rsi"),
-    ("1h",  "rsi"),
-    ("15m", "macd"),
-    ("1h",  "macd"),
-    ("1h",  "ema20"),
-    ("1h",  "ema50"),
-    ("1h",  "atr"),
-)
+_TF_ROWS_PER_DAY = {"1m": 1440, "5m": 288, "10m": 144, "15m": 96, "1h": 24, "4h": 6}
 
 
 def _fmt(value: object, spec: str = "") -> str:
@@ -129,8 +122,24 @@ class ContextBuilder:
             )
         )).scalars().all()
 
-        # ATR 7d history for expanding check
-        hist_limit = _TF_ROWS_PER_DAY.get(atr_timeframe, 96) * 7
+        # ATR 7d history for expanding check (uses operational TF, not raw config if 10m etc.)
+        profile = get_operational_profile(decisor_interval_min, atr_timeframe)
+        available_tfs = frozenset(
+            tf for tf in _ALL_TIMEFRAMES if (ind.get(tf) or {})
+        )
+        atr_operational_tf = normalize_operational_timeframe(
+            atr_timeframe, profile=profile, available=available_tfs,
+        )
+        confluence_primary_tf, confluence_secondary_tf, confluence_structural_tf = (
+            confluence_verification_tfs(
+                atr_timeframe, profile, available=available_tfs,
+            )
+        )
+        critical_keys = critical_indicator_keys(
+            confluence_primary_tf, confluence_structural_tf,
+        )
+
+        hist_limit = _TF_ROWS_PER_DAY.get(atr_operational_tf, 96) * 7
         hist_rows = (await self.session.execute(
             select(Indicators).order_by(desc(Indicators.time)).limit(hist_limit)
         )).scalars().all()
@@ -171,13 +180,15 @@ class ContextBuilder:
         roundtrip_fee_pct = max(taker_fee_pct * 2 * 100, _min_roundtrip_fee_pct) / 100
 
         atr_ref_val = float(
-            self._get(ind, atr_timeframe, "atr")
-            or self._get(ind, "15m", "atr") or 0
+            self._get(ind, atr_operational_tf, "atr")
+            or self._get(ind, atr_timeframe, "atr")
+            or self._get(ind, "15m", "atr")
+            or 0.0
         )
         atr_hist_values = [
-            float((row.data.get(atr_timeframe, {}) or {}).get("atr") or 0)
+            float((row.data.get(atr_operational_tf, {}) or {}).get("atr") or 0)
             for row in hist_rows
-            if (row.data.get(atr_timeframe, {}) or {}).get("atr")
+            if (row.data.get(atr_operational_tf, {}) or {}).get("atr")
         ]
         atr_avg_7d = (
             sum(atr_hist_values) / len(atr_hist_values)
@@ -186,9 +197,8 @@ class ContextBuilder:
         atr_expanding = atr_ref_val > atr_avg_7d * 1.1 if atr_avg_7d > 0 else False
 
         # ------------------------------------------------------------------ #
-        # Operational profile
+        # Operational profile (profile already computed above for TF alignment)
         # ------------------------------------------------------------------ #
-        profile = get_operational_profile(decisor_interval_min, atr_timeframe)
         tf_order = get_tf_priority_order(profile)
         holding_range = get_profile_holding_range(profile)
         profile_confluences = get_profile_confluences(
@@ -222,7 +232,7 @@ class ContextBuilder:
             tf_blocks=tf_blocks,
             tf_order=tf_order,
             ind=ind,
-            atr_timeframe=atr_timeframe,
+            atr_timeframe=atr_operational_tf,
         )
 
         # ------------------------------------------------------------------ #
@@ -302,6 +312,20 @@ class ContextBuilder:
             "block_a_priority_confluences": profile_confluences_prompt,
             "decisor_interval_min": decisor_interval_min,
             "atr_timeframe": atr_timeframe,
+            "atr_operational_tf": atr_operational_tf,
+            "confluence_primary_tf": confluence_primary_tf,
+            "confluence_secondary_tf": confluence_secondary_tf,
+            "confluence_structural_tf": confluence_structural_tf,
+            "confluence_tf_pair": (
+                f"{confluence_primary_tf} o {confluence_secondary_tf}"
+            ),
+            "confluence_tf_hierarchy": format_confluence_tf_hierarchy(
+                atr_timeframe=atr_timeframe,
+                atr_operational_tf=atr_operational_tf,
+                primary_tf=confluence_primary_tf,
+                secondary_tf=confluence_secondary_tf,
+                structural_tf=confluence_structural_tf,
+            ),
             "expected_holding_max_min": expected_holding_max,
 
             # ---- Block B: Market snapshot ----
@@ -313,7 +337,7 @@ class ContextBuilder:
             "pct_24h": pct_24h,
             "pct_7d": pct_7d,
             "atr_ref": atr_ref_val,
-            "atr_ref_tf": atr_timeframe,
+            "atr_ref_tf": atr_operational_tf,
             "atr_ref_pct": (atr_ref_val / price * 100) if price else 0,
             "atr_avg_7d": atr_avg_7d,
             "atr_expanding": atr_expanding,
@@ -335,11 +359,7 @@ class ContextBuilder:
             "rsi_4h": self._get(ind, "4h", "rsi"),
             "bb_pct_1m": self._get(ind, "1m", "bb_pct"),
             "bb_pct_5m": self._get(ind, "5m", "bb_pct"),
-            "macd_15m": self._get(ind, "15m", "macd"),
-            "sig_15m": self._get(ind, "15m", "macd_signal"),
-            "hist_15m": self._get(ind, "15m", "macd_hist"),
-            "macd_1h": self._get(ind, "1h", "macd"),
-            "sig_1h": self._get(ind, "1h", "macd_signal"),
+            **self._flat_macd_keys(ind),
             "ema20_1h": self._get(ind, "1h", "ema20"),
             "ema50_1h": ema50_1h,
             "ema200_1h": ema200_1h,
@@ -353,7 +373,7 @@ class ContextBuilder:
             # True when any critical indicator is absent — decisor must early-exit to HOLD.
             "critical_null_indicator": any(
                 self._get(ind, tf, key) is None
-                for tf, key in _CRITICAL_INDICATOR_KEYS
+                for tf, key in critical_keys
             ),
 
             # ---- Block D: Key levels ----
@@ -402,6 +422,7 @@ class ContextBuilder:
             "last_decisions_block": self._format_last_decisions(last_decisions),
             "last_action": last_decisions[0].output.get("action") if last_decisions else "n/a",
             "last_confidence": last_decisions[0].output.get("confidence", 0) if last_decisions else 0,
+            "last_confluences": last_decisions[0].output.get("confluences", []) if last_decisions else [],
             "last_reasoning": last_decisions[0].output.get("reasoning", "") if last_decisions else "",
             "last_decision_ago": self._format_time_ago(last_decisions[0].ts) if last_decisions else "n/a",
 
@@ -750,6 +771,15 @@ class ContextBuilder:
     # ------------------------------------------------------------------ #
     # Static helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _flat_macd_keys(ind: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for tf in _ALL_TIMEFRAMES:
+            out[f"macd_{tf}"] = ContextBuilder._get(ind, tf, "macd")
+            out[f"sig_{tf}"] = ContextBuilder._get(ind, tf, "macd_signal")
+            out[f"hist_{tf}"] = ContextBuilder._get(ind, tf, "macd_hist")
+        return out
 
     @staticmethod
     def _format_time_ago(ts: datetime) -> str:

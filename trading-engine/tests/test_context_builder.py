@@ -448,6 +448,12 @@ async def test_volume_fallback_when_atr_tf_missing_from_indicators(session: Asyn
 
     ctx = await _build(session, atr_timeframe="10m", decisor_interval_min=5)
 
+    assert ctx["atr_operational_tf"] == "5m"
+    assert ctx["confluence_primary_tf"] == "5m"
+    assert ctx["confluence_secondary_tf"] == "1h"
+    assert ctx["confluence_structural_tf"] == "1h"
+    assert ctx["atr_ref_tf"] == "5m"
+    assert ctx["confluence_tf_pair"] == "5m o 1h"
     assert ctx["volume_tf"] == "5m"
     assert ctx["volume_current"] == pytest.approx(80.0)
     assert ctx["volume_avg20"] == pytest.approx(200.0)

@@ -17,6 +17,7 @@ from agents.llm_client import LLMClient, LLMProvider
 from agents.prompt_manager import PromptManager
 from agents.decisor import Decisor
 from agents.supervisor import Supervisor
+from agents.labelers import operational_atr_from_indicators
 from risk.risk_gate import RiskGate
 from risk.fees import effective_roundtrip_fee_pct
 from risk.circuit_breaker import CircuitBreaker
@@ -530,7 +531,19 @@ async def run() -> None:
             ind_row = (await s.execute(
                 sa_select(Indicators).order_by(desc(Indicators.time)).limit(1)
             )).scalar_one_or_none()
-            atr = float((ind_row.data.get(atr_timeframe, {}) or {}).get("atr") or 300) if ind_row else 300.0
+            ind_data = ind_row.data if ind_row else {}
+            atr_operational_tf, atr = operational_atr_from_indicators(
+                ind_data,
+                atr_timeframe=atr_timeframe,
+                decisor_interval_min=interval_min,
+            )
+            if atr_operational_tf != atr_timeframe:
+                logger.info(
+                    "atr.operational_tf_resolved",
+                    config_tf=atr_timeframe,
+                    operational_tf=atr_operational_tf,
+                    atr=atr,
+                )
 
             if ob_snap is not None:
                 current_price = ob_snap.top_ask

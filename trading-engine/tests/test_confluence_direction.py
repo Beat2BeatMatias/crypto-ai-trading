@@ -4,10 +4,15 @@ from agents.confluence_registry import render_registry_block
 from agents.labelers import format_profile_confluences_prompt, get_profile_confluences
 from risk.coherence_checker import CoherenceChecker
 from shared.confluence_direction import (
+    classify_confluences_by_direction,
+    detect_confidence_jump_opposing_mix,
+    filter_confluences_for_direction,
+    has_opposing_confluence_mix,
     parse_registry_direction,
     registry_direction_allows_action,
+    resolve_opposing_confluences,
 )
-from shared.schemas import DecisorAction, DecisorOutput, MarketRegime
+from shared.schemas import DecisorAction, DecisorOutput, MarketRegime, Direction
 
 
 def test_parse_registry_direction_tags():
@@ -70,3 +75,57 @@ def test_c9_promoted_direction_mismatch():
     warnings = checker._c9_promoted_direction_vs_action(decision, ctx)
     assert len(warnings) == 1
     assert warnings[0].rule_id == "C9"
+    assert warnings[0].evidence["kind"] == "registry_tag"
+
+
+def test_classify_confluences_by_direction_static():
+    longs, shorts, neutral = classify_confluences_by_direction(["B", "J", "K"])
+    assert longs == ["B"]
+    assert shorts == ["J"]
+    assert neutral == ["K"]
+
+
+def test_has_opposing_confluence_mix():
+    assert has_opposing_confluence_mix(["B", "J"])
+    assert not has_opposing_confluence_mix(["B", "C"])
+    assert not has_opposing_confluence_mix(["J"])
+
+
+def test_filter_confluences_for_short_direction():
+    kept, dropped = filter_confluences_for_direction(["B", "J"], Direction.SHORT)
+    assert kept == ["J"]
+    assert dropped == ["B"]
+
+
+def test_resolve_opposing_confluences_trending_down_hold():
+    decision = DecisorOutput(
+        action=DecisorAction.HOLD,
+        regime=MarketRegime.TRENDING_DOWN,
+        confluences=["B", "J"],
+        confidence=0.5,
+        confidence_base=0.5,
+        confidence_adjustment=0.0,
+        reasoning="test",
+        stop_loss=None,
+        take_profit=None,
+        position_size_pct=0.0,
+        expected_holding_min=1,
+    )
+    kept, dropped = resolve_opposing_confluences(
+        decision.confluences,
+        direction=Direction.SHORT,
+    )
+    assert kept == ["J"]
+    assert dropped == ["B"]
+
+
+def test_detect_confidence_jump_opposing_mix_inflated():
+    alert = detect_confidence_jump_opposing_mix(
+        current_confidence=0.4675,
+        previous_confidence=0.34,
+        confluences=["B", "J"],
+        inflated_confidence=0.595,
+    )
+    assert alert is not None
+    assert alert["alert"] == "confidence_jump_opposing_mix"
+    assert alert["inflated_delta"] > 0.15

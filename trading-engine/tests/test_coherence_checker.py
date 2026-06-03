@@ -566,3 +566,53 @@ class TestHasCritical:
 
         # THEN no hay C7
         assert c7 == []
+
+
+def test_c2p_scalping_uses_primary_tf_from_ctx():
+    decision = _hold()
+    decision = decision.model_copy(update={
+        "regime": MarketRegime.TRENDING_DOWN,
+        "confluences": ["J"],
+    })
+    ctx = _ctx(
+        trading_product="futures",
+        confluence_primary_tf="5m",
+        confluence_secondary_tf="15m",
+        macd_5m=10.0,
+        sig_5m=8.0,
+        macd_15m=10.0,
+        sig_15m=8.0,
+    )
+    warnings = CoherenceChecker().evaluate(decision, ctx)
+    c2p = [w for w in warnings if w.rule_id == "C2P"]
+    assert len(c2p) == 1
+    assert "5m" in c2p[0].message
+
+
+def test_c9_opposing_mix_b_and_j_warning():
+    decision = _hold()
+    decision = decision.model_copy(update={
+        "regime": MarketRegime.TRENDING_DOWN,
+        "confluences": ["B", "J"],
+    })
+    ctx = _ctx(trading_product="futures")
+    warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+    c9 = [w for w in warnings if w.rule_id == "C9" and w.evidence.get("kind") == "opposing_mix"]
+    assert len(c9) == 1
+    assert c9[0].severity == "warning"
+    assert c9[0].evidence["long_codes"] == ["B"]
+    assert c9[0].evidence["short_codes"] == ["J"]
+
+
+def test_c9_opposing_mix_strict_is_critical():
+    decision = _hold()
+    decision = decision.model_copy(update={
+        "regime": MarketRegime.TRENDING_DOWN,
+        "confluences": ["B", "J"],
+    })
+    ctx = _ctx(trading_product="futures")
+    warnings = CoherenceChecker(strict_mode=True).evaluate(decision, ctx)
+    c9 = [w for w in warnings if w.rule_id == "C9" and w.evidence.get("kind") == "opposing_mix"]
+    assert len(c9) == 1
+    assert c9[0].severity == "critical"
+    assert c9[0].evidence["confluences_to_drop"] == ["B"]

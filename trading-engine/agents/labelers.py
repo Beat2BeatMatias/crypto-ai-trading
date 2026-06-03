@@ -13,9 +13,15 @@ DAY_TRADING — decisor_interval_min > 30 or atr_timeframe in {1h, 4h}
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 OperationalProfile = Literal["SCALPING", "HIBRIDO", "DAY_TRADING"]
+
+CANONICAL_TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
+_TF_MINUTES: dict[str, int] = {
+    "1m": 1, "5m": 5, "10m": 10, "15m": 15, "1h": 60, "4h": 240,
+}
+STRUCTURAL_TIMEFRAME = "1h"
 
 # Ordered timeframes by priority for each profile (highest priority first)
 _PROFILE_TF_ORDER: dict[OperationalProfile, list[str]] = {
@@ -56,6 +62,128 @@ def get_operational_profile(decisor_interval_min: int,
 
 def get_tf_priority_order(profile: OperationalProfile) -> list[str]:
     return _PROFILE_TF_ORDER[profile]
+
+
+def _available_from_indicators(ind: dict[str, Any]) -> frozenset[str]:
+    return frozenset(tf for tf in CANONICAL_TIMEFRAMES if (ind.get(tf) or {}))
+
+
+def operational_atr_from_indicators(
+    ind: dict[str, Any],
+    *,
+    atr_timeframe: str,
+    decisor_interval_min: int,
+) -> tuple[str, float]:
+    """Resuelve TF operativo y valor ATR (misma cadena de fallback que ContextBuilder)."""
+    profile = get_operational_profile(decisor_interval_min, atr_timeframe)
+    available = _available_from_indicators(ind)
+    operational_tf = normalize_operational_timeframe(
+        atr_timeframe, profile=profile, available=available,
+    )
+    for tf in (operational_tf, atr_timeframe, "15m", "5m", "1h"):
+        raw = (ind.get(tf) or {}).get("atr")
+        if raw is not None:
+            return operational_tf, float(raw)
+    return operational_tf, 300.0
+
+
+def normalize_operational_timeframe(
+    atr_timeframe: str,
+    *,
+    profile: OperationalProfile,
+    available: frozenset[str] | None = None,
+) -> str:
+    """Mapea atr_timeframe de config al bucket canónico más cercano (p. ej. 10m → 5m/15m)."""
+    available = available or frozenset(CANONICAL_TIMEFRAMES)
+    tf = (atr_timeframe or "15m").lower().strip()
+    if tf in available:
+        return tf
+    if tf == "10m":
+        if profile == "SCALPING":
+            return "5m" if "5m" in available else "15m"
+        return "15m" if "15m" in available else "5m"
+    minutes = _TF_MINUTES.get(tf)
+    if minutes is None:
+        return "15m" if "15m" in available else next(iter(sorted(available, key=lambda t: _TF_MINUTES[t])))
+    ranked = sorted(available, key=lambda t: abs(_TF_MINUTES[t] - minutes))
+    return ranked[0]
+
+
+def confluence_verification_tfs(
+    atr_timeframe: str,
+    profile: OperationalProfile,
+    *,
+    available: frozenset[str] | None = None,
+) -> tuple[str, str, str]:
+    """
+    TFs para catálogo A/B/I/J y CoherenceChecker C1/C2/C1P/C2P.
+    primary: alineado a atr_timeframe; secondary: TF superior; structural: régimen (1h).
+    """
+    available = available or frozenset(CANONICAL_TIMEFRAMES)
+    order = [tf for tf in get_tf_priority_order(profile) if tf in available]
+    if not order:
+        order = [tf for tf in CANONICAL_TIMEFRAMES if tf in available]
+    primary = normalize_operational_timeframe(
+        atr_timeframe, profile=profile, available=frozenset(order) or available,
+    )
+    if primary not in order:
+        primary = order[0]
+
+    ladder = [tf for tf in CANONICAL_TIMEFRAMES if tf in available]
+    pidx = ladder.index(primary) if primary in ladder else 0
+    secondary = ladder[min(pidx + 1, len(ladder) - 1)] if ladder else primary
+    if secondary == primary and len(ladder) > 1:
+        secondary = ladder[min(pidx + 1, len(ladder) - 1)]
+
+    structural = STRUCTURAL_TIMEFRAME if STRUCTURAL_TIMEFRAME in available else ladder[-1]
+    return primary, secondary, structural
+
+
+def format_confluence_tf_hierarchy(
+    *,
+    atr_timeframe: str,
+    atr_operational_tf: str,
+    primary_tf: str,
+    secondary_tf: str,
+    structural_tf: str,
+) -> str:
+    """Texto para el prompt del Decisor — jerarquía alineada al perfil y ATR."""
+    atr_note = (
+        f" (config {atr_timeframe} → operativo {atr_operational_tf})"
+        if atr_timeframe != atr_operational_tf
+        else ""
+    )
+    return "\n".join([
+        f"- TF confluencia primario{atr_note}: {primary_tf} (alineado a ATR de referencia)",
+        f"- TF confluencia secundario: {secondary_tf}",
+        f"- TF estructural (régimen / EMAs / C3): {structural_tf}",
+        f"- Precedencia: {secondary_tf} > {primary_tf} para confirmar dirección; "
+        f"{structural_tf} anula señales menores en conflicto fuerte.",
+        f"- Entrada válida si {primary_tf} y {secondary_tf} coinciden en dirección.",
+        f"- Declarar A/B/I/J solo con evidencia en {primary_tf} o {secondary_tf} "
+        f"(no en TFs fuera de este par).",
+        f"- RSI({structural_tf}) >70 cancela señales alcistas de TFs menores.",
+    ])
+
+
+def critical_indicator_keys(primary_tf: str, structural_tf: str) -> tuple[tuple[str, str], ...]:
+    """Indicadores mínimos para early-exit (primary + estructura 1h)."""
+    keys: list[tuple[str, str]] = [
+        (primary_tf, "rsi"),
+        (primary_tf, "macd"),
+        (structural_tf, "rsi"),
+        (structural_tf, "macd"),
+        ("1h", "ema20"),
+        ("1h", "ema50"),
+        ("1h", "atr"),
+    ]
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for pair in keys:
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    return tuple(out)
 
 
 def get_profile_holding_range(profile: OperationalProfile) -> tuple[int, int]:
