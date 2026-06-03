@@ -1,7 +1,7 @@
 """
 CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Decisor.
 
-Reglas C1–C8 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
+Reglas C1–C9 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
 En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7 se convierten en rechazos duros.
 
 C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
@@ -19,6 +19,7 @@ from typing import Any
 import structlog
 
 from agents.confluence_registry import STATIC_CONFLUENCE_CODES, evaluate_verify_spec
+from shared.confluence_direction import registry_direction_allows_action
 from shared.schemas import DecisorOutput, DecisorAction, Direction, direction_for_action
 
 logger = structlog.get_logger()
@@ -26,7 +27,7 @@ logger = structlog.get_logger()
 
 @dataclass
 class CoherenceWarning:
-    rule_id: str          # "C1" … "C8", "C1P" … "C3P"
+    rule_id: str          # "C1" … "C9", "C1P" … "C3P"
     message: str
     severity: str = "warning"   # "warning" | "critical" (cuando strict_mode)
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -68,9 +69,11 @@ class CoherenceChecker:
         warnings.extend(self._c3p_short_regime_vs_indicators(decision, ctx))
         warnings.extend(self._c4_confidence_without_confluences(decision, ctx))
         warnings.extend(self._c5_buy_low_confidence_no_tag(decision, ctx))
+        warnings.extend(self._c5p_short_low_confidence_no_tag(decision, ctx))
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
         warnings.extend(self._c7_rr_ratio_verification(decision, ctx))
         warnings.extend(self._c8_extended_confluence_verify(decision, ctx))
+        warnings.extend(self._c9_promoted_direction_vs_action(decision, ctx))
 
         if warnings:
             logger.warning(
@@ -349,48 +352,55 @@ class CoherenceChecker:
                 ),
                 evidence={"confidence": conf, "confluences": n},
             ))
-        elif conf >= 0.70 and decision.action == DecisorAction.BUY and n == 0:
+        elif conf >= 0.70 and decision.action in (DecisorAction.BUY, DecisorAction.SHORT) and n == 0:
             warnings.append(CoherenceWarning(
                 rule_id="C4",
                 message=(
-                    f"BUY con confidence={conf:.2f} (≥0.70) y 0 confluencias del catálogo."
+                    f"{decision.action.value} con confidence={conf:.2f} (≥0.70) "
+                    f"y 0 confluencias del catálogo."
                 ),
-                evidence={"confidence": conf, "confluences": n},
+                evidence={"confidence": conf, "confluences": n, "action": decision.action.value},
             ))
 
         return warnings
 
-    def _c5_buy_low_confidence_no_tag(self, decision: DecisorOutput,
-                                      ctx: dict[str, Any]) -> list[CoherenceWarning]:
-        """
-        C5: BUY con confidence < 0.50 sin tag explicativo en reasoning.
-        El LLM puede operar con confianza baja, pero debe justificarlo con
-        [CONTRA_REGIMEN] o [SIZING] en el campo reasoning.
-        """
-        if decision.action != DecisorAction.BUY:
-            return []
+    def _low_confidence_entry_without_tag(
+        self, decision: DecisorOutput, *, rule_id: str,
+    ) -> list[CoherenceWarning]:
         if decision.confidence >= 0.50:
             return []
         reasoning = decision.reasoning or ""
-        has_tag = any(tag in reasoning for tag in ["[CONTRA_REGIMEN]", "[SIZING]", "[BAJA_CONFIANZA]"])
-        if has_tag:
+        tags = ("[CONTRA_REGIMEN]", "[SIZING]", "[BAJA_CONFIANZA]")
+        if any(tag in reasoning for tag in tags):
             return []
         return [CoherenceWarning(
-            rule_id="C5",
+            rule_id=rule_id,
             message=(
-                f"BUY con confidence={decision.confidence:.2f} (<0.50) sin tag "
-                f"explicativo ([CONTRA_REGIMEN], [SIZING] o [BAJA_CONFIANZA]) en reasoning."
+                f"{decision.action.value} con confidence={decision.confidence:.2f} (<0.50) "
+                f"sin tag explicativo ({', '.join(tags)}) en reasoning."
             ),
-            evidence={"confidence": decision.confidence, "action": decision.action},
+            evidence={"confidence": decision.confidence, "action": decision.action.value},
         )]
+
+    def _c5_buy_low_confidence_no_tag(self, decision: DecisorOutput,
+                                      ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        if decision.action != DecisorAction.BUY:
+            return []
+        return self._low_confidence_entry_without_tag(decision, rule_id="C5")
+
+    def _c5p_short_low_confidence_no_tag(self, decision: DecisorOutput,
+                                         ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        if decision.action != DecisorAction.SHORT:
+            return []
+        return self._low_confidence_entry_without_tag(decision, rule_id="C5P")
 
     def _c6_holding_vs_profile(self, decision: DecisorOutput,
                                ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
         C6: expected_holding_min fuera del rango del perfil operativo.
-        Solo aplica a BUY — para HOLD/SELL el campo es semánticamente irrelevante.
+        Aplica a BUY y SHORT — para HOLD/SELL el campo es semánticamente irrelevante.
         """
-        if decision.action != DecisorAction.BUY:
+        if decision.action not in (DecisorAction.BUY, DecisorAction.SHORT):
             return []
 
         holding = decision.expected_holding_min
@@ -499,5 +509,42 @@ class CoherenceChecker:
                     "no se cumple con la evidencia del ciclo."
                 ),
                 evidence={"code": code, "verify_spec": specs[code]},
+            ))
+        return warnings
+
+    def _c9_promoted_direction_vs_action(
+        self,
+        decision: DecisorOutput,
+        ctx: dict[str, Any],
+    ) -> list[CoherenceWarning]:
+        directions = ctx.get("registry_direction_by_code") or {}
+        if not directions:
+            return []
+        trading_product = str(ctx.get("trading_product") or "spot").lower()
+        warnings: list[CoherenceWarning] = []
+        for code in decision.confluences:
+            if code in STATIC_CONFLUENCE_CODES or code not in directions:
+                continue
+            direction = directions[code]
+            if registry_direction_allows_action(
+                direction,
+                decision.action,
+                trading_product=trading_product,
+            ):
+                continue
+            warnings.append(CoherenceWarning(
+                rule_id="C9",
+                severity="warning",
+                message=(
+                    f"Confluencia promovida '{code}' etiquetada [{direction}] "
+                    f"no aplica a action={decision.action} "
+                    f"(trading_product={trading_product})."
+                ),
+                evidence={
+                    "code": code,
+                    "direction": direction,
+                    "action": decision.action,
+                    "trading_product": trading_product,
+                },
             ))
         return warnings

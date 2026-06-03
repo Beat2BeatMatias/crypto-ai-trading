@@ -74,8 +74,11 @@ export const api = {
     return get<DecisionOutcome[]>(`/decisions/outcomes?${q.toString()}`);
   },
   dailyStats: () => get<DailyStats>("/stats/daily"),
-  ohlcv: (timeframe: Timeframe, limit = 300) =>
-    get<Candle[]>(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
+  ohlcv: (timeframe: Timeframe, limit = 300, market?: "spot" | "futures") => {
+    const q = new URLSearchParams({ timeframe, limit: String(limit) });
+    if (market) q.set("market", market);
+    return get<Candle[]>(`/ohlcv?${q}`);
+  },
   confluenceCandidates: (status?: string) => {
     const q = status ? `?status=${encodeURIComponent(status)}` : "";
     return get<ConfluenceCandidate[]>(`/confluence/candidates${q}`);

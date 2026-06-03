@@ -154,7 +154,7 @@ AUDITORÍA LLM-CENTRIC:
 ANÁLISIS CONTRAFÁCTICO (últimas 24h):
   Decisiones evaluadas: {evaluated_decisions}
   HOLDs missed: {missed_count} ({missed_rate:.1f}%) | BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%)
-  Bloqueados buenos: {blocked_good_count}
+  SHORTs malos: {bad_short_count} ({bad_short_rate:.1f}%) | Bloqueados buenos: {blocked_good_count}
 
 INTERPRETACIÓN DE LA AUDITORÍA:
 - Si avg_buy_confidence está SIEMPRE por encima de conf_threshold_range pero el WR es bajo →
@@ -265,6 +265,10 @@ class Supervisor:
         """
         since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
         metrics = await self._compute_metrics(since)
+        if current_config:
+            metrics["trading_product"] = str(
+                current_config.get("trading_product", "spot"),
+            ).lower()
         rejected_reason = None
         gen_resp = None
         eval_tokens_in = 0
@@ -924,7 +928,8 @@ class Supervisor:
             if total > 0:
                 lines.append(
                     f"  {regime}: {total} decisiones → "
-                    f"BUY {counts['BUY']} | SELL {counts['SELL']} | HOLD {counts['HOLD']}"
+                    f"BUY {counts['BUY']} | SHORT {counts.get('SHORT', 0)} | "
+                    f"SELL {counts['SELL']} | HOLD {counts['HOLD']}"
                 )
         return "\n".join(lines) if lines else "  Sin decisiones en el período"
 
@@ -1150,6 +1155,8 @@ class Supervisor:
             bad_buy_rate=metrics.get("bad_buy_rate", 0.0),
             missed_count=metrics.get("missed_count", 0),
             bad_buy_count=metrics.get("bad_buy_count", 0),
+            bad_short_count=metrics.get("bad_short_count", 0),
+            bad_short_rate=metrics.get("bad_short_rate", 0.0),
             blocked_good_count=metrics.get("blocked_good_count", 0),
             evaluated_decisions=metrics.get("evaluated_decisions", 0),
         )
@@ -1191,11 +1198,13 @@ class Supervisor:
             key = t.close_reason or "manual_close"
             close_reasons[key] = close_reasons.get(key, 0) + 1
 
-        action_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
+        action_counts = {"BUY": 0, "SHORT": 0, "SELL": 0, "HOLD": 0}
         for d in decisions:
             a = d.output.get("action", "HOLD")
             action_counts[a] = action_counts.get(a, 0) + 1
         n = max(len(decisions), 1)
+        short_count = action_counts.get("SHORT", 0)
+        short_pct = short_count / n * 100
 
         # Price data from OHLCV 1h
         ohlcv_rows = (await self.session.execute(
@@ -1218,7 +1227,7 @@ class Supervisor:
 
         # -- A2: Distribución de decisiones por régimen --
         regime_counts: dict[str, dict[str, int]] = {
-            r: {"BUY": 0, "HOLD": 0, "SELL": 0}
+            r: {"BUY": 0, "SHORT": 0, "HOLD": 0, "SELL": 0}
             for r in ("TRENDING_UP", "TRENDING_DOWN", "RANGE", "HIGH_VOLATILITY", "UNKNOWN")
         }
         for d in decisions:
@@ -1246,7 +1255,9 @@ class Supervisor:
         decisions_with_warnings = 0
         two_pass_count = 0
         position_sizes: list[float] = []
+        short_position_sizes: list[float] = []
         buy_confidences: list[float] = []
+        short_confidences: list[float] = []
         for d in decisions:
             out = d.output or {}
             warnings = out.get("coherence_warnings") or []
@@ -1257,17 +1268,24 @@ class Supervisor:
                     coherence_by_rule[rid] = coherence_by_rule.get(rid, 0) + 1
             if out.get("two_pass_triggered"):
                 two_pass_count += 1
-            if out.get("action") == "BUY":
+            action = out.get("action")
+            if action in ("BUY", "SHORT"):
                 try:
                     pz = float(out.get("position_size_pct") or 0.0)
                     if pz > 0:
-                        position_sizes.append(pz)
+                        if action == "SHORT":
+                            short_position_sizes.append(pz)
+                        else:
+                            position_sizes.append(pz)
                 except (TypeError, ValueError):
                     pass
                 try:
                     cf = float(out.get("confidence") or 0.0)
                     if cf > 0:
-                        buy_confidences.append(cf)
+                        if action == "SHORT":
+                            short_confidences.append(cf)
+                        else:
+                            buy_confidences.append(cf)
                 except (TypeError, ValueError):
                     pass
         coherence_warnings_total = sum(coherence_by_rule.values())
@@ -1278,6 +1296,14 @@ class Supervisor:
         avg_buy_confidence = (
             round(sum(buy_confidences) / len(buy_confidences), 3)
             if buy_confidences else 0.0
+        )
+        avg_short_position_size_pct = (
+            round(sum(short_position_sizes) / len(short_position_sizes), 4)
+            if short_position_sizes else 0.0
+        )
+        avg_short_confidence = (
+            round(sum(short_confidences) / len(short_confidences), 3)
+            if short_confidences else 0.0
         )
 
         # -- A2: Max drawdown real y Sharpe del período --
@@ -1311,18 +1337,24 @@ class Supervisor:
         evaluated_decisions = len([o for o in outcome_rows if o.classification not in ("PENDING", "UNKNOWN")])
         missed_count = len([o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"])
         bad_buy_count = len([o for o in outcome_rows if o.classification == "BAD_BUY"])
+        good_short_count = len([o for o in outcome_rows if o.classification == "GOOD_SHORT"])
+        bad_short_count = len([o for o in outcome_rows if o.classification == "BAD_SHORT"])
         blocked_good_count = len([o for o in outcome_rows if o.classification == "BLOCKED_GOOD_TRADE"])
+        blocked_good_short_count = 0
         correctly_blocked_count = len([o for o in outcome_rows if o.classification == "CORRECTLY_BLOCKED"])
         good_hold_count = len([o for o in outcome_rows if o.classification == "GOOD_HOLD"])
         good_buy_count = len([o for o in outcome_rows if o.classification == "GOOD_BUY"])
 
         missed_rate = (missed_count / evaluated_decisions * 100) if evaluated_decisions > 0 else 0.0
         bad_buy_rate = (bad_buy_count / max(good_buy_count + bad_buy_count, 1) * 100)
+        bad_short_rate = (bad_short_count / max(good_short_count + bad_short_count, 1) * 100)
 
         decisions_by_id = {d.id: d for d in decisions}
 
         winners_confluences: dict[str, int] = {}
         losers_confluences: dict[str, int] = {}
+        winners_short_confluences: dict[str, int] = {}
+        losers_short_confluences: dict[str, int] = {}
         for o in outcome_rows:
             d_out = decisions_by_id.get(o.decision_id)
             if not d_out:
@@ -1334,6 +1366,15 @@ class Supervisor:
             elif o.classification == "BAD_BUY":
                 for c in confs:
                     losers_confluences[c] = losers_confluences.get(c, 0) + 1
+            elif o.classification == "GOOD_SHORT":
+                for c in confs:
+                    winners_short_confluences[c] = winners_short_confluences.get(c, 0) + 1
+            elif o.classification == "BAD_SHORT":
+                for c in confs:
+                    losers_short_confluences[c] = losers_short_confluences.get(c, 0) + 1
+            elif o.classification == "BLOCKED_GOOD_TRADE":
+                if (d_out.output or {}).get("action") == "SHORT":
+                    blocked_good_short_count += 1
 
         top_misses = sorted(
             [o for o in outcome_rows if o.classification == "MISSED_OPPORTUNITY"],
@@ -1346,6 +1387,13 @@ class Supervisor:
             inp = (d.input or {}) if d else {}
             out = (d.output or {}) if d else {}
             regime = out.get("regime") or inp.get("regime") or "?"
+            trading_product = str(inp.get("trading_product") or "spot").lower()
+            if trading_product == "futures" and regime == "TRENDING_DOWN":
+                counterfactual = "SHORT"
+            elif regime == "TRENDING_UP":
+                counterfactual = "LONG"
+            else:
+                counterfactual = "LONG"
             confidence = out.get("confidence") or "?"
             confluences = out.get("confluences") or []
             reasoning = (out.get("reasoning") or "")[:120]
@@ -1372,9 +1420,10 @@ class Supervisor:
             )
             top_misses_lines.append(
                 f"  [{(d.ts.strftime('%H:%M') if d else '?')} UTC] "
-                f"miss +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
+                f"miss ({counterfactual}) +{float(o.mfe_pct or 0):.2f}% en {o.time_to_mfe_min}min "
                 f"(mae {float(o.mae_pct or 0):+.2f}%) | "
-                f"régimen={regime} conf={conf_str} confluencias={confluences_str}\n"
+                f"producto={trading_product} régimen={regime} conf={conf_str} "
+                f"confluencias={confluences_str}\n"
                 f"    indicadores: {indicators.strip()}\n"
                 f"    reasoning: {reasoning}"
             )
@@ -1394,9 +1443,11 @@ class Supervisor:
         return {
             "total_decisions": len(decisions),
             "buy_count": action_counts["BUY"],
+            "short_count": short_count,
             "sell_count": action_counts["SELL"],
             "hold_count": action_counts["HOLD"],
             "buy_pct": action_counts["BUY"] / n * 100,
+            "short_pct": short_pct,
             "sell_pct": action_counts["SELL"] / n * 100,
             "hold_pct": action_counts["HOLD"] / n * 100,
             "rejected_count": sum(1 for d in decisions if d.rejected_reason),
@@ -1445,13 +1496,22 @@ class Supervisor:
             "correctly_blocked_count": correctly_blocked_count,
             "good_hold_count": good_hold_count,
             "good_buy_count": good_buy_count,
+            "good_short_count": good_short_count,
+            "bad_short_count": bad_short_count,
+            "bad_short_rate": round(bad_short_rate, 1),
+            "blocked_good_short_count": blocked_good_short_count,
             "missed_rate": round(missed_rate, 1),
             "bad_buy_rate": round(bad_buy_rate, 1),
             "top_misses_block": top_misses_block,
             "winners_confluences": winners_confluences,
             "losers_confluences": losers_confluences,
+            "winners_short_confluences": winners_short_confluences,
+            "losers_short_confluences": losers_short_confluences,
+            "avg_short_position_size_pct": avg_short_position_size_pct,
+            "avg_short_confidence": avg_short_confidence,
             "open_confluence_candidates": open_confluence_candidates,
             "active_confluence_registry": active_confluence_registry,
+            "trading_product": "spot",
         }
 
     async def _fetch_postmortem_lessons(self, *, window_days: int = 7, max_lessons: int = 10) -> str:

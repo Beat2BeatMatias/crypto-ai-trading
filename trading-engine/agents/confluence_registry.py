@@ -10,6 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.postmortem_schemas import LessonNormalized
+from shared.confluence_direction import (
+    direction_label_es,
+    parse_registry_direction,
+    registry_direction_by_code as map_registry_directions,
+)
 from shared.confluence_registry_ops import (
     STATIC_CONFLUENCE_CODES,
     playbook_conflict,
@@ -26,6 +31,7 @@ __all__ = [
     "active_registry_codes",
     "render_registry_block",
     "registry_verify_specs",
+    "registry_direction_by_code",
     "fetch_promoted_pattern_tags",
     "upsert_candidate",
     "promote_eligible_candidates",
@@ -44,23 +50,49 @@ async def fetch_active_registry(session: AsyncSession) -> list[ConfluenceRegistr
 
 
 def active_registry_codes(entries: list[ConfluenceRegistry]) -> frozenset[str]:
-    return frozenset(e.code for e in entries if e.active)
+    """Códigos promovidos activos (K–Z). Excluye A–J del catálogo fijo."""
+    return frozenset(
+        e.code for e in entries
+        if e.active and e.code not in STATIC_CONFLUENCE_CODES
+    )
 
 
 def render_registry_block(entries: list[ConfluenceRegistry]) -> str:
-    if not entries:
-        return "  (ninguna confluencia promovida activa.)"
-    lines: list[str] = []
-    for entry in sorted(entries, key=lambda e: e.code):
+    promoted = [
+        e for e in entries
+        if e.active and e.code not in STATIC_CONFLUENCE_CODES
+    ]
+    if not promoted:
+        return (
+            "  (ninguna confluencia promovida activa; I/J del catálogo fijo = SHORT, "
+            "no confundir con lecciones de post-mortem.)"
+        )
+    lines: list[str] = [
+        "  Promovidas (K–Z). Catálogo fijo A–J (I=RSI overbought SHORT, J=MACD bearish) "
+        "está en el system prompt:",
+    ]
+    for entry in sorted(promoted, key=lambda e: e.code):
         definition = (entry.definition_md or "").replace("\n", " ").strip()
         if len(definition) > 120:
             definition = definition[:117] + "..."
-        lines.append(f"{entry.code}. {entry.title} — {definition}")
+        direction = parse_registry_direction(entry.definition_md or "")
+        dir_hint = f" [{direction_label_es(direction)}]" if direction else ""
+        lines.append(f"{entry.code}. {entry.title}{dir_hint} — {definition}")
     return "\n".join(f"  {line}" for line in lines)
 
 
 def registry_verify_specs(entries: list[ConfluenceRegistry]) -> dict[str, dict[str, Any]]:
-    return {e.code: e.verify_spec for e in entries if e.active}
+    return {
+        e.code: e.verify_spec
+        for e in entries
+        if e.active and e.code not in STATIC_CONFLUENCE_CODES
+    }
+
+
+def registry_direction_by_code(
+    entries: list[ConfluenceRegistry],
+) -> dict[str, str]:
+    return map_registry_directions(entries, static_codes=STATIC_CONFLUENCE_CODES)
 
 
 async def fetch_promoted_pattern_tags(session: AsyncSession) -> frozenset[str]:

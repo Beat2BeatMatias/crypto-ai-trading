@@ -8,11 +8,13 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.db.models import Indicators, Ohlcv, Position, Decision, Trade, DecisionOutcome
+from shared.ohlcv_market import ohlcv_market_for_product
 from collectors.orderbook_collector import OrderBookSnapshot
 from agents.labelers import (
     get_operational_profile,
     get_tf_priority_order,
     get_profile_holding_range,
+    format_profile_confluences_prompt,
     get_profile_confluences,
     rsi_label,
     macd_label,
@@ -26,6 +28,7 @@ from agents.labelers import (
 from agents.confluence_registry import (
     active_registry_codes,
     fetch_active_registry,
+    registry_direction_by_code,
     registry_verify_specs,
     render_registry_block,
 )
@@ -114,6 +117,7 @@ class ContextBuilder:
         registry_block = render_registry_block(registry_entries)
         active_codes = sorted(active_registry_codes(registry_entries))
         verify_specs = registry_verify_specs(registry_entries)
+        registry_directions = registry_direction_by_code(registry_entries)
 
         today_start = datetime.combine(
             date.today(), datetime.min.time()
@@ -133,9 +137,10 @@ class ContextBuilder:
 
         # Price change percentages from OHLCV history (1h candles)
         # Fetch enough rows to cover 7d: 24 candles/day × 7 days = 168 + 1
+        ohlcv_market = ohlcv_market_for_product(trading_product)
         ohlcv_1h_rows = (await self.session.execute(
             select(Ohlcv)
-            .where(Ohlcv.timeframe == "1h")
+            .where(Ohlcv.timeframe == "1h", Ohlcv.market == ohlcv_market)
             .order_by(desc(Ohlcv.time))
             .limit(169)
         )).scalars().all()
@@ -186,7 +191,12 @@ class ContextBuilder:
         profile = get_operational_profile(decisor_interval_min, atr_timeframe)
         tf_order = get_tf_priority_order(profile)
         holding_range = get_profile_holding_range(profile)
-        profile_confluences = get_profile_confluences(profile)
+        profile_confluences = get_profile_confluences(
+            profile, trading_product=trading_product,
+        )
+        profile_confluences_prompt = format_profile_confluences_prompt(
+            profile, trading_product=trading_product,
+        )
 
         # ------------------------------------------------------------------ #
         # Per-TF indicator blocks with labels
@@ -207,6 +217,13 @@ class ContextBuilder:
         # Cross-TF alignment summary
         # ------------------------------------------------------------------ #
         cross_tf = self._build_cross_tf_summary(tf_blocks, price)
+
+        vol_current, vol_avg20, vol_ratio, volume_tf = self._resolve_operational_volume(
+            tf_blocks=tf_blocks,
+            tf_order=tf_order,
+            ind=ind,
+            atr_timeframe=atr_timeframe,
+        )
 
         # ------------------------------------------------------------------ #
         # Key levels (EMAs, ATR bands, 24h high/low, VWAP, pivots placeholder)
@@ -246,6 +263,9 @@ class ContextBuilder:
         # ------------------------------------------------------------------ #
         min_fees_to_tp = cal.get("min_fees_to_tp_ratio", 3.0)
         min_confluences = cal.get("min_confluences_buy", 2)
+        min_confluences_short = cal.get(
+            "min_confluences_short", cal.get("min_confluences_buy", 2),
+        )
         cooldown_min = cal.get("cooldown_after_sell_min", 15)
         expected_holding_max = cal.get("expected_holding_max_min", 240)
         min_position_size = cal.get("min_position_size", 0.005)
@@ -279,7 +299,7 @@ class ContextBuilder:
             "block_a_tf_order": tf_order,
             "block_a_holding_range_min": holding_range[0],
             "block_a_holding_range_max": holding_range[1],
-            "block_a_priority_confluences": profile_confluences,
+            "block_a_priority_confluences": profile_confluences_prompt,
             "decisor_interval_min": decisor_interval_min,
             "atr_timeframe": atr_timeframe,
             "expected_holding_max_min": expected_holding_max,
@@ -390,6 +410,7 @@ class ContextBuilder:
             "confluence_registry_block": registry_block,
             "active_registry_confluence_codes": active_codes,
             "registry_verify_specs": verify_specs,
+            "registry_direction_by_code": registry_directions,
 
             # ---- Block H: Portfolio state ----
             "capital_total": total_capital,
@@ -411,8 +432,10 @@ class ContextBuilder:
             "available_margin": available_margin if available_margin is not None else usdt_balance,
             "open_position_side": open_position_side or (
                 getattr(open_positions[0], "position_side", None) if open_positions else None
+            ) or "ninguna",
+            "liquidation_price": (
+                liquidation_price if liquidation_price is not None else "n/d"
             ),
-            "liquidation_price": liquidation_price,
             "current_drawdown_pct": current_drawdown_pct,
             "daily_margin_pct": daily_stop_pct * 100,
 
@@ -429,6 +452,7 @@ class ContextBuilder:
             "sl_atr_max_multiplier": sl_atr_max,
             "min_fees_to_tp_ratio": min_fees_to_tp,
             "min_confluences_buy": min_confluences,
+            "min_confluences_short": min_confluences_short,
             "cooldown_after_sell_min": cooldown_min,
             "adj_spread_threshold_pct": adj_spread_threshold,
             "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
@@ -443,12 +467,12 @@ class ContextBuilder:
             "playbook": playbook_content,
 
             # ---- Calibration passthrough ----
-            "volume_current": self._get(ind, atr_timeframe, "volume_current") or 0.0,
-            "volume_avg20": self._get(ind, atr_timeframe, "volume_avg_20") or 0.0,
-            "volume_ratio": self._safe_ratio(
-                self._get(ind, atr_timeframe, "volume_current"),
-                self._get(ind, atr_timeframe, "volume_avg_20"),
-            ),
+            "volume_current": vol_current,
+            "volume_avg20": vol_avg20,
+            "volume_ratio": vol_ratio,
+            "volume_tf": volume_tf,
+            "volume_ratio_5m": self._volume_ratio_for_tf(tf_blocks, "5m", ind),
+            "volume_ratio_15m": self._volume_ratio_for_tf(tf_blocks, "15m", ind),
         }
 
         # Pass all calibration values so prompt {variable} references resolve
@@ -757,6 +781,60 @@ class ContextBuilder:
     @staticmethod
     def _get(ind: dict[str, Any], tf: str, key: str) -> Any:
         return (ind.get(tf, {}) or {}).get(key)
+
+    def _volume_ratio_for_tf(
+        self,
+        tf_blocks: dict[str, dict[str, Any]],
+        tf: str,
+        ind: dict[str, Any],
+    ) -> float:
+        blk = tf_blocks.get(tf) or {}
+        vol_c = blk.get("volume_current")
+        vol_a = blk.get("volume_avg_20")
+        if vol_a is None:
+            vol_c = self._get(ind, tf, "volume_current")
+            vol_a = self._get(ind, tf, "volume_avg_20")
+        return self._safe_ratio(vol_c, vol_a)
+
+    def _resolve_operational_volume(
+        self,
+        *,
+        tf_blocks: dict[str, dict[str, Any]],
+        tf_order: list[str],
+        ind: dict[str, Any],
+        atr_timeframe: str,
+    ) -> tuple[float, float, float, str]:
+        """Volumen operativo: atr_tf si existe en indicadores, si no primer TF del perfil con avg20>0."""
+        candidates: list[str] = []
+        if atr_timeframe:
+            candidates.append(atr_timeframe)
+        for tf in tf_order:
+            if tf not in candidates:
+                candidates.append(tf)
+        for tf in ("5m", "15m", "1m", "1h"):
+            if tf not in candidates:
+                candidates.append(tf)
+
+        for tf in candidates:
+            blk = tf_blocks.get(tf) or {}
+            vol_c = blk.get("volume_current")
+            vol_a = blk.get("volume_avg_20")
+            if vol_a is None and vol_c is None:
+                vol_c = self._get(ind, tf, "volume_current")
+                vol_a = self._get(ind, tf, "volume_avg_20")
+            try:
+                avg_f = float(vol_a) if vol_a is not None else 0.0
+            except (TypeError, ValueError):
+                avg_f = 0.0
+            if avg_f <= 0:
+                continue
+            try:
+                cur_f = float(vol_c) if vol_c is not None else 0.0
+            except (TypeError, ValueError):
+                cur_f = 0.0
+            return cur_f, avg_f, cur_f / avg_f, tf
+
+        return 0.0, 0.0, 0.0, atr_timeframe or "5m"
 
     @staticmethod
     def _safe_ratio(num: Any, den: Any) -> float:

@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
+from shared.confidence import hold_signal_direction
+from shared.schemas import Direction
+
 
 Classification = Literal[
     "PENDING", "UNKNOWN",
@@ -225,13 +228,57 @@ def _classify(
 
 def _entry_direction(decision: Any, associated_trade: Any | None) -> str:
     action = (decision.output or {}).get("action")
+    if action == "HOLD":
+        return _hold_counterfactual_direction(decision)
     if action == "SHORT":
         return "SHORT"
     if action == "BUY":
         return "LONG"
     if action == "SELL" and associated_trade is not None:
-        return getattr(associated_trade, "position_side", None) or "LONG"
+        side = getattr(associated_trade, "position_side", None)
+        if side in ("SHORT", "LONG"):
+            return side
     return "LONG"
+
+
+def _hold_counterfactual_direction(decision: Any) -> str:
+    """Dirección del bracket contrafactual para HOLD (LONG spot / SHORT en futuros bajista)."""
+    from_bracket = _direction_from_output_bracket(decision)
+    if from_bracket is not None:
+        return from_bracket
+
+    out = decision.output or {}
+    inp = decision.input or {}
+    regime = out.get("regime") or inp.get("regime") or "RANGE"
+    trading_product = str(inp.get("trading_product") or "spot").lower()
+    signal = hold_signal_direction(regime, trading_product)
+    if signal == Direction.SHORT:
+        return "SHORT"
+    if signal == Direction.LONG:
+        return "LONG"
+    return "LONG"
+
+
+def _direction_from_output_bracket(decision: Any) -> str | None:
+    """Si el output declara SL/TP válidos, inferir LONG vs SHORT por geometría."""
+    out = decision.output or {}
+    inp = decision.input or {}
+    sl_raw, tp_raw = out.get("stop_loss"), out.get("take_profit")
+    if sl_raw is None or tp_raw is None:
+        return None
+    try:
+        price = float(inp["price"])
+        sl = float(sl_raw)
+        tp = float(tp_raw)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    if tp < price < sl:
+        return "SHORT"
+    if sl < price < tp:
+        return "LONG"
+    return None
 
 
 def _compute_mfe_mae(

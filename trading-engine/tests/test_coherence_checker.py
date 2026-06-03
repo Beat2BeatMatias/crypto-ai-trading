@@ -274,6 +274,24 @@ class TestC6HoldingVsProfile:
         # THEN
         assert c6 == []
 
+    def test_c5p_warning_when_short_low_confidence_without_tag(self):
+        decision = _short(
+            confidence_base=0.42,
+            confidence_adjustment=0.0,
+            confidence=0.42,
+            reasoning="[DECISION] short sin tags",
+        )
+        warnings = CoherenceChecker().evaluate(decision, _ctx())
+        c5p = [w for w in warnings if w.rule_id == "C5P"]
+        assert len(c5p) == 1
+
+    def test_c6_applies_to_short_holding_out_of_range(self):
+        decision = _short(expected_holding_min=500)
+        ctx = _ctx(block_a_profile="HIBRIDO", block_a_holding_range_min=30, block_a_holding_range_max=180)
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c6 = [w for w in warnings if w.rule_id == "C6"]
+        assert len(c6) == 1
+
 
 # ---------------------------------------------------------------------------
 # C7 — R:R real calculado en código

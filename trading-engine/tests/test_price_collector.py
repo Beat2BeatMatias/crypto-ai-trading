@@ -22,6 +22,7 @@ def _sqlite_safe_metadata() -> MetaData:
         "ohlcv", meta,
         Column("time", DateTime(timezone=True), primary_key=True),
         Column("timeframe", String(4), primary_key=True),
+        Column("market", String(8), primary_key=True),
         Column("open", Numeric(18, 8)),
         Column("high", Numeric(18, 8)),
         Column("low", Numeric(18, 8)),

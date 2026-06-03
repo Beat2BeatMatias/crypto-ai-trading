@@ -59,6 +59,23 @@ async def test_health_postgres_section_present(client):
     assert "postgres" in body, "postgres ausente en /api/health"
 
 
+async def test_health_trading_section_present(client):
+    r = await client.get("/api/health")
+    body = r.json()
+    trading = body.get("trading")
+    if trading is not None:
+        for key in (
+            "mode",
+            "trading_product",
+            "effective_trading_product",
+            "runtime_mismatch",
+            "runtime_mismatch_reason",
+            "runtime_mismatch_detail",
+            "binance_testnet",
+        ):
+            assert key in trading, f"trading.{key} ausente en /api/health"
+
+
 async def test_health_llm_latency_present(client):
     """La sección llm incluye latency_ms o es null (SQLite no soporta PERCENTILE_CONT)."""
     r = await client.get("/api/health")

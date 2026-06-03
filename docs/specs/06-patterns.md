@@ -405,16 +405,18 @@ def get_settings() -> EngineSettings:
 
 **Categoría**: LLM safety
 
-**Evidencia**: `trading-engine/risk/coherence_checker.py`, `trading-engine/agents/decisor.py` (two-pass).
+**Evidencia**: `trading-engine/risk/coherence_checker.py`, `shared/confluence_direction.py`, `trading-engine/agents/decisor.py` (two-pass).
 
 ```python
 warnings = coherence_checker.evaluate(output, indicators_ctx)
-if warnings and strict_mode and any(w.rule_id in ("C1", "C2", "C3") for w in warnings):
+if warnings and strict_mode and any(
+    w.rule_id in ("C1", "C2", "C3", "C1P", "C2P", "C3P") for w in warnings
+):
     return _hold_decision("coherence_strict")
 output = output.model_copy(update={"coherence_warnings": [w.__dict__ for w in warnings]})
 ```
 
-**Cuándo usar**: auditar inconsistencias lógicas del LLM (declaración vs datos) **sin reescribir silenciosamente** la decisión. Los warnings se persisten y se inyectan al ciclo siguiente (Bloque G). En `strict_mode`, C1/C2/C3 fuerzan HOLD. Reemplaza el patrón legacy de overrides deterministas (eliminado en v1.3).
+**Cuándo usar**: auditar inconsistencias lógicas del LLM (declaración vs datos) **sin reescribir silenciosamente** la decisión. **C8** valida `verify_spec` de K–Z; **C9** valida etiqueta `[LONG]`/`[SHORT]`/`[AMBOS]` vs `action`. Los warnings se persisten y se inyectan al ciclo siguiente (Bloque G). En `strict_mode`, reglas factuales alcistas/bajistas fuerzan HOLD. Reemplaza overrides deterministas (eliminado en v1.3).
 
 ---
 
@@ -494,7 +496,7 @@ async def outcome_attribution_tick(...):
 
 Flujo interno del tick post-mortem:
 
-1. Query outcomes elegibles (`BAD_BUY`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) con `postmortem_status IS NULL` **o** `failed` con `< 3` intentos (`lesson_raw._meta.attempts`).
+1. Query outcomes elegibles (`BAD_BUY`, `BAD_SHORT`, `BAD_SELL`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`) con `postmortem_status IS NULL` **o** `failed` con `< 3` intentos (`lesson_raw._meta.attempts`).
 2. Orden por `severity_score` DESC; tomar hasta `postmortem_max_per_tick` (**1 llamada LLM por decisión**).
 3. `PostMortemAgent` con cascade primary + `postmortem_fallback_providers` → `coerce_lesson_raw()` → `LessonRaw`.
 4. `lesson_normalizer.normalize()` → ruta `remap` | `candidate` | `guidance`.
@@ -509,7 +511,7 @@ Flujo interno del tick post-mortem:
 3. Parseo defensivo (`coerce_lesson_raw`) antes de Pydantic — tolera arrays heterogéneos del LLM.
 4. Fallback CSV configurable independiente del Decisor/Supervisor (evita agotar cuota de un solo modelo).
 5. Normalizador determinístico que clasifica la salida en rutas con efectos distintos (prompt vs. candidato vs. remap).
-6. Promoción a producción (I–Z) separada con criterios P1–P6 y aprobación Supervisor u operador.
+6. Promoción a producción (**K–Z**) separada con criterios P1–P6, etiqueta direccional en `definition_md`, y aprobación Supervisor u operador.
 
 ---
 

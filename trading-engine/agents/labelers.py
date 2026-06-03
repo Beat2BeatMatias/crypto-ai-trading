@@ -38,6 +38,12 @@ _PROFILE_CONFLUENCES: dict[OperationalProfile, list[str]] = {
     "DAY_TRADING": ["B", "C", "G"],
 }
 
+_PROFILE_CONFLUENCES_FUTURES_SHORT: dict[OperationalProfile, list[str]] = {
+    "SCALPING":    ["I", "D", "F"],
+    "HIBRIDO":     ["I", "J", "C"],
+    "DAY_TRADING": ["I", "J", "G"],
+}
+
 
 def get_operational_profile(decisor_interval_min: int,
                             atr_timeframe: str) -> OperationalProfile:
@@ -56,8 +62,31 @@ def get_profile_holding_range(profile: OperationalProfile) -> tuple[int, int]:
     return _PROFILE_HOLDING_RANGE[profile]
 
 
-def get_profile_confluences(profile: OperationalProfile) -> list[str]:
-    return _PROFILE_CONFLUENCES[profile]
+def get_profile_confluences(
+    profile: OperationalProfile,
+    *,
+    trading_product: str = "spot",
+) -> list[str]:
+    long_codes = list(_PROFILE_CONFLUENCES[profile])
+    if trading_product != "futures":
+        return long_codes
+    merged = long_codes + [
+        c for c in _PROFILE_CONFLUENCES_FUTURES_SHORT[profile]
+        if c not in long_codes
+    ]
+    return merged
+
+
+def format_profile_confluences_prompt(
+    profile: OperationalProfile,
+    *,
+    trading_product: str = "spot",
+) -> str:
+    long_part = ", ".join(_PROFILE_CONFLUENCES[profile])
+    if trading_product != "futures":
+        return long_part
+    short_part = ", ".join(_PROFILE_CONFLUENCES_FUTURES_SHORT[profile])
+    return f"BUY/LONG: {long_part} | SHORT (futuros): {short_part}"
 
 
 # ---------------------------------------------------------------------------

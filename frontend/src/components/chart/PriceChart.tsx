@@ -18,7 +18,7 @@ import { type LinePoint } from "./indicators";
 
 import { api } from "../../api/client";
 import { useWebSocket, type WSEvent } from "../../hooks/useWebSocket";
-import type { Candle, Timeframe, Trade, DecisionOutcome } from "../../types";
+import type { Candle, Timeframe, Trade, DecisionOutcome, TradingProduct } from "../../types";
 import { tradeDirection } from "../../lib/pnl";
 import ReasoningBlock from "../ReasoningBlock";
 import { TIMEFRAMES, bucketStart, timeframeFromConfigMinutes, timeframeSeconds } from "./timeframe";
@@ -90,9 +90,20 @@ function toCandlestickData(candles: Candle[]): CandlestickData[] {
 interface PriceChartProps {
   defaultTimeframe?: Timeframe;
   height?: number;
+  tradingProduct?: TradingProduct | null;
+  chartLabel?: string | null;
 }
 
-export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) {
+export function PriceChart({
+  defaultTimeframe,
+  height = 540,
+  tradingProduct = "spot",
+  chartLabel,
+}: PriceChartProps) {
+  const ohlcvMarket: "spot" | "futures" =
+    tradingProduct === "futures" ? "futures" : "spot";
+  const displayLabel =
+    chartLabel ?? (ohlcvMarket === "futures" ? "BTC/USDT Perp" : "BTC/USDT");
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -300,12 +311,15 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api.ohlcv(timeframe, 400)
+    setCandles([]);
+    setLivePrice(null);
+    lastCandleRef.current = null;
+    api.ohlcv(timeframe, 400, ohlcvMarket)
       .then((data) => { if (!cancelled) setCandles(data); })
       .catch(() => { if (!cancelled) setCandles([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [timeframe]);
+  }, [timeframe, ohlcvMarket]);
 
   useEffect(() => {
     const refresh = () => {
@@ -628,7 +642,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
         lastCandleRef.current = fresh;
         const sinceLastFetch = nowSec - (current.time as number);
         if (sinceLastFetch >= timeframeSeconds(timeframe)) {
-          api.ohlcv(timeframe, 400).then(setCandles).catch(() => {});
+          api.ohlcv(timeframe, 400, ohlcvMarket).then(setCandles).catch(() => {});
         }
       } else {
         // Limitar extensión de bigotes: solo mover high/low si el precio
@@ -670,7 +684,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
         }))))
         .catch(() => {});
     }
-  }, [last, timeframe]);
+  }, [last, timeframe, ohlcvMarket]);
 
   const fmtPrice = (v: number) =>
     v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -680,7 +694,12 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
       {/* Header: símbolo, precio live, timeframes */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-sm font-bold text-white tracking-wide">BTC/USDT</span>
+          <span className="text-sm font-bold text-white tracking-wide">{displayLabel}</span>
+          {ohlcvMarket === "futures" && (
+            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-900/50 text-violet-200">
+              Futuros USDT-M
+            </span>
+          )}
           {livePrice != null && (
             <span className="text-xl font-mono font-bold" style={{ color: COLORS.bullish }}>
               {fmtPrice(livePrice)}

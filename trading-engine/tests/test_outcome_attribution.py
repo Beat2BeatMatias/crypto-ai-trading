@@ -113,6 +113,100 @@ def test_compute_mfe_mae_drop_then_recover():
     assert t_mfe == 2
 
 
+def test_hold_futures_trending_down_classifies_missed_short_opportunity():
+    """HOLD en futuros bajista: caída que llena TP short → MISSED_OPPORTUNITY."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0,
+            "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3,
+            "min_rr_ratio": 1.3,
+            "trading_product": "futures",
+        },
+        output={"action": "HOLD", "regime": "TRENDING_DOWN"},
+        ts=t0,
+    )
+    candles = _dense_candles(
+        t0,
+        horizon_min=240,
+        peaks=[{"min": 5, "high": 100.1, "low": 99.5, "close": 99.6}],
+    )
+    result = attribute(
+        decision=decision,
+        ohlcv_1m=candles,
+        associated_trade=None,
+        horizon_min=240,
+        now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "MISSED_OPPORTUNITY"
+    assert result.tp_target_pct == pytest.approx(0.39, abs=1e-3)
+
+
+def test_hold_spot_trending_down_same_drop_not_missed_short():
+    """Spot sin short: misma caída no cuenta como MISSED (contrafactual sigue LONG)."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0,
+            "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3,
+            "min_rr_ratio": 1.3,
+            "trading_product": "spot",
+        },
+        output={"action": "HOLD", "regime": "TRENDING_DOWN"},
+        ts=t0,
+    )
+    candles = _dense_candles(
+        t0,
+        horizon_min=240,
+        peaks=[{"min": 5, "high": 100.1, "low": 99.5, "close": 99.6}],
+    )
+    result = attribute(
+        decision=decision,
+        ohlcv_1m=candles,
+        associated_trade=None,
+        horizon_min=240,
+        now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "GOOD_HOLD"
+
+
+def test_hold_futures_uses_short_bracket_from_output_levels():
+    """HOLD con SL/TP short en output: MISSED aunque régimen no sea TRENDING_DOWN."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0,
+            "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3,
+            "min_rr_ratio": 1.3,
+            "trading_product": "futures",
+        },
+        output={
+            "action": "HOLD",
+            "regime": "RANGE",
+            "stop_loss": 101.0,
+            "take_profit": 99.0,
+        },
+        ts=t0,
+    )
+    candles = _dense_candles(
+        t0,
+        horizon_min=240,
+        peaks=[{"min": 3, "high": 100.2, "low": 98.9, "close": 99.1}],
+    )
+    result = attribute(
+        decision=decision,
+        ohlcv_1m=candles,
+        associated_trade=None,
+        horizon_min=240,
+        now=t0 + timedelta(hours=5),
+    )
+    assert result.classification == "MISSED_OPPORTUNITY"
+    assert result.tp_target_pct == pytest.approx(1.0, abs=1e-3)
+
+
 def test_classify_hold_as_missed_when_mfe_exceeds_target_and_no_sl_hit():
     """AC OA-02: price_t=100, atr_pct=1.0, sl_mult=0.3, rr=1.3 → SL_dist=0.3%, TP_target=0.39%.
     MFE +0.5% > tp_target, MAE -0.05% > -SL_dist, MFE alcanzado primero → MISSED_OPPORTUNITY.

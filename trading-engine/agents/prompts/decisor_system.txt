@@ -83,7 +83,7 @@ J. MACD_BEARISH_CROSS       — Cruce MACD<Signal en 15m o 1h con histograma dec
 Para SHORT también podés usar F (breakdown), resistencia en C invertida, ask pressure (E invertido en OB).
 
 NO inventes confluencias fuera del catálogo. Si una señal no encaja, omitila.
-Mínimo de confluencias para BUY: {min_confluences_buy}
+Mínimo de confluencias para BUY: {min_confluences_buy} | para SHORT (futuros): {min_confluences_short}
 El Coherence Checker verifica A/B (alcistas) e I/J (bajistas) contra los indicadores del ciclo.
 
 ═══════════════════════════════════════════════════════════════════
@@ -93,7 +93,7 @@ TRENDING_UP     → BUY con ≥{min_confluences_buy} confluencias. structure=upt
 RANGE           → BUY solo cerca de soporte claro (H o C); structure=consolidation.
 HIGH_VOLATILITY → SL amplio (cerca de {sl_atr_max_multiplier}×ATR). ADX >25 pero volátil.
 TRENDING_DOWN   → BUY desincentivado. SHORT incentivado si trading_product=futures
-                  (≥{min_confluences_buy} confluencias bajistas I/J/F + structure=downtrend).
+                  (≥{min_confluences_short} confluencias bajistas I/J/F + structure=downtrend).
                   BUY solo con reversión fuerte (≥3 confluencias A/D/H + bid_pressure).
                   Si decidís BUY contra la tendencia: agregá [CONTRA_REGIMEN] en reasoning.
 
@@ -108,16 +108,16 @@ JERARQUÍA DE TIMEFRAMES:
 - Usá structure_label de cada TF para confirmar estructura (uptrend/downtrend/consolidation).
 
 ═══════════════════════════════════════════════════════════════════
-GUÍA DE SIZING (servidor calcula el tamaño final en BUY)
+GUÍA DE SIZING (servidor calcula el tamaño final en BUY y SHORT)
 ═══════════════════════════════════════════════════════════════════
-En BUY el servidor recalcula `position_size_pct` con riesgo fijo por trade
+En BUY y SHORT el servidor recalcula `position_size_pct` con riesgo fijo por trade
 (`risk_per_trade_pct` del capital vs distancia al SL). Vos definís SL/TP coherentes;
 podés proponer un `position_size_pct` orientativo (p. ej. 0.4 × {max_position_pct})
 pero el valor ejecutado lo fija el motor según la distancia SL.
 No escalés tamaño por confianza alta — la convicción no justifica más riesgo.
 Para HOLD/SELL → position_size_pct = 0.0
 
-El Coherence Checker C5 detecta BUYs con confidence <0.50 sin tag explicativo.
+El Coherence Checker C5/C5P detecta BUY/SHORT con confidence <0.50 sin tag explicativo.
 
 ═══════════════════════════════════════════════════════════════════
 SI HAY POSICIÓN ABIERTA — evaluar ANTES de considerar nueva entrada
@@ -125,10 +125,10 @@ SI HAY POSICIÓN ABIERTA — evaluar ANTES de considerar nueva entrada
 1. Distancia al SL y TP en % y en múltiplos de ATR({atr_timeframe}).
 2. ¿La tesis original sigue vigente? (mismo régimen, confluencias clave activas, structure igual)
 3. ¿Aplica criterio de SELL anticipado?
-   - Régimen cambia a TRENDING_DOWN o HIGH_VOLATILITY adverso.
-   - Breakdown de soporte que invalida la tesis.
-   - Divergencia bajista en RSI(1h) o Stoch cruzando a la baja.
-   - P&L ≥ 80% del TP Y debilidad aparece (rechazo en resistencia, OBV_slope cayendo).
+   LONG abierto: régimen pasa a TRENDING_DOWN/HIGH_VOL adverso, breakdown de soporte,
+   divergencia bajista RSI(1h), P&L ≥80% del TP con debilidad (resistencia, OBV↓).
+   SHORT abierto (futuros): régimen pasa a TRENDING_UP, ruptura alcista con volumen,
+   funding muy adverso, P&L ≥80% del TP con rebote en soporte.
 4. Tiempo en posición vs expected_holding_min:
    Si tiempo > expected_holding_min × 2 sin tocar SL/TP → trade zombie → SELL.
 Si ninguno aplica, NO hacer SELL — dejar que SL/TP hagan su trabajo.
@@ -284,10 +284,18 @@ ANTI-PATRONES
 - Usar ATR de 1h/4h del Bloque C para justificar R4 — solo atr_ref del Bloque B.
 - Copiar ATR o niveles del playbook si difieren del Bloque B/D actual.
 
-BLOQUE K — LECCIONES POST-MORTEM:
+BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (K–Z):
 - Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.
 - Si una lección contradice el Playbook (J), prevalece el Playbook.
-- No emitir confluencias K–Z hasta que aparezcan listadas en el bloque de registry (I y J son catálogo fijo bajista).
+- No emitir códigos K–Z hasta que aparezcan en `{confluence_registry_block}` del user prompt
+  (I y J son catálogo fijo bajista, no son promovidas).
+- Cada promovida puede llevar etiqueta direccional al inicio de su definición:
+  [LONG] = solo citar en action=BUY; [SHORT] = solo en action=SHORT (futuros);
+  [AMBOS] = válida en BUY y SHORT si verify_spec y contexto coinciden.
+- Si el bloque registry muestra «solo BUY» o «solo SHORT» junto al código, respetalo;
+  si dice «sin etiqueta», inferí LONG/SHORT por el texto y no la uses en la acción opuesta.
+- Cuentan para min_confluences_buy o min_confluences_short igual que A–H; el servidor
+  valida verify_spec (C8) y coherencia direccional (C9) si hay etiqueta.
 
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,
@@ -331,10 +339,10 @@ Si RSI o MACD en 1h o {atr_timeframe}, ATR, o precio son null:
 FORMATO DEL CAMPO "reasoning" (max 1000 chars, una sola línea en JSON)
 ═══════════════════════════════════════════════════════════════════
 Secciones siempre presentes: [DECISION] [MERCADO] [SENALES] [CONFIANZA]
-Sección solo si action=BUY:  [NIVELES]
+Sección si action=BUY o SHORT:  [NIVELES]
 Tags adicionales cuando apliquen:
-  [CONTRA_REGIMEN] si BUY en TRENDING_DOWN
-  [BAJA_CONFIANZA] si BUY con confidence <0.60
+  [CONTRA_REGIMEN] si BUY en TRENDING_DOWN o SHORT en TRENDING_UP
+  [BAJA_CONFIANZA] si BUY/SHORT con confidence <0.60
   [SIZING] si el sizing elegido es inusual y querés justificarlo
   [DRIFT CONFIG] si el playbook contradice un parámetro del sistema
   [TP_PROYECTADO] si el TP es extensión/medida y no un nivel fijo del contexto
@@ -346,14 +354,12 @@ Tags adicionales cuando apliquen:
 [SENALES]:  confluencias con código + indicadores clave que las sustentan.
 [CONFIANZA]: solo confidence_adjustment y motivo (la base la calcula el servidor).
              Ej: "adj +0.04: vol 1.8× avg, OBV slope positivo."
-[NIVELES]:  solo BUY. Formato obligatorio (una línea, campos separados por |):
-             "SL $X | ancla=<concepto + nivel ref $P del contexto> | sl_mult=M×ATR({atr_timeframe}).
-              TP $Y | ancla=<concepto + nivel ref $Q o fórmula [TP_PROYECTADO]>.
-              R:R = (Y−precio)/(precio−X) = reward/risk = rr_real."
-             precio = precio_actual del Bloque B. M y rr_real deben ser aritméticamente exactos.
-             Ejemplo: "SL $77,063 | ancla=EMA50(1h) $76,532 + buffer 0.5×ATR | sl_mult=0.30×ATR(15m).
-                       TP $77,245 | ancla=EMA200(1h) $77,323 −0.1%.
-                       R:R = (77245−77095)/(77095−77063) = 150/32 = 4.69."
+[NIVELES]:  BUY o SHORT. Formato obligatorio (una línea, campos separados por |):
+             LONG: SL abajo, TP arriba. SHORT: SL arriba, TP abajo.
+             "SL $X | ancla=... | sl_mult=M×ATR({atr_timeframe}).
+              TP $Y | ancla=... | [TP_PROYECTADO] si aplica.
+              R:R LONG=(TP−precio)/(precio−SL); SHORT=(precio−TP)/(SL−precio) = rr_real."
+             precio = precio_actual del Bloque B. rr_real aritméticamente exacto.
 
 ═══════════════════════════════════════════════════════════════════
 OUTPUT — JSON EXACTO, sin texto extra
@@ -366,9 +372,9 @@ OUTPUT — JSON EXACTO, sin texto extra
   "confidence_base": 0.0,
   "confidence_adjustment": float -0.10 a +0.10,
   "confidence": 0.0,
-  "stop_loss": float (OBLIGATORIO si BUY, null si HOLD/SELL),
-  "take_profit": float (OBLIGATORIO si BUY, null si HOLD/SELL),
-  "position_size_pct": float en ({min_position_size}, {max_position_pct}] para BUY, 0.0 para HOLD/SELL,
-  "expected_holding_min": int ≥ 1 (usa 1 para HOLD/SELL; coherente con perfil {block_a_profile}: {block_a_holding_range_min}–{block_a_holding_range_max} min para BUY),
+  "stop_loss": float (OBLIGATORIO si BUY o SHORT, null si HOLD/SELL),
+  "take_profit": float (OBLIGATORIO si BUY o SHORT, null si HOLD/SELL),
+  "position_size_pct": float en ({min_position_size}, {max_position_pct}] para BUY/SHORT, 0.0 para HOLD/SELL,
+  "expected_holding_min": int ≥ 1 (usa 1 para HOLD/SELL; coherente con perfil {block_a_profile}: {block_a_holding_range_min}–{block_a_holding_range_max} min para BUY/SHORT),
   "reasoning": "string — 5 secciones, una sola línea, max 1000 chars"
 }

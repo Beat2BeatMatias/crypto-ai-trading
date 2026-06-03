@@ -28,6 +28,7 @@ _ohlcv_table = Table(
     "ohlcv", _sqlite_metadata,
     Column("time", DateTime, primary_key=True),
     Column("timeframe", String(4), primary_key=True),
+    Column("market", String(8), primary_key=True, default="spot"),
     Column("open", Numeric(18, 8)),
     Column("high", Numeric(18, 8)),
     Column("low", Numeric(18, 8)),
@@ -408,6 +409,50 @@ async def test_volume_keys_default_to_zero_when_no_data(session: AsyncSession):
     assert ctx["volume_current"] == pytest.approx(0.0)
     assert ctx["volume_avg20"] == pytest.approx(0.0)
     assert ctx["volume_ratio"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_volume_fallback_when_atr_tf_missing_from_indicators(session: AsyncSession):
+    # GIVEN atr_timeframe=10m (config) but indicators only on 5m/1h (no bucket 10m)
+    now = datetime.now(tz=timezone.utc)
+    session.add(Indicators(
+        time=now,
+        data={
+            "5m": {
+                "last_close": 66000.0,
+                "volume_current": 80.0,
+                "volume_avg_20": 200.0,
+                "atr": 200.0,
+                "rsi": 50.0,
+                "macd": 1.0,
+                "macd_signal": 0.0,
+                "macd_hist": 1.0,
+                "ema20": 66000.0,
+                "ema50": 66000.0,
+                "ema200": 66000.0,
+            },
+            "1h": {
+                "last_close": 66000.0,
+                "atr": 500.0,
+                "rsi": 40.0,
+                "macd": -1.0,
+                "macd_signal": 0.0,
+                "macd_hist": -1.0,
+                "ema20": 66000.0,
+                "ema50": 66000.0,
+                "ema200": 66000.0,
+            },
+        },
+    ))
+    await session.commit()
+
+    ctx = await _build(session, atr_timeframe="10m", decisor_interval_min=5)
+
+    assert ctx["volume_tf"] == "5m"
+    assert ctx["volume_current"] == pytest.approx(80.0)
+    assert ctx["volume_avg20"] == pytest.approx(200.0)
+    assert ctx["volume_ratio"] == pytest.approx(0.4)
+    assert ctx["volume_ratio_5m"] == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio

@@ -38,8 +38,14 @@ def test_quality_factor_with_g_is_one():
     assert quality_factor(["B", "C"]) == pytest.approx(0.85)
 
 
-def test_regime_factor_trending_down_is_zero():
-    assert regime_factor(MarketRegime.TRENDING_DOWN, {}) == pytest.approx(0.0)
+def test_regime_factor_trending_down_long_is_zero():
+    assert regime_factor(
+        MarketRegime.TRENDING_DOWN, {}, direction=Direction.LONG,
+    ) == pytest.approx(0.0)
+
+
+def test_regime_factor_neutral_when_direction_unknown():
+    assert regime_factor(MarketRegime.TRENDING_DOWN, {}) == pytest.approx(0.85)
 
 
 def test_regime_factor_short_favors_trending_down():
@@ -47,7 +53,7 @@ def test_regime_factor_short_favors_trending_down():
     assert regime_factor(MarketRegime.TRENDING_DOWN, cal, direction=Direction.SHORT) > 0.5
     assert regime_factor(MarketRegime.TRENDING_UP, cal, direction=Direction.SHORT) == 0.0
     assert regime_factor(MarketRegime.TRENDING_DOWN, cal, direction=Direction.LONG) == 0.0
-    assert regime_factor(MarketRegime.TRENDING_UP, cal) == 1.0
+    assert regime_factor(MarketRegime.TRENDING_UP, cal, direction=Direction.LONG) == 1.0
 
 
 def test_compute_confidence_base_two_confluences_range():
@@ -79,6 +85,29 @@ def test_apply_server_confidence_overrides_llm_base_and_recomputes_confidence():
     assert updated.confidence_adjustment == pytest.approx(0.05)
     assert updated.confidence == pytest.approx(updated.confidence_base + 0.05)
     assert "confluences_dropped" not in meta
+
+
+def test_hold_trending_down_futures_uses_short_regime_factor():
+    decision = _hold_output(
+        regime="TRENDING_DOWN",
+        confluences=["B", "C"],
+    )
+    updated, meta = apply_server_confidence(
+        decision, calibration={}, trading_product="futures",
+    )
+    assert meta["regime_factor"] == pytest.approx(1.0)
+    assert meta.get("hold_signal_direction") == "SHORT"
+    assert updated.confidence_base == pytest.approx(0.70 * 0.85 * 1.0)
+    assert updated.confidence > 0.0
+
+
+def test_hold_trending_down_spot_uses_neutral_regime_factor():
+    decision = _hold_output(regime="TRENDING_DOWN", confluences=["A", "C"])
+    updated, meta = apply_server_confidence(
+        decision, calibration={}, trading_product="spot",
+    )
+    assert meta["regime_factor"] == pytest.approx(0.85)
+    assert updated.confidence_base > 0.0
 
 
 def test_apply_server_confidence_records_dropped_codes():

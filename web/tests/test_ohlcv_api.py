@@ -8,6 +8,7 @@ async def _create_candle(session_factory, **kwargs):
     defaults = dict(
         time=datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc),
         timeframe="5m",
+        market="spot",
         open=Decimal("50000.00"),
         high=Decimal("50200.00"),
         low=Decimal("49900.00"),
@@ -42,6 +43,28 @@ async def test_list_ohlcv_returns_candles_in_chronological_order(client, app_wit
     assert len(data) == 3
     closes = [c["close"] for c in data]
     assert closes == [50000.0, 50100.0, 50200.0]
+
+
+async def test_list_ohlcv_filters_by_market(client, app_with_db):
+    base_ts = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+    await _create_candle(
+        app_with_db.state.session_factory,
+        time=base_ts,
+        market="spot",
+        close=Decimal("50000"),
+    )
+    await _create_candle(
+        app_with_db.state.session_factory,
+        time=base_ts + timedelta(minutes=5),
+        market="futures",
+        close=Decimal("50100"),
+    )
+
+    r = await client.get("/api/ohlcv?timeframe=5m&market=futures")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["close"] == 50100.0
 
 
 async def test_list_ohlcv_filters_by_timeframe(client, app_with_db):

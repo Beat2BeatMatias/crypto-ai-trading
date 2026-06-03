@@ -10,6 +10,8 @@ from sqlalchemy import MetaData, Table, Column, String, Integer, Boolean, DateTi
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from shared.confluence_registry_ops import EXTENDED_LETTERS
+
 from agents.confluence_registry import (
     active_registry_codes,
     evaluate_verify_spec,
@@ -77,6 +79,40 @@ def test_evaluate_verify_spec_all_and_any():
 def test_verify_spec_testable_rejects_unknown_ctx():
     assert verify_spec_testable({"all": [{"ctx": "unknown_key", "exists": True}]}) is False
     assert verify_spec_testable({"all": [{"ctx": "rsi_15m", "lt": 35}]}) is True
+
+
+def test_extended_letters_exclude_static_ij():
+    assert "I" not in EXTENDED_LETTERS
+    assert "J" not in EXTENDED_LETTERS
+    assert "K" in EXTENDED_LETTERS
+
+
+def test_active_registry_codes_excludes_static_collisions():
+    from datetime import datetime, timezone
+    from shared.db.models import ConfluenceRegistry
+
+    now = datetime.now(tz=timezone.utc)
+    entries = [
+        ConfluenceRegistry(
+            code="I",
+            slug="bad_i",
+            title="Should not appear",
+            definition_md="x",
+            verify_spec={},
+            active=True,
+            created_at=now,
+        ),
+        ConfluenceRegistry(
+            code="K",
+            slug="ok_k",
+            title="OK",
+            definition_md="y",
+            verify_spec={},
+            active=True,
+            created_at=now,
+        ),
+    ]
+    assert active_registry_codes(entries) == frozenset({"K"})
 
 
 def test_render_registry_block_empty():

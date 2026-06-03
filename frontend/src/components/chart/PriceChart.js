@@ -48,7 +48,9 @@ function toCandlestickData(candles) {
         close: c.close,
     }));
 }
-export function PriceChart({ defaultTimeframe, height = 540 }) {
+export function PriceChart({ defaultTimeframe, height = 540, tradingProduct = "spot", chartLabel, }) {
+    const ohlcvMarket = tradingProduct === "futures" ? "futures" : "spot";
+    const displayLabel = chartLabel ?? (ohlcvMarket === "futures" ? "BTC/USDT Perp" : "BTC/USDT");
     const containerRef = useRef(null);
     const chartRef = useRef(null);
     const candleSeriesRef = useRef(null);
@@ -239,7 +241,10 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
-        api.ohlcv(timeframe, 400)
+        setCandles([]);
+        setLivePrice(null);
+        lastCandleRef.current = null;
+        api.ohlcv(timeframe, 400, ohlcvMarket)
             .then((data) => { if (!cancelled)
             setCandles(data); })
             .catch(() => { if (!cancelled)
@@ -247,7 +252,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
             .finally(() => { if (!cancelled)
             setLoading(false); });
         return () => { cancelled = true; };
-    }, [timeframe]);
+    }, [timeframe, ohlcvMarket]);
     useEffect(() => {
         const refresh = () => {
             api.trades({ status: "open" }).then(setOpenTrades).catch(() => { });
@@ -549,7 +554,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
                 lastCandleRef.current = fresh;
                 const sinceLastFetch = nowSec - current.time;
                 if (sinceLastFetch >= timeframeSeconds(timeframe)) {
-                    api.ohlcv(timeframe, 400).then(setCandles).catch(() => { });
+                    api.ohlcv(timeframe, 400, ohlcvMarket).then(setCandles).catch(() => { });
                 }
             }
             else {
@@ -590,9 +595,9 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
             }))))
                 .catch(() => { });
         }
-    }, [last, timeframe]);
+    }, [last, timeframe, ohlcvMarket]);
     const fmtPrice = (v) => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return (_jsxs("div", { className: "rounded-xl overflow-hidden", style: { background: "#0b0e11" }, children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2", children: [_jsxs("div", { className: "flex items-center gap-3 min-w-0", children: [_jsx("span", { className: "text-sm font-bold text-white tracking-wide", children: "BTC/USDT" }), livePrice != null && (_jsx("span", { className: "text-xl font-mono font-bold", style: { color: COLORS.bullish }, children: fmtPrice(livePrice) })), loading && _jsx("span", { className: "text-xs", style: { color: "#848e9c" }, children: "cargando\u2026" })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("div", { className: "inline-flex rounded gap-0.5", style: { background: "#1e2026" }, children: TIMEFRAMES.map((tf) => (_jsx("button", { onClick: () => setTimeframe(tf), className: "px-2.5 py-1 text-xs font-medium rounded transition-colors", style: timeframe === tf
+    return (_jsxs("div", { className: "rounded-xl overflow-hidden", style: { background: "#0b0e11" }, children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2", children: [_jsxs("div", { className: "flex items-center gap-3 min-w-0", children: [_jsx("span", { className: "text-sm font-bold text-white tracking-wide", children: displayLabel }), ohlcvMarket === "futures" && (_jsx("span", { className: "text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-900/50 text-violet-200", children: "Futuros USDT-M" })), livePrice != null && (_jsx("span", { className: "text-xl font-mono font-bold", style: { color: COLORS.bullish }, children: fmtPrice(livePrice) })), loading && _jsx("span", { className: "text-xs", style: { color: "#848e9c" }, children: "cargando\u2026" })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("div", { className: "inline-flex rounded gap-0.5", style: { background: "#1e2026" }, children: TIMEFRAMES.map((tf) => (_jsx("button", { onClick: () => setTimeframe(tf), className: "px-2.5 py-1 text-xs font-medium rounded transition-colors", style: timeframe === tf
                                         ? { background: "#2b3139", color: "#f0b90b" }
                                         : { color: "#848e9c" }, children: tf }, tf))) }), _jsxs("div", { className: "inline-flex rounded gap-0.5 text-xs", style: { background: "#1e2026" }, children: [_jsx(Toggle, { label: "EMA", active: showOverlays.emas, onClick: () => setShowOverlays((s) => ({ ...s, emas: !s.emas })) }), _jsx(Toggle, { label: "BB", active: showOverlays.bb, onClick: () => setShowOverlays((s) => ({ ...s, bb: !s.bb })) }), _jsx(Toggle, { label: "Trades", active: showOverlays.closedTrades, onClick: () => setShowOverlays((s) => ({ ...s, closedTrades: !s.closedTrades })) }), _jsx(Toggle, { label: "Se\u00F1ales", active: showOverlays.decisions, onClick: () => setShowOverlays((s) => ({ ...s, decisions: !s.decisions })) }), _jsx(Toggle, { label: "Outcomes", active: showOverlays.outcomes, onClick: () => setShowOverlays((s) => ({ ...s, outcomes: !s.outcomes })) })] })] })] }), showOverlays.emas && (indicatorValues.ema20 || indicatorValues.ema50 || indicatorValues.ema200) && (_jsxs("div", { className: "flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 pb-1.5 text-xs font-mono", children: [indicatorValues.ema20 != null && (_jsxs("span", { style: { color: COLORS.ema20 }, children: ["MA(20) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema20) })] })), indicatorValues.ema50 != null && (_jsxs("span", { style: { color: COLORS.ema50 }, children: ["MA(50) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema50) })] })), indicatorValues.ema200 != null && (_jsxs("span", { style: { color: COLORS.ema200 }, children: ["MA(200) ", _jsx("span", { className: "font-semibold", children: fmtPrice(indicatorValues.ema200) })] }))] })), _jsx("div", { ref: containerRef, style: { height } }), selectedDecisions.length > 0 && (_jsx(DecisionPanel, { decisions: selectedDecisions, onClose: () => setSelectedDecisions([]) })), _jsx(Legend, { openTrades: openTrades.length })] }));
 }

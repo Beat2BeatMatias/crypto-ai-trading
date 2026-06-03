@@ -7,7 +7,8 @@ Precio BTC/USDT: ${price:,.2f}
 Cambio:  1h {pct_1h:+.2f}%  |  4h {pct_4h:+.2f}%  |  24h {pct_24h:+.2f}%
 ATR({atr_ref_tf}): ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)  |  avg 7d: ${atr_avg_7d:.0f}  |  expanding={atr_expanding}
 Volatilidad: {volatility_label}
-Rango SL válido (R4): ${atr_ref_min:.0f}–${atr_ref_max:.0f} bajo el precio
+Rango SL válido (R4): LONG → ${atr_ref_min:.0f}–${atr_ref_max:.0f} bajo precio | SHORT (futuros) → mismo rango ARRIBA del precio
+Producto activo: {trading_product}
 
 ════════════════════════════════════════════
 BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
@@ -22,7 +23,7 @@ BLOQUE D — NIVELES CLAVE (referencia para anclar SL/TP — elección libre)
 Usá estos niveles como anclas según tu tesis; podés combinarlos, ajustarlos
 (±0.1% antes de un wall) o proyectar más allá con [TP_PROYECTADO] si la tesis
 (breakout F, extensión de rango, etc.) lo justifica. Siempre citá el nivel o
-fórmula en [NIVELES] y verificá R4/R5 antes de emitir BUY.
+fórmula en [NIVELES] y verificá R4/R5 antes de emitir BUY o SHORT.
 
 {block_d_text}
 
@@ -62,6 +63,9 @@ Trades hoy: {trades_today_count} ({wins_today}W / {losses_today}L)
 Posiciones abiertas: {open_positions_count} / {max_simultaneous_trades}
 {positions_block}
 
+Producto: {trading_product} | Funding rate: {funding_rate_pct}% | Margen disponible: ${available_margin:,.2f}
+Posición abierta (lado): {open_position_side} | Precio liquidación: {liquidation_price}
+
 ════════════════════════════════════════════
 BLOQUE I — CONFIG RIESGO (fuente de verdad de parámetros numéricos)
 ════════════════════════════════════════════
@@ -75,6 +79,7 @@ sl_atr_range:             [{sl_atr_multiplier}×, {sl_atr_max_multiplier}×] ATR
 fees round-trip:          {roundtrip_fee_pct:.4f}%  (R10 — 0%=testnet)
 min_fees_to_tp_ratio:     {min_fees_to_tp_ratio}×
 min_confluences_buy:      {min_confluences_buy}
+min_confluences_short:    {min_confluences_short}
 cooldown_after_sell_min:  {cooldown_after_sell_min}
 
 ════════════════════════════════════════════

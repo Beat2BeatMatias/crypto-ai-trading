@@ -26,10 +26,10 @@ Carpeta de especificaciones funcionales y técnicas del proyecto **Crypto AI Tra
 
 | Campo | Valor |
 |-------|-------|
-| Versión | 1.11 |
+| Versión | 1.13 |
 | Fecha de generación | 2026-05-14 |
 | Fecha de unificación | 2026-05-15 (incorpora reverse-engineering de `meli/specs/`) |
-| Última revisión | 2026-06-02 (futuros USDT-M, acción `SHORT`, `ExchangeAdapter`, reglas R12–R15, migración 016) |
+| Última revisión | 2026-06-02 (K–Z direccionales, C9, `min_confluences_short`, catálogo A–J vs K–Z, futuros/shorts v1.12) |
 | Alcance | Bot autónomo en paper trading (PAPER_TRADING) sobre Binance Testnet (Spot o Futures según `trading_product`), con roadmap a LIVE (mainnet). |
 | Owner | Equipo Crypto AI Trading |
 

@@ -30,12 +30,14 @@ def _apply_server_confidence(
     *,
     calibration: dict[str, Any],
     raw_confluences: list[str],
+    trading_product: str = "spot",
 ) -> tuple[DecisorOutput, dict[str, Any]]:
     dropped = [c for c in raw_confluences if c not in decision.confluences]
     return apply_server_confidence(
         decision,
         calibration=calibration,
         confluences_dropped=dropped or None,
+        trading_product=trading_product,
     )
 
 
@@ -368,7 +370,10 @@ class Decisor:
             if len(clean) != len(validated.confluences):
                 validated = validated.model_copy(update={"confluences": clean})
             validated, confidence_meta = _apply_server_confidence(
-                validated, calibration=cal, raw_confluences=raw_agg,
+                validated,
+                calibration=cal,
+                raw_confluences=raw_agg,
+                trading_product=ctx.get("trading_product", "spot"),
             )
             validated, position_meta = _apply_sizing_from_ctx(
                 validated, calibration=cal, ctx=ctx,
@@ -415,7 +420,10 @@ def _post_process_decision(
     if len(clean) != len(validated.confluences):
         validated = validated.model_copy(update={"confluences": clean})
     validated, confidence_meta = _apply_server_confidence(
-        validated, calibration=calibration, raw_confluences=raw_confluences,
+        validated,
+        calibration=calibration,
+        raw_confluences=raw_confluences,
+        trading_product=ctx.get("trading_product", "spot"),
     )
     position_meta = None
     if apply_sizing:

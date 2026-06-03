@@ -5,7 +5,7 @@ PLAYBOOK ACTIVO: v{previous_version} (edad: {playbook_age_days} días, baseline 
 MÉTRICAS DEL PERÍODO (últimas 24h):
   Trades cerrados: {closed_trades} | Win rate: {win_rate:.1f}% | Profit factor: {profit_factor:.2f}
   P&L total: ${total_pnl:+,.2f} | Max DD: ${max_dd_usdt:+,.2f} | Sharpe período: {sharpe_period:.2f}
-  Decisiones: BUY {buy_count} | SELL {sell_count} | HOLD {hold_count} | Rechazadas RG: {rejected_count}
+  Decisiones: BUY {buy_count} | SHORT {short_count} | SELL {sell_count} | HOLD {hold_count} | Rechazadas RG: {rejected_count}
 
 DISTRIBUCIÓN POR RÉGIMEN:
 {regime_distribution_block}
@@ -24,8 +24,8 @@ MERCADO:
 ANÁLISIS CONTRAFÁCTICO (últimas 24h, horizonte {expected_holding_max_min}min):
   Decisiones evaluadas: {evaluated_decisions} / {total_decisions}
   HOLDs missed: {missed_count} ({missed_rate:.1f}%)
-  BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%)
-  Bloqueados buenos (BUYs rechazados que hubieran ganado): {blocked_good_count}
+  BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%) | SHORTs malos: {bad_short_count} ({bad_short_rate:.1f}%)
+  Bloqueados buenos: {blocked_good_count}
 
 PLAYBOOK ACTIVO (extracto):
 {previous_playbook}

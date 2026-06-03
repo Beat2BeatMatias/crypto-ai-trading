@@ -441,6 +441,9 @@ docker-compose logs -f trading-engine
 # Aplicar migraciones (primera vez o después de un pull)
 docker-compose run --rm trading-engine alembic upgrade head
 
+# Restart trading engine
+docker-compose restart trading-engine
+
 # Tests
 docker-compose run --rm trading-engine pytest
 docker-compose run --rm web pytest

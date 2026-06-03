@@ -13,26 +13,52 @@ from ws.manager import manager
 logger = structlog.get_logger()
 router = APIRouter()
 
-_TESTNET = os.environ.get("BINANCE_TESTNET", "").lower() == "true"
-_PRICE_URL = (
-    "https://testnet.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
-    if _TESTNET
-    else "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-)
+_TESTNET = os.environ.get("BINANCE_TESTNET", "").lower() in ("true", "1", "yes")
 
 
-async def ticker_broadcaster() -> None:
+def _ticker_price_url(*, trading_product: str) -> str:
+    if trading_product == "futures":
+        if _TESTNET:
+            return "https://testnet.binancefuture.com/fapi/v1/ticker/price?symbol=BTCUSDT"
+        return "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT"
+    if _TESTNET:
+        return "https://testnet.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
+    return "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+
+
+def _ticker_symbol(trading_product: str) -> str:
+    return "BTC/USDT:USDT" if trading_product == "futures" else "BTC/USDT"
+
+
+async def _read_trading_product(session_factory) -> str:
+    from sqlalchemy import text
+
+    try:
+        async with session_factory() as s:
+            row = (await s.execute(
+                text("SELECT value FROM config WHERE key = 'trading_product'"),
+            )).first()
+            product = row.value if row else "spot"
+            return product if product in ("spot", "futures") else "spot"
+    except Exception:
+        return "spot"
+
+
+async def ticker_broadcaster(session_factory) -> None:
     """Background task: fetches live BTC price from Binance public REST every 5s
     and broadcasts to all connected WebSocket clients."""
     async with httpx.AsyncClient(timeout=4) as client:
         while True:
             try:
-                resp = await client.get(_PRICE_URL)
+                trading_product = await _read_trading_product(session_factory)
+                price_url = _ticker_price_url(trading_product=trading_product)
+                resp = await client.get(price_url)
                 if resp.status_code == 200:
                     price = float(resp.json()["price"])
                     await manager.broadcast("ticker", {
-                        "symbol": "BTC/USDT",
+                        "symbol": _ticker_symbol(trading_product),
                         "price": price,
+                        "trading_product": trading_product,
                         "ts": datetime.now(tz=timezone.utc).isoformat(),
                     })
                 else:

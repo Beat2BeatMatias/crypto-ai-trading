@@ -234,12 +234,29 @@ async def run() -> None:
                 if not ok:
                     logger.error("engine.futures_sizing_unfeasible", reason=reason)
                     await notify(TelegramEvent.ENGINE_PAUSED, {"motivo": reason})
+                    await store.set(
+                        ConfigKey.FUTURES_RUNTIME_DOWNGRADE_REASON,
+                        reason,
+                        changed_by="system",
+                    )
                     trading_product = "spot"
                     engine_adapter = build_adapter("spot")
                     engine_symbol = settings.symbol
                     exchange = engine_adapter.build_client()
+                else:
+                    await store.set(
+                        ConfigKey.FUTURES_RUNTIME_DOWNGRADE_REASON,
+                        "",
+                        changed_by="system",
+                    )
             except Exception as e:
+                downgrade = f"futures_setup_failed: {e}"
                 logger.error("engine.futures_setup_failed", error=str(e))
+                await store.set(
+                    ConfigKey.FUTURES_RUNTIME_DOWNGRADE_REASON,
+                    downgrade,
+                    changed_by="system",
+                )
                 trading_product = "spot"
                 engine_adapter = build_adapter("spot")
                 engine_symbol = settings.symbol
@@ -250,10 +267,21 @@ async def run() -> None:
         await store.set(ConfigKey.ENGINE_PAUSED, "false", changed_by="system")
         await store.set(ConfigKey.ENGINE_PAUSE_REASON, "", changed_by="system")
 
+    from shared.ohlcv_market import ohlcv_market_for_product
+
+    ohlcv_market = ohlcv_market_for_product(trading_product)
+
+    logger.info(
+        "engine.bootstrap_complete",
+        trading_product=trading_product,
+        engine_symbol=engine_symbol,
+        ohlcv_market=ohlcv_market,
+    )
+
     orderbook = OrderBookCollector(symbol=engine_symbol, exchange=exchange)
     try:
         await orderbook.start()
-        logger.info("orderbook.ws_started", symbol=settings.symbol)
+        logger.info("orderbook.ws_started", symbol=engine_symbol)
     except Exception as e:
         logger.warning("orderbook.ws_start_failed_continuing_without_live_book", error=str(e))
     cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10)  # defaults; updated each tick from config
@@ -334,13 +362,17 @@ async def run() -> None:
                 "min_roundtrip_fee_pct": await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT),
                 "min_position_size": await store.get_typed(ConfigKey.MIN_POSITION_SIZE),
                 "risk_per_trade_pct": await store.get_typed(ConfigKey.RISK_PER_TRADE_PCT),
+                "min_confluences_buy": await store.get_typed(ConfigKey.MIN_CONFLUENCES_BUY),
+                "min_confluences_short": await store.get_typed(ConfigKey.MIN_CONFLUENCES_SHORT),
             }
             coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
             two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
             decisor_temperature = await store.get_typed(ConfigKey.DECISOR_LLM_TEMPERATURE)
             decisor_self_consistency_n = await store.get_typed(ConfigKey.DECISOR_SELF_CONSISTENCY_N)
 
-            collector = PriceCollector(exchange, s, symbol=engine_symbol)
+            collector = PriceCollector(
+                exchange, s, symbol=engine_symbol, market=ohlcv_market,
+            )
             try:
                 for tf in ("1m", "5m", "15m", "1h", "4h"):
                     await collector.fetch_and_persist(timeframe=tf)
@@ -537,6 +569,7 @@ async def run() -> None:
                     floor_pct=float(calibration.get("min_roundtrip_fee_pct", 0.20)),
                 ),
                 min_fees_to_tp_ratio=float(calibration.get("min_fees_to_tp_ratio", 3.0)),
+                trading_product=trading_product,
             )
             if not verdict.passed:
                 logger.info("decision.rejected", reason=verdict.reason)
@@ -658,21 +691,40 @@ async def run() -> None:
                 cb.record_llm_failure()
 
     async def balance_tick() -> None:
-        """Persiste el snapshot de balance (free + locked) cada 60 s independientemente
-        del ciclo del decisor, para mantener la UI actualizada en todo momento."""
+        """Persiste el snapshot de balance cada 60 s (spot o futuros según runtime)."""
         try:
-            bal = await exchange.fetch_balance()
-            usdt_free   = float(bal.get("free", {}).get("USDT", 0.0))
-            btc_free    = float(bal.get("free", {}).get("BTC",  0.0))
-            usdt_locked = float(bal.get("used", {}).get("USDT", 0.0))
-            btc_locked  = float(bal.get("used", {}).get("BTC",  0.0))
             from shared.db.models import BalanceSnapshot
-            async with session_factory() as s:
-                s.add(BalanceSnapshot(
-                    usdt=usdt_free, btc=btc_free,
-                    usdt_locked=usdt_locked, btc_locked=btc_locked,
+
+            if trading_product == "futures":
+                bv = await engine_adapter.fetch_balance()
+                usdt_free = bv.available
+                btc_free = 0.0
+                usdt_locked = max(0.0, bv.total - bv.available)
+                btc_locked = 0.0
+                snap = BalanceSnapshot(
+                    usdt=usdt_free,
+                    btc=btc_free,
+                    usdt_locked=usdt_locked,
+                    btc_locked=btc_locked,
                     source="binance",
-                ))
+                    margin_balance=bv.total,
+                    available_margin=bv.available,
+                )
+            else:
+                bal = await exchange.fetch_balance()
+                usdt_free = float(bal.get("free", {}).get("USDT", 0.0))
+                btc_free = float(bal.get("free", {}).get("BTC", 0.0))
+                usdt_locked = float(bal.get("used", {}).get("USDT", 0.0))
+                btc_locked = float(bal.get("used", {}).get("BTC", 0.0))
+                snap = BalanceSnapshot(
+                    usdt=usdt_free,
+                    btc=btc_free,
+                    usdt_locked=usdt_locked,
+                    btc_locked=btc_locked,
+                    source="binance",
+                )
+            async with session_factory() as s:
+                s.add(snap)
                 await s.commit()
         except Exception as e:
             logger.warning("balance_tick.failed", error=str(e))

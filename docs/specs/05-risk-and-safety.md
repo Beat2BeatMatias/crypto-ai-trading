@@ -1,13 +1,15 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.7 — 2026-06-02.
+> Versión: 1.8 — 2026-06-02.
+>
+> Cambios v1.8: CoherenceChecker **C9**; catálogo A–J fijas vs K–Z promovidas; `min_confluences_short`.
 >
 > Cambios v1.7: Futuros USDT-M y shorts. Reglas **R12–R15** (leverage, buffer de liquidación, margen, funding). R2/R3/R4/R5/R10 **direccionales** (BUY y SHORT). R6/R0_kill_switch usan `has_open_position` (no solo `btc_held`). Se **elimina** la antigua R7 “nunca shortear”. Capa 3 pasa a R0–R15.
 >
 > Cambios v1.6: Claves post-mortem (`postmortem_provider`, `postmortem_fallback_providers`, `postmortem_max_per_tick`) son **solo operador** — excluidas del auto-apply del Supervisor (§7.2). Costo LLM acotado por `postmortem_max_per_tick` (default 5 decisiones/tick).
 >
-> Cambios v1.5: CoherenceChecker C7 (R:R real ≤ mínimo, siempre critical) y C8 (confluencia I–Z con `verify_spec` no cumplido). Catálogo extendido I–Z vía `confluence_registry`; filtro `_filter_confluence_codes` acepta letras activas.
+> Cambios v1.5: CoherenceChecker C7 (R:R real ≤ mínimo, siempre critical) y C8 (confluencia K–Z con `verify_spec` no cumplido). Promoción vía `confluence_registry`; filtro `_filter_confluence_codes` acepta A–J + K–Z activas.
 >
 > Cambios v1.4: Reglas R0 (drawdown/kill_switch) y R11 (notional mínimo Binance). Circuit breaker bifurcado (operacional auto-reset vs financiero manual). Endpoints `/circuit-breaker/reset` y `/drawdown/reset`. Elimina §3 overrides (removidos en v1.3). Se elimina la Capa 2 (override determinístico). Se agrega CoherenceChecker como Capa 2 nueva (auditoría de inconsistencias del LLM). Se actualiza §1 (modelo de defensa), §1.bis (garantías — GA-1 y GA-2 revisadas), §1.bis.4 (nueva sección CoherenceChecker). El Risk Gate (Capa 3) pasa a ser la **única** barrera hard-blocking sobre la `action`.
 >
@@ -32,7 +34,7 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
                           ▼  JSON validado por Pydantic
 ┌─────────────────────────────────────────────────────────┐
 │ Capa 2: CoherenceChecker (NUEVO — auditoría)            │
-│  - Reglas C1–C8 + C1P/C2P/C3P (bajistas)               │
+│  - Reglas C1–C9 + C1P/C2P/C3P/C5P (bajistas)           │
 │  - C1/C2/C3/C1P/C2P/C3P → two-pass                     │
 │  - strict_mode: C1–C3/C1P–C3P → HOLD (configurable)    │
 │  - NO bloquea por defecto; persiste warnings para       │
@@ -116,11 +118,13 @@ El `CoherenceChecker` (`trading-engine/risk/coherence_checker.py`) es la Capa 2 
 | C3P | `action=SHORT` con régimen/EMAs incoherentes (p. ej. TRENDING_UP, o TRENDING_DOWN sin estructura bajista ni ADX>20). |
 | C4 | Confianza ≥ 0.85 con menos de 2 confluencias en `decision.confluences` (post-filtro: A–J + K–Z activas, cada una peso 1.0 en el cálculo de base). |
 | C5 | El LLM emite BUY con confianza < 0.60 sin justificación explícita en `reasoning`. |
+| C5P | El LLM emite SHORT con confianza < 0.50 sin tag explicativo en `reasoning`. |
 | C6 | `expected_holding_min` está fuera del rango típico del perfil operativo derivado. |
 | C7 | R:R real calculado en código ≤ `min_rr_ratio` (**siempre critical** — fuerza HOLD/rechazo independiente de `strict_mode`). |
-| C8 | Confluencia extendida K–Z declarada pero `verify_spec` del registry no cumple en el ciclo actual (warning). |
+| C8 | Confluencia promovida **K–Z** declarada pero `verify_spec` del registry no cumple en el ciclo actual (warning). |
+| C9 | Confluencia **K–Z** con etiqueta direccional en `definition_md` incompatible con `action` (p. ej. `[SHORT]` citada en BUY). Sin etiqueta → no aplica (warning). |
 
-**Comportamiento por defecto (non-blocking)**: los warnings C1–C6, C1P–C3P y C8 se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del ciclo siguiente. **C7 siempre bloquea** (equivalente a rechazo duro).
+**Comportamiento por defecto (non-blocking)**: los warnings C1–C6, C1P–C3P, C5P, C8 y C9 se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del ciclo siguiente. **C7 siempre bloquea** (equivalente a rechazo duro).
 
 **Con `COHERENCE_STRICT_MODE=true`**: warnings de C1/C2/C3/C1P/C2P/C3P (inconsistencias factuales) se vuelven críticos y fuerzan HOLD de seguridad, como si el Risk Gate hubiera rechazado la decisión. C7 bloquea en cualquier modo.
 
@@ -132,7 +136,7 @@ Toda decisión queda en `decisions` con:
 
 - `agent="decisor"`, `model`, `tokens_in/out` (acumulados de ambos passes si hay two-pass), `latency_ms`.
 - `input`: snapshot completo del contexto en bloques A–K inyectado al LLM.
-- `output`: JSON resultante + `coherence_warnings` (lista C1–C8) + `two_pass_triggered` (bool).
+- `output`: JSON resultante + `coherence_warnings` (lista C1–C9, C1P–C3P, C5P) + `two_pass_triggered` (bool).
 - `executed` + `rejected_reason` (si correspondiere).
 - `rule_id` en el rejected_reason (Risk Gate): `"R0_drawdown"`, `"R0_kill_switch"`, `"R1"`…`"R15"`.
 
@@ -342,7 +346,7 @@ Para auditoría externa basta con un dump de estas tablas más `balance_snapshot
 |------|--------|-----------------|
 | `daily_pnl_pct` y `total_drawdown_pct` pasados como 0.0 al Risk Gate | ✅ RESUELTO | `_compute_risk_metrics()` calcula valores reales en cada tick desde `trades` (PnL diario desde 00:00 UTC) y `balance_snapshots` (high-water mark para drawdown). El CB y el Risk Gate reciben datos válidos desde 2026-05-17. |
 | Override con umbral plano `0.60` vs. `conf_threshold_trending_up/range/high_vol` (0.60 / 0.70 / 0.80) | ✅ RESUELTO | `_apply_deterministic_overrides` ahora usa el umbral por régimen del `calibration` dict (TRENDING_UP: 0.60, RANGE: 0.70, HIGH_VOL: 0.80, ajustables por Supervisor). Piso absoluto de seguridad: 0.40. TRENDING_DOWN siempre bloqueado. |
-| Confluencias inválidas (fuera de A–H o I–Z no activas) filtradas silenciosamente | ✅ RESUELTO | `_filter_confluence_codes()` en `decisor.py` filtra códigos no válidos contra catálogo A–H + `confluence_registry` activo. C8 audita `verify_spec` de letras I–Z declaradas. |
+| Confluencias inválidas filtradas silenciosamente | ✅ RESUELTO | `_filter_confluence_codes()` acepta A–J + K–Z activas en registry. C8 audita `verify_spec`; C9 audita etiqueta direccional (`shared/confluence_direction.py`). |
 | Web API sin autenticación | Pendiente | Para producción remota, agregar auth (token / OIDC) y/o restringir el dashboard a red privada (VPN/SSH tunnel). |
 | Engine sin reset automático de pausa | ✅ RESUELTO | `CircuitBreaker.maybe_auto_reset()`: pausa operativa (LLM/exchange) se auto-resetea tras `operational_cooldown_sec` (default 10 min) sin nuevas fallas. Pausa financiera (daily_stop/drawdown) requiere intervención humana explícita. |
 | Sin notificaciones (telegram/email) | ✅ RESUELTO | `notifications/telegram.py`: notifica via Telegram Bot API en kill switch, daily stop, drawdown, engine paused/resumed, racha LLM/exchange. Configurable con `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Sin configurar → no-op silencioso. |

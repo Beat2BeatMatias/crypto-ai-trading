@@ -1,7 +1,9 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.7 — 2026-06-02.
+> Versión: 1.8 — 2026-06-02.
+>
+> Cambios v1.8: `ConfluenceRegistryOut.definition_md` puede llevar etiqueta `[LONG]`/`[SHORT]`/`[AMBOS]`; warnings CoherenceChecker incluyen **C9**. Config `min_confluences_short`.
 >
 > Cambios v1.7: `DecisorAction` incluye `SHORT`. `TradeOut` / `PositionOut` con `position_side`, `leverage`, `liquidation_price`. `GET /api/decisions?action=` filtra por acción. Reglas de SL/TP obligatorias en BUY **y** SHORT.
 >
@@ -289,7 +291,7 @@ Parámetros query:
 
 Parámetro `window`: horas 1–168 (default 24).
 
-200 OK: breakdown de rechazos Risk Gate por `rule_id`, warnings CoherenceChecker, histogramas de `confidence` y `position_size_pct`, tasa `two_pass_triggered`.
+200 OK: breakdown de rechazos Risk Gate por `rule_id`, warnings CoherenceChecker (C1–C9, C1P–C3P, C5P en `by_rule_*`), histogramas de `confidence` y `position_size_pct`, tasa `two_pass_triggered`.
 
 #### `GET /api/decisions/calibration?window=`
 
@@ -317,7 +319,7 @@ Parámetros: `status` opcional (`open`, `promoted`, `rejected`); `limit` 1..200 
 
 Parámetro `active_only` (default `true`).
 
-200 OK: `ConfluenceRegistryOut[]` ordenado por `code ASC`.
+200 OK: `ConfluenceRegistryOut[]` ordenado por `code ASC`. Solo letras **K–Z** (I–J son catálogo fijo del Decisor). Campo `definition_md` puede incluir etiqueta direccional al inicio (`[LONG]`, `[SHORT]`, `[AMBOS]`) consumida por el Decisor y C9.
 
 #### `POST /api/confluence/candidates/{candidate_id}/promote`
 
@@ -333,7 +335,7 @@ Body opcional: `{ "reason": "string" }` (max 500 chars).
 
 #### `POST /api/confluence/registry/{code}/deactivate`
 
-`code`: una letra I–Z.
+`code`: una letra K–Z promovida.
 
 200 OK: `ConfluenceRegistryOut` con `active=false`, `deactivated_at` poblado.
 

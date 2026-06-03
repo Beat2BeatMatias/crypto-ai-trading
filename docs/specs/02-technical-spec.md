@@ -1,7 +1,9 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.11 — 2026-06-02.
+> Versión: 1.12 — 2026-06-02.
+>
+> Cambios v1.12: `shared/confluence_direction.py` (parseo `[LONG]`/`[SHORT]`/`[AMBOS]`). CoherenceChecker **C9**. `registry_direction_by_code` en `ctx` del Decisor. `format_profile_confluences_prompt()` en `labelers.py`. Config `min_confluences_short` (019). Aclaración catálogo: I–J fijas, K–Z promovidas.
 >
 > Cambios v1.11: **Futuros USDT-M.** `ExchangeAdapter` (`trading-engine/execution/exchange_adapter.py`: `SpotAdapter`, `FuturesAdapter`, `build_adapter()`). `Executor.execute_open` / `execute_close`. `TRADING_PRODUCT` / `engine_symbol()` (`BTC/USDT:USDT`). Risk Gate R0–R15. Migración 016. `validate_futures_sizing()` en bootstrap. Contexto Decisor con funding/margen/liquidación.
 >
@@ -159,7 +161,8 @@ run():
 | `agents/lesson_normalizer.py` | Rutas `remap` / `candidate` / `guidance`; formatea Bloque K. |
 | `agents/confluence_registry.py` | Upsert candidatos, promoción Supervisor, lectura registry activo. |
 | `shared/confluence_registry_ops.py` | Ops compartidas engine+web: promote/reject/deactivate, `verify_spec_testable()`. |
-| `risk/coherence_checker.py` | Reglas C1–C8: auditoría consistencia declaración vs indicadores + registry I–Z. |
+| `shared/confluence_direction.py` | Etiquetas direccionales K–Z; `parse_registry_direction`, `registry_direction_allows_action`. |
+| `risk/coherence_checker.py` | Reglas C1–C9 (+ C1P–C3P, C5P): auditoría declaración vs indicadores + registry K–Z. |
 | `notifications/telegram.py` | Alertas push opcionales (kill switch, pausas, trades). |
 
 ### 2.3 Diagrama de secuencia — Decisor tick
@@ -338,7 +341,7 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 | 2d | `shared/position_sizing.py` + `decisor.py:_apply_sizing_from_ctx` | Recalcula `position_size_pct` en BUY (`risk_per_trade_pct`). | `position_size_meta` en output. |
 | 1d | `agents/decisor_aggregate.py` + `_initial_llm_decision` | Self-consistency: N muestras LLM + votación si `decisor_self_consistency_n > 1`. | `self_consistency` en output; empate → HOLD. |
 | 1e | `agents/llm_client.py` + config `decisor_llm_temperature` | Temperatura baja en llamadas Decisor (y two-pass). | Menor variación entre ciclos. |
-| 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría de consistencia C1–C8. | `coherence_warnings` en output; C7 siempre critical. |
+| 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría C1–C9 (+ C1P–C3P, C5P). | `coherence_warnings`; C7 siempre critical. |
 | 3b | `agents/decisor.py:_build_review_ctx` + pass 2 | Two-pass auto-revisión si hay C1/C2/C3. | Log `decisor.two_pass_triggered` + `decisor.two_pass_result`. |
 | 3c | `agents/labelers.py` | Etiquetas interpretativas pre-calculadas. | Sugerencias en contexto; el LLM puede discrepar. |
 | 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange (R0–R15). | `Decision.rejected_reason` = `"risk_gate: R{n}"`, `rule_id` estructurado. |
@@ -364,7 +367,7 @@ El `ContextBuilder` arma el input del LLM en bloques semánticos organizados:
 
 | Bloque | Contenido | Clave en `ctx` |
 |--------|-----------|----------------|
-| A | Perfil operativo (SCALPING/HÍBRIDO/DAY_TRADING), holding range, TF priority order | `block_a_*` |
+| A | Perfil operativo, holding range, TF priority, confluencias prioritarias (LONG y SHORT si futures) | `block_a_*`, `block_a_priority_confluences` |
 | B | Market snapshot (precio, cambios%, ATR, volatility_label) | `atr_ref`, `price`, `pct_*` |
 | C | Indicadores por TF ordenados por prioridad del perfil, con etiquetas labelers | `block_c_text` |
 | D | Niveles clave (EMAs, VWAP, pivots, walls, highs/lows) | `block_d_text` |
@@ -375,22 +378,22 @@ El `ContextBuilder` arma el input del LLM en bloques semánticos organizados:
 | I | Config de riesgo compacta (todos los parámetros numéricos) | `max_position_pct`, `min_rr_ratio`, ... |
 | J | Playbook activo (markdown) | `playbook` |
 | K | Lecciones post-mortem recientes (remap/guidance) | `block_k_lessons` |
-| — | Catálogo dinámico I–Z (system prompt, no user block) | `{confluence_registry_block}` |
+| — | Catálogo promovido K–Z (user prompt) | `{confluence_registry_block}`, `registry_verify_specs`, `registry_direction_by_code` |
 
-#### 2.6.bis.5 CoherenceChecker — reglas C1–C8
+#### 2.6.bis.5 CoherenceChecker — reglas C1–C9
 
-Ver `trading-engine/risk/coherence_checker.py`. Implementado con el dataclass `CoherenceWarning`:
+Ver `trading-engine/risk/coherence_checker.py` y `05-risk-and-safety.md` §1.bis.4. Implementado con el dataclass `CoherenceWarning`:
 
 ```python
 @dataclass
 class CoherenceWarning:
-    rule_id: str      # "C1"..."C8"
+    rule_id: str      # "C1"..."C9", "C1P"..."C3P", "C5P"
     message: str
     severity: str     # "warning" | "critical" (C7 siempre critical)
     evidence: dict    # valores numéricos que evidencian la inconsistencia
 ```
 
-Las reglas factuales (C1/C2/C3) disparan **two-pass** cuando `TWO_PASS_ENABLED=true`. **C7** (R:R real ≤ mínimo) bloquea siempre. **C8** verifica `verify_spec` de confluencias I–Z del registry.
+Las reglas factuales (C1/C2/C3/C1P/C2P/C3P) disparan **two-pass** cuando `TWO_PASS_ENABLED=true`. **C7** bloquea siempre. **C8** verifica `verify_spec` de K–Z. **C9** verifica etiqueta direccional en `definition_md` vs `action` (`shared/confluence_direction.py`).
 
 #### 2.6.bis.6 Two-pass — flujo técnico
 
@@ -567,7 +570,7 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 | POST | `/api/mode` | `{ok, mode}` | Cambia entre PAPER_TRADING/LIVE. Para LIVE requiere `confirmation == "CONFIRMO TRADING REAL"`. |
 | POST | `/api/supervisor/run` | `{ok, queued:true}` | Setea `supervisor_run_now=true`; el engine lo consume en el próximo tick. |
 | GET | `/api/stats/daily` | `DailyStatsOut` | Métricas del día desde 00:00 UTC. |
-| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | Rechazos por `rule_id` (R0–R15), warnings C1–C8, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
+| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | Rechazos por `rule_id` (R0–R15), warnings C1–C9 (+ C1P–C3P), histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
 | GET | `/api/supervisor/runs` | `SupervisorRunOut[]` | Historial de ratificaciones/regeneraciones del Supervisor. |
 | GET | `/api/decisions/outcomes?classification=&limit=&since_hours=&include_lessons=` | `DecisionOutcomeOut[]` | Outcomes contrafactuales; `include_lessons=true` expone post-mortem. |
 | GET | `/api/confluence/candidates?status=&limit=` | `ConfluenceCandidateOut[]` | Cola de patrones aprendidos pendientes de promoción. |
@@ -683,7 +686,7 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | Umbrales confidence por régimen | `conf_threshold_trending_up`, `conf_threshold_range`, `conf_threshold_high_vol`. |
 | RSI filter | `rsi_overbought_1h`. |
 | Fórmula de confianza | `conf_base_*`, `peso_regime_range`, `peso_regime_high_vol`, `adj_*` (guías LLM); **enforcement** de base en `shared/confidence.py`. `confluence_weak_factor` sigue en config como referencia LLM (no usado en conteo v1.9; peso I–Z = 1.0). |
-| Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
+| Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `min_confluences_short`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
 | Coherence / two-pass / LLM Decisor | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`, `decisor_llm_temperature`, `decisor_self_consistency_n`. |
 | Sizing por riesgo | `risk_per_trade_pct` (default `0.005`; usado por `apply_risk_based_sizing` en BUY). |

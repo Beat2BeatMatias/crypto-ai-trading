@@ -75,7 +75,12 @@ export const api = {
         return get(`/decisions/outcomes?${q.toString()}`);
     },
     dailyStats: () => get("/stats/daily"),
-    ohlcv: (timeframe, limit = 300) => get(`/ohlcv?timeframe=${timeframe}&limit=${limit}`),
+    ohlcv: (timeframe, limit = 300, market) => {
+        const q = new URLSearchParams({ timeframe, limit: String(limit) });
+        if (market)
+            q.set("market", market);
+        return get(`/ohlcv?${q}`);
+    },
     confluenceCandidates: (status) => {
         const q = status ? `?status=${encodeURIComponent(status)}` : "";
         return get(`/confluence/candidates${q}`);

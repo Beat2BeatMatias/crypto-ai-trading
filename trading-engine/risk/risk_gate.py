@@ -54,6 +54,7 @@ class RiskGate:
         liquidation_buffer_atr: float = 2.0,
         roundtrip_fee_pct: float = 0.0,
         min_fees_to_tp_ratio: float = 3.0,
+        trading_product: str = "spot",
     ) -> RiskVerdict:
         margin = available_margin if available_margin is not None else usdt_balance
         has_pos = (
@@ -85,6 +86,12 @@ class RiskGate:
         direction = direction_for_action(decision.action)
         if direction is None:
             return RiskVerdict(passed=True)
+
+        if decision.action == DecisorAction.SHORT and trading_product != "futures":
+            return self._reject(
+                "R7",
+                f"SHORT not allowed when trading_product={trading_product} (spot only supports BUY)",
+            )
 
         if decision.stop_loss is None:
             return self._reject("R2", f"{decision.action.value} requires stop_loss")

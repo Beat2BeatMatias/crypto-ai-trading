@@ -1,4 +1,4 @@
-import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -8,6 +8,9 @@ import ReasoningBlock from "../components/ReasoningBlock";
 import { asDecisorOutput } from "../types/decisorOutput";
 import { PnlRow } from "../components/PnlRow";
 import { actionBadgeClass, computePnlPctDirectional, computePnlUsdtDirectional, sideBadgeClass, } from "../lib/pnl";
+import { RuntimeMismatchBanner } from "../components/RuntimeMismatchBanner";
+import { TradingContextBadges } from "../components/TradingContextBadges";
+import { FuturesBalanceCard } from "../components/FuturesBalanceCard";
 function Card({ title, children }) {
     return (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5", children: [_jsx("h3", { className: "text-sm font-semibold text-zinc-400 mb-3 uppercase tracking-wide", children: title }), children] }));
 }
@@ -55,12 +58,16 @@ export function Dashboard() {
     const [ticker, setTicker] = useState(null);
     const [engineHealth, setEngineHealth] = useState(null);
     const [balance, setBalance] = useState(null);
+    const [tradingCtx, setTradingCtx] = useState(null);
     const countdownSecs = useCountdown(engineHealth);
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
     const loadStats = () => api.dailyStats().then(setStats).catch(() => { });
     const loadHealth = () => fetch("/api/health").then(r => r.json())
-        .then(d => setEngineHealth(d?.engine ?? null))
+        .then(d => {
+        setEngineHealth(d?.engine ?? null);
+        setTradingCtx(d?.trading ?? null);
+    })
         .catch(() => { });
     useEffect(() => {
         api.positions().then(setPositions).catch(() => { });
@@ -98,11 +105,12 @@ export function Dashboard() {
     const actionColor = actionBadgeClass(out?.action ?? "HOLD");
     const pnlTotal = (stats?.pnl_realized ?? 0) + (stats?.pnl_unrealized ?? 0);
     const pnlColor = pnlTotal > 0 ? "text-emerald-400" : pnlTotal < 0 ? "text-red-400" : "text-zinc-400";
-    return (_jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between rounded-xl bg-zinc-900 p-4", children: [_jsxs("div", { className: "flex items-center gap-4", children: [_jsxs("div", { className: "flex items-center gap-3", children: [_jsx("span", { className: `size-3 rounded-full ${connected ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"}` }), _jsx("span", { className: "text-sm", children: connected ? "WS conectado" : "Desconectado — reconectando..." })] }), _jsx(EngineStatusPill, { health: engineHealth }), ticker && (_jsxs("div", { className: "flex items-center gap-2 border-l border-zinc-700 pl-4", children: [_jsx("span", { className: "text-sm font-semibold text-zinc-400", children: ticker.symbol }), _jsx("span", { className: "text-lg font-bold text-white", children: ticker.price != null
+    const isFuturesMode = tradingCtx?.trading_product === "futures";
+    return (_jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between rounded-xl bg-zinc-900 p-4 flex-wrap gap-3", children: [_jsxs("div", { className: "flex items-center gap-4 flex-wrap", children: [_jsx("div", { className: "sm:hidden", children: _jsx(TradingContextBadges, { ctx: tradingCtx }) }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("span", { className: `size-3 rounded-full ${connected ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"}` }), _jsx("span", { className: "text-sm", children: connected ? "WS conectado" : "Desconectado — reconectando..." })] }), _jsx(EngineStatusPill, { health: engineHealth }), ticker && (_jsxs("div", { className: "flex items-center gap-2 border-l border-zinc-700 pl-4", children: [_jsx("span", { className: "text-sm font-semibold text-zinc-400", children: ticker.symbol }), _jsx("span", { className: "text-lg font-bold text-white", children: ticker.price != null
                                             ? `$${ticker.price.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                            : "—" })] }))] }), _jsxs("button", { onClick: onKillSwitch, className: `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${killSwitchOn ? "bg-red-800 cursor-default" : "bg-red-600 hover:bg-red-500"}`, children: ["\uD83D\uDEA8 ", killSwitchOn ? "Kill Switch ACTIVO" : "Activar Kill Switch"] })] }), _jsx(PriceChart, {}), _jsxs("div", { className: "grid gap-4 lg:grid-cols-4", children: [_jsx(Card, { title: "Balance Binance", children: !balance ? (_jsx("p", { className: "text-zinc-500 text-sm", children: "Cargando..." })) : (_jsxs("div", { className: "space-y-1", children: [_jsx(StatRow, { label: "USDT libre", value: `$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-emerald-400" }), balance.usdt_locked > 0 && (_jsx(StatRow, { label: "USDT bloqueado (\u00F3rdenes)", value: `$${balance.usdt_locked.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-yellow-500" })), balance.available_margin != null && (_jsxs(_Fragment, { children: [_jsx(StatRow, { label: "Margen disponible (futures)", value: `$${balance.available_margin.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-amber-400" }), balance.margin_balance != null && (_jsx(StatRow, { label: "Margen total", value: `$${balance.margin_balance.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-zinc-300" }))] })), _jsx(StatRow, { label: "BTC libre en exchange", value: `${balance.btc_exchange.toFixed(6)} BTC`, valueClass: "text-amber-400" }), balance.btc_locked > 0 && (_jsx(StatRow, { label: "BTC bloqueado (\u00F3rdenes)", value: `${balance.btc_locked.toFixed(6)} BTC`, valueClass: "text-yellow-500" })), _jsx(StatRow, { label: "BTC en posiciones", value: `${balance.btc_in_positions.toFixed(6)} BTC`, valueClass: "text-zinc-300" }), ticker?.price != null && (_jsx(StatRow, { label: "Total en USD (real)", value: `$${(balance.usdt_total + balance.btc_exchange_total * ticker.price).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-white font-semibold" })), _jsxs("div", { className: "pt-2 text-xs text-zinc-600", children: [balance.balance_ts
+                                            : "—" })] }))] }), _jsxs("button", { onClick: onKillSwitch, className: `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${killSwitchOn ? "bg-red-800 cursor-default" : "bg-red-600 hover:bg-red-500"}`, children: ["\uD83D\uDEA8 ", killSwitchOn ? "Kill Switch ACTIVO" : "Activar Kill Switch"] })] }), tradingCtx?.runtime_mismatch && (_jsx(RuntimeMismatchBanner, { ctx: tradingCtx })), _jsx(PriceChart, { tradingProduct: tradingCtx?.trading_product, chartLabel: tradingCtx?.chart_label }), _jsxs("div", { className: "grid gap-4 lg:grid-cols-4", children: [isFuturesMode ? (_jsx(FuturesBalanceCard, { futures: balance?.futures })) : (_jsx(Card, { title: "Balance Binance", children: !balance ? (_jsx("p", { className: "text-zinc-500 text-sm", children: "Cargando..." })) : (_jsxs("div", { className: "space-y-1", children: [_jsx(StatRow, { label: "USDT libre", value: `$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-emerald-400" }), balance.usdt_locked > 0 && (_jsx(StatRow, { label: "USDT bloqueado (\u00F3rdenes)", value: `$${balance.usdt_locked.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-yellow-500" })), _jsx(StatRow, { label: "BTC libre en exchange", value: `${balance.btc_exchange.toFixed(6)} BTC`, valueClass: "text-amber-400" }), balance.btc_locked > 0 && (_jsx(StatRow, { label: "BTC bloqueado (\u00F3rdenes)", value: `${balance.btc_locked.toFixed(6)} BTC`, valueClass: "text-yellow-500" })), _jsx(StatRow, { label: "BTC en posiciones", value: `${balance.btc_in_positions.toFixed(6)} BTC`, valueClass: "text-zinc-300" }), ticker?.price != null && (_jsx(StatRow, { label: "Total en USD (real)", value: `$${(balance.usdt_total + balance.btc_exchange_total * ticker.price).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, valueClass: "text-white font-semibold" })), _jsxs("div", { className: "pt-2 text-xs text-zinc-600", children: [balance.balance_ts
                                             ? `Actualizado ${new Date(balance.balance_ts).toLocaleTimeString("es-AR")}`
-                                            : "Sin datos de Binance", balance.balance_source === "binance" ? "" : " (fallback DB)"] })] })) }), _jsx(Card, { title: "Posiciones abiertas", children: positions.length === 0
+                                            : "Sin datos de Binance", balance.balance_source === "binance" ? "" : " (fallback DB)"] })] })) })), _jsx(Card, { title: "Posiciones abiertas", children: positions.length === 0
                             ? _jsx("p", { className: "text-zinc-500 text-sm", children: "Ninguna posici\u00F3n abierta." })
                             : positions.map(p => {
                                 const dir = p.position_side ?? "LONG";

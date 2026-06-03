@@ -21,6 +21,7 @@ class Ohlcv(Base):
 
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     timeframe: Mapped[str] = mapped_column(String(4), primary_key=True)
+    market: Mapped[str] = mapped_column(String(8), primary_key=True, default="spot")
     open: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     high: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     low: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
@@ -29,6 +30,7 @@ class Ohlcv(Base):
 
     __table_args__ = (
         Index("idx_ohlcv_tf", "timeframe", "time", postgresql_using="btree"),
+        Index("idx_ohlcv_market_tf", "market", "timeframe", "time", postgresql_using="btree"),
     )
 
 

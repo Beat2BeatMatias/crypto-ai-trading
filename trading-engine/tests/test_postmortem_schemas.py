@@ -23,6 +23,21 @@ def test_compute_severity_bad_buy_uses_pnl():
     assert score == pytest.approx(0.6)
 
 
+def test_compute_severity_bad_short_uses_pnl():
+    outcome = SimpleNamespace(
+        classification="BAD_SHORT",
+        tp_target_pct=0.4,
+        sl_dist_pct=0.3,
+        mfe_pct=0.1,
+        mae_pct=-0.5,
+    )
+    trade = SimpleNamespace(pnl_pct=-0.8)
+    score = compute_severity_score(
+        classification="BAD_SHORT", outcome=outcome, trade=trade,
+    )
+    assert score == pytest.approx(0.4)
+
+
 def test_compute_severity_missed_opportunity():
     outcome = SimpleNamespace(
         classification="MISSED_OPPORTUNITY",

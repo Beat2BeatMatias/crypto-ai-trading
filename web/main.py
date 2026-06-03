@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         logger.info("web.sqlite_tables_created")
 
     from ws.feeds import ticker_broadcaster
-    ticker_task = asyncio.create_task(ticker_broadcaster())
+    ticker_task = asyncio.create_task(ticker_broadcaster(app.state.session_factory))
 
     logger.info("web.started")
     try:

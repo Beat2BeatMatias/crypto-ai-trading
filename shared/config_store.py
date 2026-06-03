@@ -61,6 +61,7 @@ class ConfigKey(str, Enum):
     # Decisor v2 — operational parameters
     MIN_FEES_TO_TP_RATIO = "min_fees_to_tp_ratio"
     MIN_CONFLUENCES_BUY = "min_confluences_buy"
+    MIN_CONFLUENCES_SHORT = "min_confluences_short"
     COOLDOWN_AFTER_SELL_MIN = "cooldown_after_sell_min"
     SUBJECTIVE_ADJ_MAX = "subjective_adj_max"
     EXPECTED_HOLDING_MAX_MIN = "expected_holding_max_min"
@@ -103,6 +104,7 @@ class ConfigKey(str, Enum):
     MARGIN_MODE = "margin_mode"
     FUNDING_RATE_MAX_PCT = "funding_rate_max_pct"
     LIQUIDATION_BUFFER_ATR = "liquidation_buffer_atr"
+    FUTURES_RUNTIME_DOWNGRADE_REASON = "futures_runtime_downgrade_reason"
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,10 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.MIN_CONFLUENCES_BUY: _Default(
         "2", "int",
         "Guía LLM: número mínimo de confluencias recomendado para BUY. Inyectado en el system prompt como regla de calidad; el LLM lo considera pero tiene autonomía final. Rango 1–4.",
+    ),
+    ConfigKey.MIN_CONFLUENCES_SHORT: _Default(
+        "2", "int",
+        "Guía LLM: número mínimo de confluencias bajistas (I/J/F…) recomendado para SHORT en futuros. Rango 1–4.",
     ),
     ConfigKey.COOLDOWN_AFTER_SELL_MIN: _Default(
         "15", "int",
@@ -381,6 +387,11 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.LIQUIDATION_BUFFER_ATR: _Default(
         "2.0", "float", "Buffer mínimo (×ATR) entre SL y precio de liquidación",
+    ),
+    ConfigKey.FUTURES_RUNTIME_DOWNGRADE_REASON: _Default(
+        "",
+        "string",
+        "Último motivo de downgrade a spot al arrancar con trading_product=futures",
     ),
 }
 

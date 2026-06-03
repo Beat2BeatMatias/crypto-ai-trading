@@ -6,6 +6,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.db.models import Ohlcv
+from shared.ohlcv_market import ohlcv_market_for_product
 
 router = APIRouter()
 
@@ -27,18 +28,34 @@ async def _session(request: Request) -> AsyncSession:
         yield s
 
 
+async def _config_trading_product(session: AsyncSession) -> str:
+    from sqlalchemy import text
+
+    row = (await session.execute(
+        text("SELECT value FROM config WHERE key = 'trading_product'"),
+    )).first()
+    product = row.value if row else "spot"
+    return product if product in ("spot", "futures") else "spot"
+
+
 @router.get("/ohlcv", response_model=list[CandleOut])
 async def list_ohlcv(
     session: Annotated[AsyncSession, Depends(_session)],
     timeframe: Timeframe = Query("5m"),
     limit: int = Query(300, ge=1, le=1000),
+    market: Literal["spot", "futures"] | None = Query(
+        None, description="Por defecto usa trading_product de config",
+    ),
 ):
     if timeframe not in ALLOWED_TIMEFRAMES:
         raise HTTPException(status_code=400, detail=f"timeframe inválido: {timeframe}")
 
+    trading_product = await _config_trading_product(session)
+    effective_market = market or ohlcv_market_for_product(trading_product)
+
     stmt = (
         select(Ohlcv)
-        .where(Ohlcv.timeframe == timeframe)
+        .where(Ohlcv.timeframe == timeframe, Ohlcv.market == effective_market)
         .order_by(desc(Ohlcv.time))
         .limit(limit)
     )

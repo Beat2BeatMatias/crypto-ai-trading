@@ -77,7 +77,9 @@ Reglas para proposed_pattern:
   "tag" (snake_case, ej. "range_support_misread"), "title", "maps_to_existing" (letra A–H),
   y "definition_hint" breve.
 - Si proponés patrón nuevo compuesto: "tag" obligatorio, "maps_to_existing": null,
-  "title" y "definition_hint" obligatorios.
+  "title" y "definition_hint" obligatorios. En definition_hint incluí etiqueta direccional
+  al inicio: [LONG], [SHORT] o [AMBOS] según si el patrón aplica solo a compras,
+  solo a shorts en futuros, o a ambos.
 - Si no aplica patrón: "proposed_pattern": null.
 
 misread_indicators e ignored_signals: siempre arrays de OBJETOS (nunca strings sueltos).

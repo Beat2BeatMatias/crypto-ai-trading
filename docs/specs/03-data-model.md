@@ -1,7 +1,9 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.5 — 2026-06-02.
+> Versión: 1.6 — 2026-06-02.
+>
+> Cambios v1.6: Convención `[LONG]`/`[SHORT]`/`[AMBOS]` en `definition_md` de K–Z (sin columna nueva). Migración **019** — config `min_confluences_short`. Diagrama: registry solo K–Z (I–J catálogo fijo).
 >
 > Cambios v1.5: Migración **016** — campos direccionales en `trades` y `positions` (`position_side`, `leverage`, `liquidation_price`, `margin_mode`, `funding_paid_usdt`); `balance_snapshots.margin_balance` / `available_margin`.
 >
@@ -45,7 +47,7 @@ SQLAlchemy 2.0 declarative + Alembic. Modelos en `shared/db/models.py`, migracio
                                    │
    ┌────────────────────┐          │            ┌─────────────────────┐
    │ confluence_        │◄─────────┘ (source)   │ confluence_registry │
-   │ candidates         │──promote─────────────►│ PK code (I–Z)       │
+   │ candidates         │──promote─────────────►│ PK code (K–Z)       │
    └────────────────────┘                        └─────────────────────┘
 
    ┌────────────────┐      ┌─────────────┐
@@ -154,7 +156,7 @@ Patrones compuestos aprendidos vía post-mortem, pendientes de promoción a regi
 | `pattern_tag` | VARCHAR(64) | NO | Unique; clave de deduplicación |
 | `proposed_code` | VARCHAR(1) | YES | Letra sugerida I–Z |
 | `title` | VARCHAR(128) | NO | |
-| `definition_md` | TEXT | NO | Definición operacional markdown |
+| `definition_md` | TEXT | NO | Definición operacional markdown; convención `[LONG]`/`[SHORT]`/`[AMBOS]` al inicio para K–Z promovidas |
 | `verify_spec` | JSONB | NO | Spec testeable contra ctx del Decisor |
 | `occurrence_count` | INT | NO | default 1 |
 | `first_seen_at` | TIMESTAMPTZ | NO | |
@@ -168,11 +170,11 @@ Patrones compuestos aprendidos vía post-mortem, pendientes de promoción a regi
 
 ### 2.3.iv `confluence_registry` (migration 012)
 
-Catálogo dinámico de letras I–Z promovidas.
+Catálogo dinámico de letras **K–Z** promovidas (I–J son catálogo fijo del Decisor, no se almacenan aquí).
 
 | Columna | Tipo | Nullable | Notas |
 |---------|------|----------|-------|
-| `code` | VARCHAR(1) | NO | PK; letra I–Z |
+| `code` | VARCHAR(1) | NO | PK; letra K–Z |
 | `slug` | VARCHAR(64) | NO | Unique |
 | `title` | VARCHAR(128) | NO | |
 | `definition_md` | TEXT | NO | |
@@ -373,6 +375,7 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 013 | `013_add_postmortem_fallback_providers.py` | Seed idempotente `postmortem_fallback_providers` en `config`. |
 | 015 | `015_add_outcome_attribution_window_hours.py` | Seed idempotente `outcome_attribution_window_hours` en `config`. |
 | 016 | `016_add_futures_fields.py` | `trades`/`positions` direccionales; `balance_snapshots` margen. |
+| 019 | `019_add_min_confluences_short.py` | Seed idempotente `min_confluences_short` en `config` (guía mínima SHORT en futuros). |
 
 **Claves futures** (seed en `config_store`):
 

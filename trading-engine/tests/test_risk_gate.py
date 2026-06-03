@@ -549,6 +549,45 @@ def test_r11_all_notionals_pass_with_adequate_balance():
     assert verdict.passed is True
 
 
+def test_r7_rejects_short_when_trading_product_is_spot():
+    gate = _make_gate()
+    decision = DecisorOutput(
+        regime=MarketRegime.TRENDING_DOWN,
+        confluences=["I", "J"],
+        action=DecisorAction.SHORT,
+        confidence=0.7,
+        stop_loss=68000.0,
+        take_profit=65000.0,
+        position_size_pct=0.05,
+        reasoning="Test SHORT on spot.",
+    )
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="spot",
+        **_COMMON_KWARGS,
+    )
+    assert verdict.passed is False
+    assert verdict.rule_id == "R7"
+
+
+def test_r7_allows_short_on_futures():
+    gate = _make_gate()
+    price = 67000.0
+    decision = _short_decision(stop_loss=price + 500.0, take_profit=price - 1500.0)
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="futures",
+        current_price=price,
+        atr_ref=500.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=-0.05,
+        kill_switch=False,
+        available_margin=10000.0,
+    )
+    assert verdict.passed is True
+
+
 def test_r10_rejects_when_tp_move_below_fees_plus_slippage():
     # round-trip fee 0.20% + slippage 2x0.05%=0.10% -> min_move = 0.30%
     # TP a +0.25% del precio (80200) -> insuficiente -> R10
@@ -612,6 +651,7 @@ def test_short_valid_geometry_passes():
     decision = _short_decision(stop_loss=price + 500.0, take_profit=price - 1500.0)
     verdict = gate.validate(
         decision=decision,
+        trading_product="futures",
         current_price=price,
         atr_ref=500.0,
         open_positions_count=0,
@@ -629,6 +669,7 @@ def test_short_sl_below_price_rejected():
     decision = _short_decision(stop_loss=66000.0, take_profit=64000.0)
     verdict = gate.validate(
         decision=decision,
+        trading_product="futures",
         current_price=price,
         atr_ref=500.0,
         open_positions_count=0,

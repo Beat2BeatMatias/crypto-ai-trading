@@ -1,7 +1,7 @@
 # Discrepancias y Gaps de Documentación — Crypto AI Trading
 
 > Audiencia: Tech leads / SRE / Risk.
-> Versión: 1.5 — 2026-06-02 (futuros/shorts documentados; D-034 entregado).
+> Versión: 1.6 — 2026-06-02 (K–Z direccionales, C9, catálogo A–J vs K–Z).
 > Base de comparación: design docs + `docs/specs/` vs. código en HEAD (2026-06-02).
 
 Este documento consolida el resultado del cross-validation entre la documentación de diseño existente y la implementación real. La **regla de oro**: cuando un campo difiere entre design doc y código, **el código manda**. Las discrepancias se registran para que el equipo decida si actualizar el código a la spec o la spec al código.
@@ -26,8 +26,8 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | 🔴 CRÍTICO | 3 | D-001, D-002, D-003 |
 | 🟠 ALTO | 5 | D-004, D-005, D-006, D-009, D-013 |
 | 🟡 MEDIO | 8 | D-007, D-008, D-010, D-011, D-014, D-015, D-019, D-021 |
-| 🟢 INFO | 10 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032, D-033, D-034 |
-| **Total** | **27** | |
+| 🟢 INFO | 11 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032, D-033, D-034, D-037 |
+| **Total** | **28** | |
 
 ### 1.3 Estado de resolución (actualizado 2026-05-25)
 
@@ -50,6 +50,7 @@ Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desd
 | D-034 | 🟢 INFO | ✅ ENTREGADO | Futuros USDT-M + shorts: `ExchangeAdapter`, `SHORT`, R12–R15, migración 016, specs v1.11–v1.12. Diseño: `docs/superpowers/specs/2026-06-02-futures-shorts-design.md`. |
 | D-035 | 🟡 MEDIO | ✅ RESUELTO | `GET /api/balance` expone `margin_balance` y `available_margin` cuando el snapshot los tiene. |
 | D-036 | 🟡 MEDIO | ✅ RESUELTO | `PriceChart`: markers SHORT + línea liquidación; `/trades`: filtro LONG/SHORT, badges, SL/TP direccionales, CSV; Dashboard y Health actualizados. |
+| D-037 | 🟢 INFO | ✅ ENTREGADO | Confluencias K–Z: etiquetas `[LONG]`/`[SHORT]`/`[AMBOS]` (`shared/confluence_direction.py`), CoherenceChecker C9, perfil Bloque A con prioridades SHORT en futuros, `min_confluences_short`, specs v1.13 alineadas (A–J fijas vs K–Z promovidas). |
 
 ### 1.3.bis Estado de resolución (histórico 2026-05-17)
 
@@ -254,7 +255,9 @@ Mismatch entre `shared/db/models.py` (ORM) y `trading-engine/alembic/versions/00
 
 **Severidad**: 🟢 BAJO — documentado en `04-api-contracts.md` §1.3 y `01-functional-spec.md` §6.3 / §F2.bis.1.
 
-**Nota v1.9**: el conteo de confluencias para la base incluye I–Z promovidas (peso 1.0). Códigos desactivados se eliminan antes del cálculo.
+**Nota v1.9**: el conteo de confluencias para la base incluye A–J fijas y K–Z promovidas activas (peso 1.0). Códigos desactivados se eliminan antes del cálculo.
+
+**Nota v1.13**: K–Z pueden llevar etiqueta direccional en `definition_md`; C9 audita coherencia con `action`. I–J no se promueven desde `confluence_registry`.
 
 ---
 
@@ -395,7 +398,7 @@ Resultado del cross-validation entre documentación de diseño y código.
 |------|-------------------|------------|
 | Arquitectura | 98% | Topología 4 contenedores + Postgres; outcome attribution y Telegram agregados post-design. |
 | Modelo de datos | 98% | 13 tablas activas incl. `decision_outcomes`, `confluence_*`; migraciones 001–012 aplicadas. |
-| Componentes runtime | 98% | Post-mortem pipeline, registry I–Z, UI `/confluence`, CoherenceChecker C7/C8. |
+| Componentes runtime | 98% | Post-mortem pipeline, registry K–Z, UI `/confluence`, CoherenceChecker C7–C9. |
 | REST API | 92% | API completa; filtros avanzados de trades/decisions en backlog. |
 | WebSocket | 95% | 8 eventos implementados (incl. supervisor_ran, kill_switch_triggered). |
 | Frontend páginas | 75% | Chart en Dashboard entregado; filtros avanzados y diff viewer pendientes. |

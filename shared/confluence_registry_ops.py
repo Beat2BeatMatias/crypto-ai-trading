@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import ConfluenceCandidate, ConfluenceRegistry
 
 STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJ")
-EXTENDED_LETTERS = [chr(c) for c in range(ord("I"), ord("Z") + 1)]
+# Letras solo para confluencias promovidas (K–Z). I/J son bajistas estáticas en futuros.
+EXTENDED_LETTERS = [
+    chr(c) for c in range(ord("K"), ord("Z") + 1)
+    if chr(c) not in STATIC_CONFLUENCE_CODES
+]
 LETTER_RECYCLE_DAYS = 30
 
 KNOWN_CTX_KEYS = frozenset({
@@ -118,7 +122,7 @@ async def promote_candidate_row(
 
     code = await next_available_letter(session, now=now)
     if code is None:
-        raise ConfluenceOpsError("no_letters", "No hay letras I–Z disponibles")
+        raise ConfluenceOpsError("no_letters", "No hay letras K–Z disponibles")
 
     slug = slug_from_tag(candidate.pattern_tag)
     existing_slug = (await session.execute(

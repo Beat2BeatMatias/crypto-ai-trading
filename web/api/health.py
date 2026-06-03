@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 import os
 from fastapi import APIRouter, Request
-from sqlalchemy import select, text
-from shared.db.models import Decision
+from sqlalchemy import desc, select, text
+from shared.db.models import BalanceSnapshot, Decision
 
 router = APIRouter()
 
@@ -79,6 +79,54 @@ async def health(request: Request) -> dict:
                 text("SELECT value FROM config WHERE key = 'engine_pause_reason'")
             )).first()
             engine_pause_reason = cb_reason_row.value if cb_reason_row else ""
+
+            mode_row = (await s.execute(
+                text("SELECT value FROM config WHERE key = 'mode'")
+            )).first()
+            tp_row = (await s.execute(
+                text("SELECT value FROM config WHERE key = 'trading_product'")
+            )).first()
+            trading_mode = mode_row.value if mode_row else "PAPER_TRADING"
+            trading_product = tp_row.value if tp_row else "spot"
+            if trading_product not in ("spot", "futures"):
+                trading_product = "spot"
+
+            snap = (await s.execute(
+                select(BalanceSnapshot).order_by(desc(BalanceSnapshot.ts)).limit(1)
+            )).scalar_one_or_none()
+            if trading_product == "futures":
+                futures_runtime = bool(
+                    snap and snap.margin_balance is not None
+                )
+                effective_trading_product = "futures" if futures_runtime else "spot"
+            else:
+                effective_trading_product = "spot"
+            runtime_mismatch = (
+                trading_product == "futures"
+                and effective_trading_product == "spot"
+            )
+            runtime_mismatch_reason = None
+            runtime_mismatch_detail = None
+            if runtime_mismatch:
+                from runtime_mismatch_diagnosis import diagnose_futures_runtime_mismatch
+
+                runtime_mismatch_reason, runtime_mismatch_detail = (
+                    await diagnose_futures_runtime_mismatch(s)
+                )
+
+            binance_testnet = os.environ.get("BINANCE_TESTNET", "true").lower() in (
+                "true", "1", "yes",
+            )
+
+            from shared.ohlcv_market import (
+                chart_label_for_product,
+                chart_symbol_for_product,
+                ohlcv_market_for_product,
+            )
+
+            chart_market = ohlcv_market_for_product(trading_product)
+            chart_label = chart_label_for_product(trading_product)
+            chart_symbol = chart_symbol_for_product(trading_product)
 
             # Last active playbook
             pb_row = (await s.execute(
@@ -213,6 +261,18 @@ async def health(request: Request) -> dict:
         return {
             "ok": True,
             "db": "up",
+            "trading": {
+                "mode": trading_mode,
+                "trading_product": trading_product,
+                "effective_trading_product": effective_trading_product,
+                "runtime_mismatch": runtime_mismatch,
+                "runtime_mismatch_reason": runtime_mismatch_reason,
+                "runtime_mismatch_detail": runtime_mismatch_detail,
+                "binance_testnet": binance_testnet,
+                "chart_market": chart_market,
+                "chart_label": chart_label,
+                "chart_symbol": chart_symbol,
+            },
             "kill_switch": kill_switch_active,
             "circuit_breaker": {
                 "triggered": engine_paused,
@@ -301,6 +361,7 @@ async def health(request: Request) -> dict:
     except Exception as e:
         return {
             "ok": False, "db": str(e),
+            "trading": None,
             "kill_switch": None,
             "circuit_breaker": {"triggered": None, "reason": None},
             "engine": {"ok": False, "detail": "error de DB", "last_decision_age_min": None, "decisor_interval_min": None, "next_execution_in_min": None},

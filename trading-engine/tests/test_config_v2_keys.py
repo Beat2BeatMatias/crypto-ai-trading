@@ -7,6 +7,7 @@ from shared.config_store import ConfigKey, DEFAULTS
 def test_new_keys_present_in_enum():
     assert ConfigKey.MIN_FEES_TO_TP_RATIO.value == "min_fees_to_tp_ratio"
     assert ConfigKey.MIN_CONFLUENCES_BUY.value == "min_confluences_buy"
+    assert ConfigKey.MIN_CONFLUENCES_SHORT.value == "min_confluences_short"
     assert ConfigKey.COOLDOWN_AFTER_SELL_MIN.value == "cooldown_after_sell_min"
     assert ConfigKey.SUBJECTIVE_ADJ_MAX.value == "subjective_adj_max"
     assert ConfigKey.EXPECTED_HOLDING_MAX_MIN.value == "expected_holding_max_min"
@@ -17,6 +18,7 @@ def test_new_keys_have_defaults():
     cases = [
         (ConfigKey.MIN_FEES_TO_TP_RATIO, "3.0", "float"),
         (ConfigKey.MIN_CONFLUENCES_BUY, "2", "int"),
+        (ConfigKey.MIN_CONFLUENCES_SHORT, "2", "int"),
         (ConfigKey.COOLDOWN_AFTER_SELL_MIN, "15", "int"),
         (ConfigKey.SUBJECTIVE_ADJ_MAX, "0.10", "float"),
         (ConfigKey.EXPECTED_HOLDING_MAX_MIN, "240", "int"),

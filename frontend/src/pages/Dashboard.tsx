@@ -13,7 +13,10 @@ import {
   computePnlUsdtDirectional,
   sideBadgeClass,
 } from "../lib/pnl";
-import type { PositionSide } from "../types";
+import type { PositionSide, TradingContext } from "../types";
+import { RuntimeMismatchBanner } from "../components/RuntimeMismatchBanner";
+import { TradingContextBadges } from "../components/TradingContextBadges";
+import { FuturesBalanceCard } from "../components/FuturesBalanceCard";
 
 interface EngineHealth {
   ok: boolean;
@@ -92,6 +95,7 @@ export function Dashboard() {
   const [ticker, setTicker] = useState<{ symbol: string; price: number | null } | null>(null);
   const [engineHealth, setEngineHealth] = useState<EngineHealth | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
+  const [tradingCtx, setTradingCtx] = useState<TradingContext | null>(null);
   const countdownSecs = useCountdown(engineHealth);
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
@@ -99,7 +103,10 @@ export function Dashboard() {
   const loadStats = () => api.dailyStats().then(setStats).catch(() => {});
   const loadHealth = () =>
     fetch("/api/health").then(r => r.json())
-      .then(d => setEngineHealth(d?.engine ?? null))
+      .then(d => {
+        setEngineHealth(d?.engine ?? null);
+        setTradingCtx(d?.trading ?? null);
+      })
       .catch(() => {});
 
   useEffect(() => {
@@ -138,11 +145,15 @@ export function Dashboard() {
 
   const pnlTotal = (stats?.pnl_realized ?? 0) + (stats?.pnl_unrealized ?? 0);
   const pnlColor = pnlTotal > 0 ? "text-emerald-400" : pnlTotal < 0 ? "text-red-400" : "text-zinc-400";
+  const isFuturesMode = tradingCtx?.trading_product === "futures";
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between rounded-xl bg-zinc-900 p-4">
-        <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between rounded-xl bg-zinc-900 p-4 flex-wrap gap-3">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="sm:hidden">
+            <TradingContextBadges ctx={tradingCtx} />
+          </div>
           <div className="flex items-center gap-3">
             <span className={`size-3 rounded-full ${connected ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"}`} />
             <span className="text-sm">{connected ? "WS conectado" : "Desconectado — reconectando..."}</span>
@@ -165,75 +176,70 @@ export function Dashboard() {
         </button>
       </div>
 
-      <PriceChart />
+      {tradingCtx?.runtime_mismatch && (
+        <RuntimeMismatchBanner ctx={tradingCtx} />
+      )}
+
+      <PriceChart
+        tradingProduct={tradingCtx?.trading_product}
+        chartLabel={tradingCtx?.chart_label}
+      />
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <Card title="Balance Binance">
-          {!balance ? (
-            <p className="text-zinc-500 text-sm">Cargando...</p>
-          ) : (
-            <div className="space-y-1">
-              <StatRow
-                label="USDT libre"
-                value={`$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                valueClass="text-emerald-400"
-              />
-              {balance.usdt_locked > 0 && (
+        {isFuturesMode ? (
+          <FuturesBalanceCard futures={balance?.futures} />
+        ) : (
+          <Card title="Balance Binance">
+            {!balance ? (
+              <p className="text-zinc-500 text-sm">Cargando...</p>
+            ) : (
+              <div className="space-y-1">
                 <StatRow
-                  label="USDT bloqueado (órdenes)"
-                  value={`$${balance.usdt_locked.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                  valueClass="text-yellow-500"
+                  label="USDT libre"
+                  value={`$${balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  valueClass="text-emerald-400"
                 />
-              )}
-              {balance.available_margin != null && (
-                <>
+                {balance.usdt_locked > 0 && (
                   <StatRow
-                    label="Margen disponible (futures)"
-                    value={`$${balance.available_margin.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                    valueClass="text-amber-400"
+                    label="USDT bloqueado (órdenes)"
+                    value={`$${balance.usdt_locked.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    valueClass="text-yellow-500"
                   />
-                  {balance.margin_balance != null && (
-                    <StatRow
-                      label="Margen total"
-                      value={`$${balance.margin_balance.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                      valueClass="text-zinc-300"
-                    />
-                  )}
-                </>
-              )}
-              <StatRow
-                label="BTC libre en exchange"
-                value={`${balance.btc_exchange.toFixed(6)} BTC`}
-                valueClass="text-amber-400"
-              />
-              {balance.btc_locked > 0 && (
+                )}
                 <StatRow
-                  label="BTC bloqueado (órdenes)"
-                  value={`${balance.btc_locked.toFixed(6)} BTC`}
-                  valueClass="text-yellow-500"
+                  label="BTC libre en exchange"
+                  value={`${balance.btc_exchange.toFixed(6)} BTC`}
+                  valueClass="text-amber-400"
                 />
-              )}
-              <StatRow
-                label="BTC en posiciones"
-                value={`${balance.btc_in_positions.toFixed(6)} BTC`}
-                valueClass="text-zinc-300"
-              />
-              {ticker?.price != null && (
+                {balance.btc_locked > 0 && (
+                  <StatRow
+                    label="BTC bloqueado (órdenes)"
+                    value={`${balance.btc_locked.toFixed(6)} BTC`}
+                    valueClass="text-yellow-500"
+                  />
+                )}
                 <StatRow
-                  label="Total en USD (real)"
-                  value={`$${(balance.usdt_total + balance.btc_exchange_total * ticker.price).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                  valueClass="text-white font-semibold"
+                  label="BTC en posiciones"
+                  value={`${balance.btc_in_positions.toFixed(6)} BTC`}
+                  valueClass="text-zinc-300"
                 />
-              )}
-              <div className="pt-2 text-xs text-zinc-600">
-                {balance.balance_ts
-                  ? `Actualizado ${new Date(balance.balance_ts).toLocaleTimeString("es-AR")}`
-                  : "Sin datos de Binance"}
-                {balance.balance_source === "binance" ? "" : " (fallback DB)"}
+                {ticker?.price != null && (
+                  <StatRow
+                    label="Total en USD (real)"
+                    value={`$${(balance.usdt_total + balance.btc_exchange_total * ticker.price).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    valueClass="text-white font-semibold"
+                  />
+                )}
+                <div className="pt-2 text-xs text-zinc-600">
+                  {balance.balance_ts
+                    ? `Actualizado ${new Date(balance.balance_ts).toLocaleTimeString("es-AR")}`
+                    : "Sin datos de Binance"}
+                  {balance.balance_source === "binance" ? "" : " (fallback DB)"}
+                </div>
               </div>
-            </div>
-          )}
-        </Card>
+            )}
+          </Card>
+        )}
 
         <Card title="Posiciones abiertas">
           {positions.length === 0
@@ -398,3 +404,4 @@ export function Dashboard() {
     </div>
   );
 }
+

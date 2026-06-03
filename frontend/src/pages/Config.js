@@ -1,6 +1,8 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { RuntimeMismatchBanner } from "../components/RuntimeMismatchBanner";
+import { TradingContextBadges } from "../components/TradingContextBadges";
 const ALL_PROVIDERS = [
     "groq-llama-3.3-70b", "groq-compound-beta", "groq-compound-mini",
     "groq-llama-4-scout", "groq-gpt-oss-120b", "groq-gpt-oss-20b",
@@ -62,7 +64,6 @@ const FALLBACK_KEYS = new Set([
 ]);
 const fmt2 = (v) => v.toFixed(2);
 const fmt1 = (v) => v.toFixed(1);
-const fmtPct1 = (v) => `${(v * 100).toFixed(0)}%`;
 const FIELD_DEFS = {
     sl_atr_multiplier: {
         label: "Multiplicador SL (ATR)",
@@ -84,7 +85,7 @@ const FIELD_DEFS = {
     },
     max_position_pct: {
         label: "Tamaño máximo de posición",
-        description: "Porcentaje máximo del capital total que puede usarse en una sola entrada.",
+        description: "Tope de notional por trade (% del capital en spot o del margen disponible en futuros). Usado por R1 y el guard de min_notional.",
         type: "slider", min: 0.01, max: 0.20, step: 0.01, unit: "%",
         format: v => `${(v * 100).toFixed(0)}%`, parse: parseFloat,
     },
@@ -216,18 +217,18 @@ const FIELD_DEFS = {
     // ── LLM-Centric (v1.3) ───────────────────────────────────────────────────
     min_position_size: {
         label: "Tamaño mínimo de posición",
-        description: "Piso de sizing en fracción del capital. El LLM no puede proponer menos. También es el mínimo para que el Risk Gate ejecute un BUY.",
+        description: "Piso de sizing (% del capital o margen disponible en futuros). El servidor no ejecuta aperturas por debajo de este piso.",
         type: "slider", min: 0.001, max: 0.05, step: 0.001, unit: "%",
         format: v => `${(v * 100).toFixed(1)}%`, parse: parseFloat,
     },
     coherence_strict_mode: {
         label: "Modo estricto del CoherenceChecker",
-        description: "Cuando está activo, inconsistencias críticas del LLM (C1/C2/C3) bloquean la ejecución forzando HOLD. Por defecto son solo advertencias informativas.",
+        description: "Cuando está activo, inconsistencias factuales (C1–C3 y C1P–C3P en futuros) bloquean la ejecución forzando HOLD. Por defecto son solo advertencias.",
         type: "toggle",
     },
     two_pass_enabled: {
         label: "Two-pass habilitado",
-        description: "Permite que el LLM se auto-corrija: si detecta inconsistencias factuales (C1/C2/C3), hace una segunda llamada al LLM en el mismo ciclo para revisar su decisión.",
+        description: "Segunda llamada al LLM en el mismo ciclo si hay C1/C2/C3 o C1P/C2P/C3P (confluencias vs indicadores).",
         type: "toggle",
     },
     decisor_llm_temperature: {
@@ -243,8 +244,8 @@ const FIELD_DEFS = {
         format: v => (v === 0 ? "off" : String(v)), parse: parseInt,
     },
     risk_per_trade_pct: {
-        label: "Riesgo por trade (% capital)",
-        description: "Fracción del capital en riesgo si el SL se ejecuta. En BUY el servidor calcula position_size_pct = riesgo / distancia al SL (tope max_position_pct y piso min_position_size).",
+        label: "Riesgo por trade (% capital / margen)",
+        description: "Fracción del capital (spot) o margen disponible (futuros) en riesgo si toca el SL. El servidor calcula position_size_pct = riesgo / distancia SL (tope max_position_pct).",
         type: "slider", min: 0.001, max: 0.02, step: 0.001, unit: "%",
         format: v => `${(v * 100).toFixed(2)}%`, parse: parseFloat,
     },
@@ -280,7 +281,7 @@ const FIELD_DEFS = {
     },
     conf_threshold_trending_up: {
         label: "Confianza mínima sugerida — TRENDING_UP",
-        description: "Guía para el LLM: confidence mínima recomendada para BUY en tendencia alcista. El LLM tiene autonomía para desviarse con justificación.",
+        description: "Guía LLM para entradas alcistas (BUY). En futuros, TRENDING_UP desincentiva SHORT.",
         type: "slider", min: 0.40, max: 0.85, step: 0.05, unit: "",
         format: fmt2, parse: parseFloat,
     },
@@ -383,14 +384,20 @@ const FIELD_DEFS = {
         format: fmt1, parse: parseFloat,
     },
     min_confluences_buy: {
-        label: "Confluencias mínimas para BUY",
-        description: "Cantidad mínima de confluencias del playbook requeridas para autorizar una entrada.",
+        label: "Confluencias mínimas (BUY / long)",
+        description: "Mínimo de confluencias alcistas (A–H) para BUY. Guía en el prompt.",
+        type: "slider", min: 1, max: 4, step: 1, unit: "confluencias",
+        format: v => String(v), parse: parseInt,
+    },
+    min_confluences_short: {
+        label: "Confluencias mínimas (SHORT)",
+        description: "Mínimo de confluencias bajistas (I/J/F…) para SHORT en futuros. Guía en el prompt.",
         type: "slider", min: 1, max: 4, step: 1, unit: "confluencias",
         format: v => String(v), parse: parseInt,
     },
     cooldown_after_sell_min: {
-        label: "Cooldown post-SELL",
-        description: "Minutos de espera obligatoria tras un SELL antes de permitir una nueva entrada BUY.",
+        label: "Cooldown post-cierre",
+        description: "Minutos tras un SELL (cerrar long o short) antes de recomendar otra apertura en el prompt.",
         type: "slider", min: 0, max: 120, step: 5, unit: "min",
         format: v => String(v), parse: parseInt,
     },
@@ -400,51 +407,60 @@ const FIELD_DEFS = {
         type: "slider", min: 30, max: 1440, step: 30, unit: "min",
         format: v => String(v), parse: parseInt,
     },
-    // ── Sizing factors ────────────────────────────────────────────────────────
-    factor_conf_60: {
-        label: "Factor sizing — confianza 0.60-0.69",
-        description: "Fracción del max_position_pct usada cuando la confianza está en el rango mínimo.",
-        type: "slider", min: 0.20, max: 0.80, step: 0.05, unit: "",
-        format: fmtPct1, parse: parseFloat,
+    trading_product: {
+        label: "Producto de mercado",
+        description: "spot = BTC/USDT Spot. futures = USDT-M perpetuo (BUY/SHORT). Tras cambiar, reiniciá trading-engine para aplicar adapter y guard de capital.",
+        type: "select",
     },
-    factor_conf_70: {
-        label: "Factor sizing — confianza 0.70-0.79",
-        description: "Fracción del max_position_pct usada con confianza media.",
-        type: "slider", min: 0.30, max: 0.90, step: 0.05, unit: "",
-        format: fmtPct1, parse: parseFloat,
+    max_leverage: {
+        label: "Apalancamiento máximo",
+        description: "Tope R12. Default 1x. Subir solo con historial y buffer de liquidación validados.",
+        type: "slider", min: 1, max: 5, step: 1, unit: "×",
+        format: v => `${v}×`, parse: parseInt,
     },
-    factor_conf_80: {
-        label: "Factor sizing — confianza 0.80-0.89",
-        description: "Fracción del max_position_pct usada con confianza alta.",
-        type: "slider", min: 0.50, max: 1.00, step: 0.05, unit: "",
-        format: fmtPct1, parse: parseFloat,
+    margin_mode: {
+        label: "Modo de margen",
+        description: "isolated recomendado. El engine llama setup_symbol al arrancar en futuros.",
+        type: "select",
     },
-    factor_conf_90: {
-        label: "Factor sizing — confianza 0.90+",
-        description: "Fracción del max_position_pct usada con confianza máxima.",
-        type: "slider", min: 0.70, max: 1.00, step: 0.05, unit: "",
-        format: fmtPct1, parse: parseFloat,
+    funding_rate_max_pct: {
+        label: "Funding máximo (abs)",
+        description: "R15: no abre si |funding| supera este umbral (fracción, ej. 0.05 = 5%).",
+        type: "slider", min: 0.01, max: 0.15, step: 0.01, unit: "",
+        format: v => `${(v * 100).toFixed(0)}%`, parse: parseFloat,
     },
-    factor_regime_non_trending: {
-        label: "Factor sizing — RANGE | HIGH_VOLATILITY",
-        description: "Fracción del sizing base aplicada en regímenes no tendenciales (RANGE o alta volatilidad).",
-        type: "slider", min: 0.20, max: 0.80, step: 0.05, unit: "",
-        format: fmtPct1, parse: parseFloat,
+    liquidation_buffer_atr: {
+        label: "Buffer liquidación (× ATR)",
+        description: "R13: distancia mínima entre SL y precio de liquidación estimado.",
+        type: "slider", min: 1.0, max: 5.0, step: 0.5, unit: "× ATR",
+        format: fmt1, parse: parseFloat,
+    },
+    min_roundtrip_fee_pct: {
+        label: "Piso fees round-trip (%)",
+        description: "Mínimo % usado en R10 y en el prompt cuando Binance reporta fees 0 (testnet). Equivalente LIVE ~0.20.",
+        type: "slider", min: 0.0, max: 0.5, step: 0.05, unit: "%",
+        format: v => `${v.toFixed(2)}%`, parse: parseFloat,
     },
 };
-const GROUPS = [
-    {
-        title: "Gestión de riesgo",
-        color: "amber",
-        keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
-            "max_position_pct", "min_position_size", "risk_per_trade_pct", "max_simultaneous_trades",
-            "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe"],
-        note: "Parámetros con enforcement real en el Risk Gate (R1–R10). El LLM no puede ignorarlos.",
-    },
+const GLOBAL_GROUPS = [
     {
         title: "Motor de decisiones",
         color: "emerald",
         keys: ["decisor_interval_min", "orderbook_levels", "kill_switch"],
+    },
+    {
+        title: "LLM-Centric — Decisor autónomo",
+        color: "sky",
+        keys: [
+            "coherence_strict_mode", "two_pass_enabled",
+            "decisor_llm_temperature", "decisor_self_consistency_n",
+        ],
+        note: "Coherencia y two-pass aplican a BUY y SHORT. El sizing lo calcula el servidor (pestaña Mercado).",
+    },
+    {
+        title: "Modelos LLM",
+        color: "rose",
+        keys: ["decisor_provider", "supervisor_provider", "llm_timeout_sec", "llm_max_retries"],
     },
     {
         title: "Supervisor — auto-config de parámetros",
@@ -454,45 +470,7 @@ const GROUPS = [
             "supervisor_config_min_evaluated_decisions",
             "supervisor_config_auto_apply",
         ],
-        note: "Playbook y diagnóstico usan 24h. Auto-apply de min_rr, sl_atr, etc. usa la ventana larga y requiere muestra mínima.",
-    },
-    {
-        title: "LLM-Centric — Decisor autónomo",
-        color: "sky",
-        keys: [
-            "coherence_strict_mode", "two_pass_enabled",
-            "decisor_llm_temperature", "decisor_self_consistency_n",
-        ],
-        note: "Controles del Decisor LLM-centric: coherencia, two-pass, temperatura y votación multi-muestra. El sizing en BUY lo recalcula el servidor (ver riesgo por trade en Gestión de riesgo).",
-    },
-    {
-        title: "Guías para el LLM — Umbrales de confianza",
-        color: "violet",
-        keys: ["conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol", "rsi_overbought_1h"],
-        note: "⚠ Estas son guías inyectadas en el prompt del Decisor, no límites de enforcement. El LLM tiene autonomía para desviarse con justificación.",
-    },
-    {
-        title: "Guías para el LLM — Calibración de confidence",
-        color: "indigo",
-        keys: [
-            "conf_base_0", "conf_base_1", "conf_base_2", "conf_base_3", "conf_base_4plus",
-            "peso_regime_range", "peso_regime_high_vol",
-            "adj_volume_boost", "adj_volume_ratio",
-            "adj_spread_penalty", "adj_spread_threshold_pct",
-            "subjective_adj_max", "confluence_weak_factor",
-        ],
-        note: "⚠ Parámetros de referencia para el cálculo de confidence del LLM. No son aplicados determinísticamente por el sistema.",
-    },
-    {
-        title: "Decisor — Controles operacionales",
-        color: "teal",
-        keys: ["min_fees_to_tp_ratio", "min_confluences_buy", "cooldown_after_sell_min", "expected_holding_max_min"],
-        note: "min_confluences_buy y cooldown_after_sell_min son guías en el prompt; min_fees_to_tp_ratio es enforcement (R10).",
-    },
-    {
-        title: "Modelos LLM",
-        color: "rose",
-        keys: ["decisor_provider", "supervisor_provider", "llm_timeout_sec", "llm_max_retries"],
+        note: "Playbook y diagnóstico usan 24h. Auto-apply de min_rr, sl_atr, etc. usa la ventana larga.",
     },
     {
         title: "Post-mortem — Aprendizaje",
@@ -504,7 +482,7 @@ const GROUPS = [
             "block_k_max_lines",
             "block_k_window_hours",
         ],
-        note: "El post-mortem corre encadenado al job de Outcome Attribution (mismo intervalo). Usa la misma ventana de análisis (`outcome_attribution_window_hours`). La cadena de fallback se configura abajo.",
+        note: "Encadenado a Outcome Attribution. Ventana compartida con `outcome_attribution_window_hours`.",
     },
     {
         title: "Scheduler",
@@ -520,9 +498,88 @@ const GROUPS = [
             "outcome_attribution_window_hours",
             "outcome_coverage_threshold_pct",
         ],
-        note: "Controles del job que clasifica cada decisión contra el precio posterior (MFE/MAE). La ventana en horas también limita la cola post-mortem. Los cambios toman efecto en el próximo tick.",
+        note: "Clasificación MFE/MAE de decisiones (incluye SHORT). Efecto en el próximo tick del job.",
     },
 ];
+const MARKET_GROUPS = [
+    {
+        title: "Gestión de riesgo",
+        color: "amber",
+        keys: [
+            "sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
+            "max_position_pct", "min_position_size", "risk_per_trade_pct", "max_simultaneous_trades",
+            "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe",
+            "min_roundtrip_fee_pct",
+        ],
+        note: "Enforcement Risk Gate R1–R11 (spot) y R12–R15 (futuros). En perp, max_position_pct y risk aplican sobre margen disponible.",
+    },
+    {
+        title: "Decisor — Controles operacionales",
+        color: "teal",
+        keys: ["min_fees_to_tp_ratio", "min_confluences_buy", "min_confluences_short", "cooldown_after_sell_min", "expected_holding_max_min"],
+        note: "min_fees_to_tp_ratio = R10. Confluencias y cooldown son guías en el prompt (BUY y SHORT).",
+    },
+    {
+        title: "Guías LLM — Umbrales de confianza",
+        color: "violet",
+        keys: ["conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol", "rsi_overbought_1h"],
+        note: "Guías en el prompt; no bloquean ejecución. rsi_overbought_1h relevante para shorts (confluencia I).",
+    },
+    {
+        title: "Guías LLM — Calibración de confidence",
+        color: "indigo",
+        keys: [
+            "conf_base_0", "conf_base_1", "conf_base_2", "conf_base_3", "conf_base_4plus",
+            "peso_regime_range", "peso_regime_high_vol",
+            "adj_volume_boost", "adj_volume_ratio",
+            "adj_spread_penalty", "adj_spread_threshold_pct",
+            "subjective_adj_max", "confluence_weak_factor",
+        ],
+        note: "El servidor calcula confidence_base; regime_factor es direccional (TRENDING_DOWN favorece SHORT).",
+    },
+];
+const FUTURES_GROUP = {
+    title: "Derivados — Futuros USDT-M",
+    color: "violet",
+    keys: [
+        "max_leverage", "margin_mode", "funding_rate_max_pct",
+        "liquidation_buffer_atr",
+    ],
+    note: "Solo aplica con trading_product=futures. Reiniciá el engine tras cambios. Margen en wallet Futuros de Binance; si available×max_position_pct < min_notional, el engine hace downgrade a spot.",
+};
+const INTERNAL_KEYS = new Set([
+    "drawdown_reset_ts", "live_since_ts", "supervisor_run_now",
+    "engine_paused", "engine_pause_reason", "pending_execute", "fallback_provider",
+    "postmortem_interval_min", "confluence_promotion_min_occurrences",
+    "confluence_promotion_window_days", "confluence_registry_max_active",
+    "peso_timeframe_partial", "peso_timeframe_minimal",
+    "adj_antipattern_penalty", "adj_orderbook_penalty", "adj_orderbook_ratio",
+    "factor_conf_60", "factor_conf_70", "factor_conf_80", "factor_conf_90",
+    "factor_regime_non_trending", "mode",
+]);
+function allManagedKeys() {
+    return new Set([
+        ...GLOBAL_GROUPS.flatMap(g => g.keys),
+        ...MARKET_GROUPS.flatMap(g => g.keys),
+        ...FUTURES_GROUP.keys,
+        "trading_product",
+        ...Array.from(FALLBACK_KEYS),
+    ]);
+}
+function ConfigGroupPanel({ group, entryMap, onSave, }) {
+    const c = COLOR_CLASSES[group.color] ?? COLOR_CLASSES.zinc;
+    const groupEntries = group.keys
+        .map(k => entryMap[k])
+        .filter((e) => e !== undefined);
+    if (groupEntries.length === 0)
+        return null;
+    return (_jsxs("div", { className: `rounded-xl bg-zinc-900 p-5 border ${c.border}`, children: [_jsxs("div", { className: "flex items-center gap-2 mb-2", children: [_jsx("span", { className: `w-2 h-2 rounded-full ${c.dot}` }), _jsx("h2", { className: `text-sm font-semibold uppercase tracking-wide ${c.title}`, children: group.title })] }), group.note && (_jsx("p", { className: "text-xs text-zinc-500 mb-4 leading-relaxed", children: group.note })), _jsx("div", { className: "space-y-6", children: groupEntries.map(e => {
+                    const def = FIELD_DEFS[e.key];
+                    if (!def)
+                        return null;
+                    return (_jsx("div", { children: _jsx(ConfigField, { fieldKey: e.key, def: def, value: e.value, onSave: onSave }) }, e.key));
+                }) })] }));
+}
 function SliderField({ fieldKey, def, value, onSave }) {
     const parse = def.parse ?? parseFloat;
     const fmt = def.format ?? (v => String(v));
@@ -607,9 +664,21 @@ export function Config() {
     const [drawdownResetting, setDrawdownResetting] = useState(false);
     const [msg, setMsg] = useState("");
     const [supRunning, setSupRunning] = useState(false);
+    const [tab, setTab] = useState("global");
+    const [tradingCtx, setTradingCtx] = useState(null);
     const entryMap = Object.fromEntries(entries.map(e => [e.key, e]));
+    const tradingProduct = entryMap.trading_product?.value === "futures" ? "futures" : "spot";
     const reload = () => api.config().then(setEntries).catch(() => { });
-    useEffect(() => { reload(); }, []);
+    const loadTradingCtx = () => fetch("/api/health")
+        .then(r => r.json())
+        .then(d => setTradingCtx(d?.trading ?? null))
+        .catch(() => setTradingCtx(null));
+    useEffect(() => {
+        reload();
+        loadTradingCtx();
+        const id = setInterval(loadTradingCtx, 30_000);
+        return () => clearInterval(id);
+    }, []);
     const onSave = async (key, valueOverride) => {
         const value = valueOverride ?? edits[key];
         if (value === undefined)
@@ -618,8 +687,12 @@ export function Config() {
         if (!valueOverride)
             setEdits(p => { const { [key]: _, ...rest } = p; return rest; });
         reload();
-        setMsg(`Guardado: ${key} = ${value}`);
-        setTimeout(() => setMsg(""), 3000);
+        loadTradingCtx();
+        const restartHint = key === "trading_product"
+            ? " Reiniciá trading-engine para aplicar el producto."
+            : "";
+        setMsg(`Guardado: ${key} = ${value}.${restartHint}`);
+        setTimeout(() => setMsg(""), 5000);
     };
     const onLive = async () => {
         try {
@@ -657,50 +730,14 @@ export function Config() {
         setTimeout(() => { setMsg(""); setDrawdownResetting(false); }, 6000);
     };
     const modeEntry = entries.find(e => e.key === "mode");
+    const tradingProductEntry = entryMap.trading_product;
     const fallbackDecissor = entries.find(e => e.key === "fallback_providers");
     const fallbackSupervisor = entries.find(e => e.key === "supervisor_fallback_providers");
     const fallbackPostMortem = entries.find(e => e.key === "postmortem_fallback_providers");
-    const knownKeys = new Set([
-        ...GROUPS.flatMap(g => g.keys),
-        ...Array.from(FALLBACK_KEYS),
-        "mode",
-        // internas — no se exponen en el UI
-        "drawdown_reset_ts",
-        "live_since_ts",
-        "supervisor_run_now",
-        "engine_paused",
-        "engine_pause_reason",
-        "pending_execute",
-        "fallback_provider",
-        "postmortem_interval_min",
-        "confluence_promotion_min_occurrences",
-        "confluence_promotion_window_days",
-        "confluence_registry_max_active",
-        // legacy obsoletas — eliminadas en v1.3 LLM-centric
-        "peso_timeframe_partial",
-        "peso_timeframe_minimal",
-        "adj_antipattern_penalty",
-        "adj_orderbook_penalty",
-        "adj_orderbook_ratio",
-        "factor_conf_60",
-        "factor_conf_70",
-        "factor_conf_80",
-        "factor_conf_90",
-        "factor_regime_non_trending",
-    ]);
-    const otherEntries = entries.filter(e => !knownKeys.has(e.key));
-    return (_jsxs("div", { className: "space-y-4", children: [msg && (_jsx("div", { className: "rounded bg-zinc-800 px-4 py-2 text-sm text-emerald-400 border border-emerald-800/40", children: msg })), _jsxs("div", { className: "flex flex-wrap gap-3", children: [modeEntry?.value === "PAPER_TRADING" && (_jsx("button", { onClick: () => setLiveModal(true), className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500", children: "Cambiar a LIVE (trading real) \u2192" })), _jsx("button", { onClick: onRunSupervisor, disabled: supRunning, className: "rounded bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50", children: supRunning ? "Encolando..." : "Ejecutar Supervisor ahora" }), _jsx("button", { onClick: () => setDrawdownResetModal(true), className: "rounded bg-amber-700 px-4 py-2 text-sm font-semibold hover:bg-amber-600", children: "Resetear pico de drawdown" })] }), GROUPS.map(group => {
-                const c = COLOR_CLASSES[group.color] ?? COLOR_CLASSES.zinc;
-                const groupEntries = group.keys
-                    .map(k => entryMap[k])
-                    .filter((e) => e !== undefined);
-                if (groupEntries.length === 0)
-                    return null;
-                return (_jsxs("div", { className: `rounded-xl bg-zinc-900 p-5 border ${c.border}`, children: [_jsxs("div", { className: "flex items-center gap-2 mb-2", children: [_jsx("span", { className: `w-2 h-2 rounded-full ${c.dot}` }), _jsx("h2", { className: `text-sm font-semibold uppercase tracking-wide ${c.title}`, children: group.title })] }), group.note && (_jsx("p", { className: "text-xs text-zinc-500 mb-4 leading-relaxed", children: group.note })), _jsx("div", { className: "space-y-6", children: groupEntries.map(e => {
-                                const def = FIELD_DEFS[e.key];
-                                if (!def)
-                                    return null;
-                                return (_jsx("div", { children: _jsx(ConfigField, { fieldKey: e.key, def: def, value: e.value, onSave: (k, v) => onSave(k, v) }) }, e.key));
-                            }) })] }, group.title));
-            }), fallbackDecissor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Decisor", configKey: "fallback_providers", currentValue: fallbackDecissor.value, onSave: onSave })), fallbackSupervisor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Supervisor", configKey: "supervisor_fallback_providers", currentValue: fallbackSupervisor.value, onSave: onSave })), fallbackPostMortem && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Post-mortem", configKey: "postmortem_fallback_providers", currentValue: fallbackPostMortem.value, onSave: onSave })), otherEntries.length > 0 && (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5 border border-zinc-800", children: [_jsx("h2", { className: "text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4", children: "Otros par\u00E1metros" }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-600 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-4 w-64", children: "Key" }), _jsx("th", { className: "text-left pr-4", children: "Valor" }), _jsx("th", { className: "w-24" })] }) }), _jsx("tbody", { children: otherEntries.map(e => (_jsxs("tr", { className: "border-t border-zinc-800", children: [_jsx("td", { className: "py-2 pr-4 font-mono text-zinc-400 text-xs align-top pt-3", children: e.key }), _jsx("td", { className: "pr-4 align-top pt-2", children: SELECT_OPTIONS[e.key] ? (_jsx("select", { className: "rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100", value: edits[e.key] ?? e.value, onChange: ev => { setEdits(p => ({ ...p, [e.key]: ev.target.value })); onSave(e.key, ev.target.value); }, children: SELECT_OPTIONS[e.key].map(opt => _jsx("option", { value: opt, children: opt }, opt)) })) : (_jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm", value: edits[e.key] ?? e.value, onChange: ev => setEdits(p => ({ ...p, [e.key]: ev.target.value })) })) }), _jsx("td", { className: "align-top pt-2", children: edits[e.key] !== undefined && edits[e.key] !== e.value && (_jsx("button", { onClick: () => onSave(e.key), className: "rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500", children: "Guardar" })) })] }, e.key))) })] })] })), drawdownResetModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-amber-700/50 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2 text-amber-300", children: "\u26A0\uFE0F Resetear pico de drawdown" }), _jsx("p", { className: "text-sm text-zinc-300 mb-4", children: "El engine dejar\u00E1 de considerar el historial anterior como referencia del pico m\u00E1ximo. A partir del pr\u00F3ximo tick, el drawdown se medir\u00E1 desde el balance actual." }), _jsx("p", { className: "text-xs text-zinc-500 mb-4", children: "No se eliminan datos. El historial queda intacto y el reset puede rehacerse en cualquier momento." }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setDrawdownResetModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm hover:bg-zinc-600", children: "Cancelar" }), _jsx("button", { onClick: onResetDrawdown, disabled: drawdownResetting, className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500 disabled:opacity-50", children: drawdownResetting ? "Reseteando..." : "Confirmar reset" })] })] }) })), liveModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-zinc-700 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2", children: "\u26A0\uFE0F Confirmar modo LIVE" }), _jsxs("p", { className: "text-sm text-zinc-300 mb-3", children: ["Esto activa trading con dinero real en Binance. Escribe exactamente:", _jsx("code", { className: "block mt-2 bg-zinc-800 px-3 py-2 rounded text-amber-300", children: "CONFIRMO TRADING REAL" })] }), _jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 mb-3", value: liveConfirm, onChange: e => setLiveConfirm(e.target.value) }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setLiveModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm", children: "Cancelar" }), _jsx("button", { onClick: onLive, className: "rounded bg-red-600 px-4 py-2 text-sm hover:bg-red-500", children: "Activar LIVE" })] })] }) }))] }));
+    const managed = allManagedKeys();
+    const otherEntries = entries.filter(e => !managed.has(e.key) && !INTERNAL_KEYS.has(e.key));
+    const tabBtn = (id, label) => (_jsx("button", { type: "button", onClick: () => setTab(id), className: `px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${tab === id
+            ? "border-emerald-400 text-white bg-zinc-800"
+            : "border-transparent text-zinc-500 hover:text-zinc-300"}`, children: label }));
+    return (_jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [_jsx("h1", { className: "text-xl font-semibold text-zinc-100", children: "Configuraci\u00F3n" }), _jsx(TradingContextBadges, { ctx: tradingCtx })] }), tradingCtx?.runtime_mismatch && (_jsx(RuntimeMismatchBanner, { ctx: tradingCtx })), msg && (_jsx("div", { className: "rounded bg-zinc-800 px-4 py-2 text-sm text-emerald-400 border border-emerald-800/40", children: msg })), _jsxs("div", { className: "flex flex-wrap gap-3", children: [modeEntry?.value === "PAPER_TRADING" && (_jsx("button", { onClick: () => setLiveModal(true), className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500", children: "Cambiar a LIVE (trading real) \u2192" })), _jsx("button", { onClick: onRunSupervisor, disabled: supRunning, className: "rounded bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50", children: supRunning ? "Encolando..." : "Ejecutar Supervisor ahora" }), _jsx("button", { onClick: () => setDrawdownResetModal(true), className: "rounded bg-amber-700 px-4 py-2 text-sm font-semibold hover:bg-amber-600", children: "Resetear pico de drawdown" })] }), _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-zinc-800 p-4 flex flex-wrap items-end gap-6", children: [tradingProductEntry && FIELD_DEFS.trading_product && (_jsx("div", { className: "min-w-[220px] flex-1", children: _jsx(ConfigField, { fieldKey: "trading_product", def: FIELD_DEFS.trading_product, value: tradingProductEntry.value, onSave: onSave }) })), _jsxs("div", { className: "text-xs text-zinc-500 max-w-md pb-1", children: [_jsxs("p", { children: ["Modo paper/LIVE:", " ", _jsx("span", { className: "text-zinc-300 font-medium", children: modeEntry?.value ?? "—" }), modeEntry?.value === "PAPER_TRADING" && (_jsx("span", { className: "text-zinc-600", children: " \u00B7 us\u00E1 el bot\u00F3n abajo para pasar a LIVE" }))] }), _jsxs("p", { className: "mt-1", children: ["Testnet/mainnet viene de ", _jsx("code", { className: "text-zinc-400", children: "BINANCE_TESTNET" }), " en", " ", _jsx("code", { className: "text-zinc-400", children: ".env" }), ", no de esta pantalla."] })] })] }), _jsxs("div", { className: "flex border-b border-zinc-800 gap-1", children: [tabBtn("global", "Global"), tabBtn("market", tradingProduct === "futures" ? "Mercado — Futuros" : "Mercado — Spot")] }), tab === "global" && (_jsx("div", { className: "space-y-4", children: GLOBAL_GROUPS.map(group => (_jsx(ConfigGroupPanel, { group: group, entryMap: entryMap, onSave: onSave }, group.title))) })), tab === "market" && (_jsxs("div", { className: "space-y-4", children: [tradingProduct === "spot" && (_jsxs("div", { className: "rounded-lg border border-sky-900/40 bg-sky-950/20 px-4 py-3 text-sm text-sky-200", children: ["Producto ", _jsx("strong", { children: "Spot" }), ": solo acciones BUY / SELL / HOLD. No aplica apalancamiento, funding ni buffer de liquidaci\u00F3n."] })), MARKET_GROUPS.map(group => (_jsx(ConfigGroupPanel, { group: group, entryMap: entryMap, onSave: onSave }, group.title))), tradingProduct === "futures" && (_jsx(ConfigGroupPanel, { group: FUTURES_GROUP, entryMap: entryMap, onSave: onSave }))] })), tab === "global" && fallbackDecissor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Decisor", configKey: "fallback_providers", currentValue: fallbackDecissor.value, onSave: onSave })), tab === "global" && fallbackSupervisor && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Supervisor", configKey: "supervisor_fallback_providers", currentValue: fallbackSupervisor.value, onSave: onSave })), tab === "global" && fallbackPostMortem && (_jsx(FallbackChain, { label: "Cadena de fallback \u2014 Post-mortem", configKey: "postmortem_fallback_providers", currentValue: fallbackPostMortem.value, onSave: onSave })), otherEntries.length > 0 && (_jsxs("div", { className: "rounded-xl bg-zinc-900 p-5 border border-zinc-800", children: [_jsx("h2", { className: "text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4", children: "Otros par\u00E1metros" }), _jsxs("table", { className: "w-full text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "text-xs uppercase text-zinc-600 border-b border-zinc-800", children: [_jsx("th", { className: "text-left py-2 pr-4 w-64", children: "Key" }), _jsx("th", { className: "text-left pr-4", children: "Valor" }), _jsx("th", { className: "w-24" })] }) }), _jsx("tbody", { children: otherEntries.map(e => (_jsxs("tr", { className: "border-t border-zinc-800", children: [_jsx("td", { className: "py-2 pr-4 font-mono text-zinc-400 text-xs align-top pt-3", children: e.key }), _jsx("td", { className: "pr-4 align-top pt-2", children: SELECT_OPTIONS[e.key] ? (_jsx("select", { className: "rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm text-zinc-100", value: edits[e.key] ?? e.value, onChange: ev => { setEdits(p => ({ ...p, [e.key]: ev.target.value })); onSave(e.key, ev.target.value); }, children: SELECT_OPTIONS[e.key].map(opt => _jsx("option", { value: opt, children: opt }, opt)) })) : (_jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 font-mono text-sm", value: edits[e.key] ?? e.value, onChange: ev => setEdits(p => ({ ...p, [e.key]: ev.target.value })) })) }), _jsx("td", { className: "align-top pt-2", children: edits[e.key] !== undefined && edits[e.key] !== e.value && (_jsx("button", { onClick: () => onSave(e.key), className: "rounded bg-emerald-600 px-3 py-1 text-xs hover:bg-emerald-500", children: "Guardar" })) })] }, e.key))) })] })] })), drawdownResetModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-amber-700/50 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2 text-amber-300", children: "\u26A0\uFE0F Resetear pico de drawdown" }), _jsx("p", { className: "text-sm text-zinc-300 mb-4", children: "El engine dejar\u00E1 de considerar el historial anterior como referencia del pico m\u00E1ximo. A partir del pr\u00F3ximo tick, el drawdown se medir\u00E1 desde el balance actual." }), _jsx("p", { className: "text-xs text-zinc-500 mb-4", children: "No se eliminan datos. El historial queda intacto y el reset puede rehacerse en cualquier momento." }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setDrawdownResetModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm hover:bg-zinc-600", children: "Cancelar" }), _jsx("button", { onClick: onResetDrawdown, disabled: drawdownResetting, className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500 disabled:opacity-50", children: drawdownResetting ? "Reseteando..." : "Confirmar reset" })] })] }) })), liveModal && (_jsx("div", { className: "fixed inset-0 bg-black/70 flex items-center justify-center z-50", children: _jsxs("div", { className: "rounded-xl bg-zinc-900 border border-zinc-700 p-6 max-w-sm w-full", children: [_jsx("h3", { className: "text-lg font-semibold mb-2", children: "\u26A0\uFE0F Confirmar modo LIVE" }), _jsxs("p", { className: "text-sm text-zinc-300 mb-3", children: ["Esto activa trading con dinero real en Binance. Escribe exactamente:", _jsx("code", { className: "block mt-2 bg-zinc-800 px-3 py-2 rounded text-amber-300", children: "CONFIRMO TRADING REAL" })] }), _jsx("input", { className: "w-full rounded bg-zinc-800 border border-zinc-700 px-2 py-1 mb-3", value: liveConfirm, onChange: e => setLiveConfirm(e.target.value) }), _jsxs("div", { className: "flex gap-2 justify-end", children: [_jsx("button", { onClick: () => setLiveModal(false), className: "rounded bg-zinc-700 px-4 py-2 text-sm", children: "Cancelar" }), _jsx("button", { onClick: onLive, className: "rounded bg-red-600 px-4 py-2 text-sm hover:bg-red-500", children: "Activar LIVE" })] })] }) }))] }));
 }

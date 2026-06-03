@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, NavLink, BrowserRouter } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard";
 import { Trades } from "./pages/Trades";
@@ -6,14 +7,32 @@ import { PlaybookPage } from "./pages/Playbook";
 import { Config } from "./pages/Config";
 import { Health } from "./pages/Health";
 import { ConfluencePage } from "./pages/Confluence";
+import { TradingContextBadges } from "./components/TradingContextBadges";
+import type { TradingContext } from "./types";
 
 function NavBar() {
+  const [tradingCtx, setTradingCtx] = useState<TradingContext | null>(null);
+
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/health")
+        .then(r => r.json())
+        .then(d => setTradingCtx(d?.trading ?? null))
+        .catch(() => setTradingCtx(null));
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const base = "px-3 py-2 text-sm text-zinc-400 hover:text-white";
   const active = "!text-white border-b-2 border-emerald-400";
   return (
-    <nav className="flex items-center border-b border-zinc-800 bg-zinc-900 h-12">
-      <span className="px-4 font-semibold text-emerald-400">⚡ Crypto AI Trading</span>
-      <div className="flex">
+    <nav className="flex items-center border-b border-zinc-800 bg-zinc-900 h-12 gap-2">
+      <span className="px-4 font-semibold text-emerald-400 shrink-0">⚡ Crypto AI Trading</span>
+      <div className="hidden sm:flex px-2 border-l border-zinc-800">
+        <TradingContextBadges ctx={tradingCtx} />
+      </div>
+      <div className="flex flex-1 min-w-0">
         {[
           ["/", "Dashboard"], ["/trades", "Trades"],
           ["/decisions", "Decisiones"], ["/confluence", "Confluencias"], ["/playbook", "Playbook"],

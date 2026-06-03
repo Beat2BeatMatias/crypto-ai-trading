@@ -6,10 +6,10 @@ CABECERA REQUERIDA (copiá esta línea exacta al inicio del playbook):
 MÍNIMO DE TRADES PARA MODO NORMAL: {min_trades}
 
 PERFIL OPERATIVO: {operative_profile} | Intervalo: {decisor_interval_min_cfg}m | ATR ref: {atr_timeframe_cfg} | Holding máx: {expected_holding_max_min}min
-Fee round-trip: {roundtrip_fee_pct:.4f}% | Kill switch: {kill_switch_status}
+Producto: {trading_product} | Fee round-trip: {roundtrip_fee_pct:.4f}% | Kill switch: {kill_switch_status}
 
 MÉTRICAS (últimas 24h):
-  Decisiones: {total_decisions} (BUY {buy_count}, SELL {sell_count}, HOLD {hold_count})
+  Decisiones: {total_decisions} (BUY {buy_count}, SHORT {short_count}, SELL {sell_count}, HOLD {hold_count})
   Rechazadas por Risk Gate: {rejected_count}
   Trades cerrados: {closed_trades}
   Win rate: {win_rate:.1f}% | Profit factor: {profit_factor:.2f} | Sharpe período: {sharpe_period:.2f}
@@ -30,7 +30,8 @@ RECHAZOS DEL RISK GATE (por regla):
 {rejection_breakdown_block}
 
 AUDITORÍA LLM-CENTRIC (v1.3 — Decisor autónomo):
-  Sizing promedio de BUYs: {avg_position_size_pct:.4f} | Confidence promedio BUYs: {avg_buy_confidence:.3f}
+  Sizing BUY: {avg_position_size_pct:.4f} | Conf BUY: {avg_buy_confidence:.3f}
+  Sizing SHORT: {avg_short_position_size_pct:.4f} | Conf SHORT: {avg_short_confidence:.3f}
   Two-pass gatillados: {two_pass_triggered_count} (auto-correcciones del LLM en el período)
   Decisiones con coherence warnings: {decisions_with_warnings} / {total_decisions}
   Warnings por regla (CoherenceChecker C1-C6):
@@ -47,11 +48,12 @@ AUDITORÍA LLM-CENTRIC (v1.3 — Decisor autónomo):
 ANÁLISIS CONTRAFÁCTICO (últimas 24h, horizonte {expected_holding_max_min}min):
   Decisiones evaluadas: {evaluated_decisions} / {total_decisions}
   HOLDs missed: {missed_count} ({missed_rate:.1f}%) | BUYs malos: {bad_buy_count} ({bad_buy_rate:.1f}%)
-  Bloqueados buenos: {blocked_good_count} | Bloqueados correctamente: {correctly_blocked_count}
-  ⚠ Si bad_buy_count < 5, la tasa bad_buy_rate puede ser ruido estadístico — no endurecer agresivamente.
+  SHORTs malos: {bad_short_count} ({bad_short_rate:.1f}%) | Bloqueados buenos: {blocked_good_count} (SHORT bloq. buenos: {blocked_good_short_count})
+  Bloqueados correctamente: {correctly_blocked_count}
+  ⚠ Si bad_buy_count o bad_short_count < 5, las tasas pueden ser ruido — no endurecer agresivamente.
 
-CONFLUENCIAS EN BUENOS BUYS: {winners_confluences}
-CONFLUENCIAS EN MALOS BUYS: {losers_confluences}
+CONFLUENCIAS EN BUENOS/MALOS BUYS: {winners_confluences} / {losers_confluences}
+CONFLUENCIAS EN BUENOS/MALOS SHORTS: {winners_short_confluences} / {losers_short_confluences}
 
 TOP MISSES (HOLDs que hubieran ganado):
 {top_misses_block}

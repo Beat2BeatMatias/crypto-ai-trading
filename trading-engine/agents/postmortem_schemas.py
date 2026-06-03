@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 POSTMORTEM_ELIGIBLE_CLASSIFICATIONS = frozenset({
-    "BAD_BUY", "BAD_SELL", "MISSED_OPPORTUNITY", "BLOCKED_GOOD_TRADE",
+    "BAD_BUY", "BAD_SHORT", "BAD_SELL", "MISSED_OPPORTUNITY", "BLOCKED_GOOD_TRADE",
 })
 
 PostmortemStatus = Literal["completed", "skipped", "failed"]
@@ -121,7 +121,7 @@ def compute_severity_score(
     mfe = _f(getattr(outcome, "mfe_pct", None))
     mae = _f(getattr(outcome, "mae_pct", None))
 
-    if classification == "BAD_BUY" and trade is not None:
+    if classification in ("BAD_BUY", "BAD_SHORT") and trade is not None:
         pnl = _f(getattr(trade, "pnl_pct", None))
         if pnl is not None:
             return min(1.0, abs(pnl) / 2.0)

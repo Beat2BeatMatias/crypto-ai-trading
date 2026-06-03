@@ -1,3 +1,24 @@
+export type TradingProduct = "spot" | "futures";
+
+export type RuntimeMismatchReason =
+  | "api_permissions"
+  | "insufficient_margin"
+  | "restart_required"
+  | "unknown";
+
+export interface TradingContext {
+  mode: string;
+  trading_product: TradingProduct;
+  effective_trading_product: TradingProduct;
+  runtime_mismatch: boolean;
+  runtime_mismatch_reason?: RuntimeMismatchReason | null;
+  runtime_mismatch_detail?: string | null;
+  binance_testnet: boolean;
+  chart_market?: "spot" | "futures";
+  chart_label?: string;
+  chart_symbol?: string;
+}
+
 export type DecisorAction = "BUY" | "SHORT" | "SELL" | "HOLD";
 export type PositionSide = "LONG" | "SHORT";
 
@@ -105,6 +126,14 @@ export interface DailyStats {
   decisions_hold: number; decisions_executed: number; decisions_blocked: number;
 }
 
+export interface FuturesBalance {
+  available_margin: number | null;
+  margin_balance: number | null;
+  margin_locked: number | null;
+  source: "live" | "snapshot" | "unavailable" | string;
+  fetched_at: string | null;
+}
+
 export interface Balance {
   usdt: number;
   usdt_locked: number;
@@ -119,6 +148,7 @@ export interface Balance {
   realized_pnl_today: number;
   margin_balance?: number | null;
   available_margin?: number | null;
+  futures?: FuturesBalance | null;
 }
 
 export interface Playbook {

@@ -25,12 +25,14 @@ class PriceCollector:
         session: AsyncSession,
         *,
         symbol: str,
+        market: str = "spot",
         timeframes: tuple[str, ...] = TIMEFRAMES_DEFAULT,
         limit: int = LIMIT_DEFAULT,
     ):
         self.exchange = exchange
         self.session = session
         self.symbol = symbol
+        self.market = market if market in ("spot", "futures") else "spot"
         self.timeframes = timeframes
         self.limit = limit
 
@@ -59,18 +61,22 @@ class PriceCollector:
                 stmt = _insert(Ohlcv).values(
                     time=ts,
                     timeframe=timeframe,
+                    market=self.market,
                     open=Decimal(str(open_)),
                     high=Decimal(str(high)),
                     low=Decimal(str(low)),
                     close=Decimal(str(close)),
                     volume=Decimal(str(volume)),
                 )
-                stmt = stmt.on_conflict_do_nothing(index_elements=["time", "timeframe"])
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["time", "timeframe", "market"],
+                )
             else:
                 from sqlalchemy.dialects.postgresql import insert as _insert  # noqa: F811
                 stmt = _insert(Ohlcv).values(
                     time=ts,
                     timeframe=timeframe,
+                    market=self.market,
                     open=Decimal(str(open_)),
                     high=Decimal(str(high)),
                     low=Decimal(str(low)),
@@ -78,7 +84,7 @@ class PriceCollector:
                     volume=Decimal(str(volume)),
                 )
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=["time", "timeframe"],
+                    index_elements=["time", "timeframe", "market"],
                     set_={
                         "open": stmt.excluded.open,
                         "high": stmt.excluded.high,
@@ -90,7 +96,13 @@ class PriceCollector:
             await self.session.execute(stmt)
 
         await self.session.commit()
-        logger.info("ohlcv.persisted", symbol=self.symbol, timeframe=timeframe, n=len(raw))
+        logger.info(
+            "ohlcv.persisted",
+            symbol=self.symbol,
+            market=self.market,
+            timeframe=timeframe,
+            n=len(raw),
+        )
         return len(raw)
 
     async def compute_and_persist_indicators(self) -> None:
@@ -101,7 +113,9 @@ class PriceCollector:
         for tf in self.timeframes:
             rows = (
                 await self.session.execute(
-                    select(Ohlcv).where(Ohlcv.timeframe == tf).order_by(Ohlcv.time.asc())
+                    select(Ohlcv)
+                    .where(Ohlcv.timeframe == tf, Ohlcv.market == self.market)
+                    .order_by(Ohlcv.time.asc())
                 )
             ).scalars().all()
             if not rows:
