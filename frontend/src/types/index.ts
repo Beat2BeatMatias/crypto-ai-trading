@@ -117,6 +117,8 @@ export interface Balance {
   balance_ts: string | null;
   balance_source: string | null;
   realized_pnl_today: number;
+  margin_balance?: number | null;
+  available_margin?: number | null;
 }
 
 export interface Playbook {

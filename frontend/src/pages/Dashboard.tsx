@@ -7,7 +7,13 @@ import ConfidenceBreakdown from "../components/ConfidenceBreakdown";
 import ReasoningBlock from "../components/ReasoningBlock";
 import { asDecisorOutput } from "../types/decisorOutput";
 import { PnlRow } from "../components/PnlRow";
-import { computePnlPct, computePnlUsdt } from "../lib/pnl";
+import {
+  actionBadgeClass,
+  computePnlPctDirectional,
+  computePnlUsdtDirectional,
+  sideBadgeClass,
+} from "../lib/pnl";
+import type { PositionSide } from "../types";
 
 interface EngineHealth {
   ok: boolean;
@@ -128,7 +134,7 @@ export function Dashboard() {
   };
 
   const out = lastDecision ? asDecisorOutput(lastDecision.output) : undefined;
-  const actionColor = out?.action === "BUY" ? "text-emerald-400" : out?.action === "SELL" ? "text-red-400" : "text-zinc-400";
+  const actionColor = actionBadgeClass(out?.action ?? "HOLD");
 
   const pnlTotal = (stats?.pnl_realized ?? 0) + (stats?.pnl_unrealized ?? 0);
   const pnlColor = pnlTotal > 0 ? "text-emerald-400" : pnlTotal < 0 ? "text-red-400" : "text-zinc-400";
@@ -179,6 +185,22 @@ export function Dashboard() {
                   valueClass="text-yellow-500"
                 />
               )}
+              {balance.available_margin != null && (
+                <>
+                  <StatRow
+                    label="Margen disponible (futures)"
+                    value={`$${balance.available_margin.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    valueClass="text-amber-400"
+                  />
+                  {balance.margin_balance != null && (
+                    <StatRow
+                      label="Margen total"
+                      value={`$${balance.margin_balance.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                      valueClass="text-zinc-300"
+                    />
+                  )}
+                </>
+              )}
               <StatRow
                 label="BTC libre en exchange"
                 value={`${balance.btc_exchange.toFixed(6)} BTC`}
@@ -217,18 +239,27 @@ export function Dashboard() {
           {positions.length === 0
             ? <p className="text-zinc-500 text-sm">Ninguna posición abierta.</p>
             : positions.map(p => {
+                const dir: PositionSide = p.position_side ?? "LONG";
                 const liveCurrentPrice = ticker?.price ?? p.current_price;
                 const currentPnlUsdt = liveCurrentPrice != null
-                  ? computePnlUsdt(p.entry_price, p.quantity_btc, liveCurrentPrice)
+                  ? computePnlUsdtDirectional(p.entry_price, p.quantity_btc, liveCurrentPrice, dir)
                   : p.unrealized_pnl;
                 const currentPnlPct = liveCurrentPrice != null
-                  ? computePnlPct(p.entry_price, liveCurrentPrice)
+                  ? computePnlPctDirectional(p.entry_price, liveCurrentPrice, dir)
                   : p.unrealized_pct;
 
                 return (
                   <div key={p.id} className="rounded-lg bg-zinc-800 p-3 mb-2 last:mb-0">
-                    <div className="flex justify-between text-sm mb-2">
-                      <span>{p.symbol}</span>
+                    <div className="flex flex-wrap justify-between items-center gap-2 text-sm mb-2">
+                      <div className="flex items-center gap-2">
+                        <span>{p.symbol}</span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${sideBadgeClass(dir)}`}>
+                          {dir}
+                        </span>
+                        {p.leverage != null && (
+                          <span className="text-xs text-zinc-500">{p.leverage}x</span>
+                        )}
+                      </div>
                       <span className="text-xs text-zinc-500">
                         qty {p.quantity_btc.toFixed(6)} · entry ${p.entry_price.toFixed(2)}
                       </span>
@@ -239,6 +270,9 @@ export function Dashboard() {
                         : "Precio actual —"}
                       {p.stop_loss != null && ` · SL $${p.stop_loss.toFixed(2)}`}
                       {p.take_profit != null && ` · TP $${p.take_profit.toFixed(2)}`}
+                      {p.liquidation_price != null && (
+                        <span className="text-orange-400/90"> · Liq ${p.liquidation_price.toFixed(2)}</span>
+                      )}
                     </div>
                     <div className="space-y-1.5 pt-2 border-t border-zinc-700">
                       <PnlRow

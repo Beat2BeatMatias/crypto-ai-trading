@@ -19,11 +19,12 @@ import { type LinePoint } from "./indicators";
 import { api } from "../../api/client";
 import { useWebSocket, type WSEvent } from "../../hooks/useWebSocket";
 import type { Candle, Timeframe, Trade, DecisionOutcome } from "../../types";
+import { tradeDirection } from "../../lib/pnl";
 import ReasoningBlock from "../ReasoningBlock";
 import { TIMEFRAMES, bucketStart, timeframeFromConfigMinutes, timeframeSeconds } from "./timeframe";
 import { bollingerBands, ema } from "./indicators";
 
-type DecisionAction = "BUY" | "SELL" | "HOLD";
+type DecisionAction = "BUY" | "SHORT" | "SELL" | "HOLD";
 
 interface DecisionMarkerSource {
   id: string;
@@ -51,8 +52,10 @@ const COLORS = {
   stopLoss: "#ef5350",
   takeProfit: "#26a69a",
   decisionBuy: "#26a69a",
+  decisionShort: "#f59e0b",
   decisionSell: "#ef5350",
   decisionHold: "#71717a",
+  liquidation: "#fb923c",
   missedOpportunity: "#f59e0b",
   blockedGood: "#f59e0b80",
 };
@@ -417,14 +420,16 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
     priceLinesRef.current.forEach((line) => series.removePriceLine(line));
     const newLines: IPriceLine[] = [];
     openTrades.forEach((t, idx) => {
+      const dir = tradeDirection(t);
       const tag = openTrades.length > 1 ? ` #${idx + 1}` : "";
+      const sideTag = dir === "SHORT" ? " SHORT" : "";
       newLines.push(series.createPriceLine({
         price: t.entry_price,
-        color: COLORS.entry,
+        color: dir === "SHORT" ? COLORS.decisionShort : COLORS.entry,
         lineWidth: 1,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: `Entry${tag} $${t.entry_price.toFixed(2)}`,
+        title: `Entry${sideTag}${tag} $${t.entry_price.toFixed(2)}`,
       }));
       if (t.stop_loss != null) {
         newLines.push(series.createPriceLine({
@@ -433,7 +438,7 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
           lineWidth: 1,
           lineStyle: 0,
           axisLabelVisible: true,
-          title: `SL${tag} $${t.stop_loss.toFixed(2)}`,
+          title: `SL${sideTag}${tag} $${t.stop_loss.toFixed(2)}`,
         }));
       }
       if (t.take_profit != null) {
@@ -443,7 +448,17 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
           lineWidth: 1,
           lineStyle: 0,
           axisLabelVisible: true,
-          title: `TP${tag} $${t.take_profit.toFixed(2)}`,
+          title: `TP${sideTag}${tag} $${t.take_profit.toFixed(2)}`,
+        }));
+      }
+      if (t.liquidation_price != null) {
+        newLines.push(series.createPriceLine({
+          price: t.liquidation_price,
+          color: COLORS.liquidation,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `Liq${sideTag}${tag} $${t.liquidation_price.toFixed(2)}`,
         }));
       }
     });
@@ -458,13 +473,15 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
 
     // Posiciones abiertas: flecha visible con precio (son pocas, siempre con label)
     openTrades.forEach((t) => {
+      const dir = tradeDirection(t);
+      const isShort = dir === "SHORT";
       out.push({
         time: toUtc(t.ts_open),
-        position: "belowBar",
-        color: COLORS.entry,
-        shape: "arrowUp",
+        position: isShort ? "aboveBar" : "belowBar",
+        color: isShort ? COLORS.decisionShort : COLORS.entry,
+        shape: isShort ? "arrowDown" : "arrowUp",
         size: 1.5,
-        text: `BUY $${t.entry_price.toFixed(0)}`,
+        text: `${dir} $${t.entry_price.toFixed(0)}`,
       });
     });
 
@@ -518,7 +535,11 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
           });
         }
 
-        if (d.action === "BUY" && !d.executed && outcome.classification === "BLOCKED_GOOD_TRADE") {
+        if (
+          (d.action === "BUY" || d.action === "SHORT")
+          && !d.executed
+          && outcome.classification === "BLOCKED_GOOD_TRADE"
+        ) {
           out.push({
             time: toUtc(d.ts),
             position: "belowBar",
@@ -537,27 +558,35 @@ export function PriceChart({ defaultTimeframe, height = 540 }: PriceChartProps) 
         if (d.action === "HOLD" || !d.action) return;
 
         const outcome = outcomeByDecisionId.get(d.id);
-        const baseColor = d.action === "BUY" ? COLORS.decisionBuy : COLORS.decisionSell;
+        const baseColor =
+          d.action === "BUY" ? COLORS.decisionBuy
+          : d.action === "SHORT" ? COLORS.decisionShort
+          : COLORS.decisionSell;
+        const openBelow = d.action === "BUY";
+        const openShape = d.action === "BUY" ? "arrowUp" : d.action === "SHORT" ? "arrowDown" : "arrowDown";
 
         if (d.executed) {
           let color = baseColor;
           if (showOverlays.outcomes && outcome) {
-            if (outcome.classification === "GOOD_BUY") color = COLORS.decisionBuy;
-            else if (outcome.classification === "BAD_BUY") color = COLORS.decisionSell;
+            if (outcome.classification === "GOOD_BUY" || outcome.classification === "GOOD_SHORT") {
+              color = COLORS.decisionBuy;
+            } else if (outcome.classification === "BAD_BUY" || outcome.classification === "BAD_SHORT") {
+              color = COLORS.decisionSell;
+            }
           }
           out.push({
             time: toUtc(d.ts),
-            position: d.action === "BUY" ? "belowBar" : "aboveBar",
+            position: openBelow ? "belowBar" : "aboveBar",
             color,
-            shape: d.action === "BUY" ? "arrowUp" : "arrowDown",
+            shape: openShape as "arrowUp" | "arrowDown",
             size: 1,
             text: d.action,
           });
         } else if (!(showOverlays.outcomes && outcome?.classification === "BLOCKED_GOOD_TRADE")) {
-          // BUY bloqueado sin outcome accionable: punto translúcido
+          const markerBelow = d.action === "BUY";
           out.push({
             time: toUtc(d.ts),
-            position: d.action === "BUY" ? "belowBar" : "aboveBar",
+            position: markerBelow ? "belowBar" : "aboveBar",
             color: `${baseColor}55`,
             shape: "circle",
             size: 0.3,
@@ -769,6 +798,7 @@ function DecisionPanel({ decisions, onClose }: DecisionPanelProps) {
 
   const actionColor = (action: DecisionAction | undefined) => {
     if (action === "BUY") return COLORS.decisionBuy;
+    if (action === "SHORT") return COLORS.decisionShort;
     if (action === "SELL") return COLORS.decisionSell;
     return "#848e9c";
   };
@@ -877,10 +907,12 @@ function DecisionPanel({ decisions, onClose }: DecisionPanelProps) {
 }
 
 function Legend({ openTrades }: { openTrades: number }) {
-  const items: Array<[string, string, string]> = [
-    ["Entry", COLORS.entry, "dashed"],
-    ["SL", COLORS.stopLoss, "solid"],
-    ["TP", COLORS.takeProfit, "solid"],
+  const items: Array<[string, string]> = [
+    ["Entry LONG", COLORS.entry],
+    ["SHORT", COLORS.decisionShort],
+    ["SL", COLORS.stopLoss],
+    ["TP", COLORS.takeProfit],
+    ["Liquidación", COLORS.liquidation],
   ];
   return (
     <div

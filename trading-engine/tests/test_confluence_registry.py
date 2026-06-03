@@ -116,7 +116,7 @@ async def test_upsert_candidate_increments_occurrence(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_promote_eligible_candidates_assigns_letter_i(session: AsyncSession):
+async def test_promote_eligible_candidates_assigns_first_extended_letter(session: AsyncSession):
     now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     cand_id = uuid.uuid4()
     session.add(ConfluenceCandidate(
@@ -143,19 +143,19 @@ async def test_promote_eligible_candidates_assigns_letter_i(session: AsyncSessio
     await session.commit()
 
     assert len(promoted) == 1
-    assert promoted[0]["code"] == "I"
+    assert promoted[0]["code"] == "K"
 
     registry = (await session.execute(select(ConfluenceRegistry))).scalars().all()
     assert len(registry) == 1
-    assert registry[0].code == "I"
-    assert active_registry_codes(registry) == frozenset({"I"})
+    assert registry[0].code == "K"
+    assert active_registry_codes(registry) == frozenset({"K"})
 
 
 @pytest.mark.asyncio
 async def test_promote_skips_when_max_active_reached(session: AsyncSession):
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     session.add(ConfluenceRegistry(
-        code="I",
+        code="K",
         slug="existing",
         title="Existing",
         definition_md="def",

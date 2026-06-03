@@ -3,7 +3,16 @@ import type React from "react";
 import { api } from "../api/client";
 import type { Trade } from "../types";
 import { PnlRow } from "../components/PnlRow";
-import { computePnlPct, computePnlUsdt } from "../lib/pnl";
+import {
+  computePnlPctDirectional,
+  computePnlUsdtDirectional,
+  formatSlDistance,
+  formatTpDistance,
+  rrRatioDirectional,
+  sideBadgeClass,
+  tradeDirection,
+} from "../lib/pnl";
+import type { PositionSide } from "../types";
 import { cutoffFromDateInput } from "../lib/liveSince";
 import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 
@@ -39,31 +48,13 @@ function pct(n: number | null | undefined): string {
   return ` (${n >= 0 ? "+" : ""}${n.toFixed(2)}%)`;
 }
 
-function slDistance(entry: number, sl: number | null): string {
-  if (!sl) return "—";
-  return `${(((entry - sl) / entry) * 100).toFixed(2)}%`;
-}
-
-function tpDistance(entry: number, tp: number | null): string {
-  if (!tp) return "—";
-  return `+${(((tp - entry) / entry) * 100).toFixed(2)}%`;
-}
-
-function rrRatio(entry: number, sl: number | null, tp: number | null): string {
-  if (!sl || !tp) return "—";
-  const risk = entry - sl;
-  const reward = tp - entry;
-  if (risk <= 0) return "—";
-  return `${(reward / risk).toFixed(2)}:1`;
-}
-
 // ── CSV Export ────────────────────────────────────────────────────────────────
 
 function exportCSV(trades: Trade[]) {
   const cols = [
-    "id", "decision_id", "ts_open", "ts_close", "side", "status",
+    "id", "decision_id", "ts_open", "ts_close", "side", "position_side", "status",
     "quantity_btc", "entry_price", "exit_price",
-    "stop_loss", "take_profit",
+    "stop_loss", "take_profit", "leverage", "liquidation_price",
     "pnl_usdt", "pnl_pct", "fees_usdt", "close_reason",
     "order_id_open", "order_id_close",
   ] as const;
@@ -93,8 +84,12 @@ function useCloseTrade(setTrades: React.Dispatch<React.SetStateAction<Trade[]>>)
   const [closing, setClosing] = useState<string | null>(null);
 
   async function requestClose(trade: Trade) {
+    const dir = tradeDirection(trade);
+    const closeHint = dir === "SHORT"
+      ? "cierre reduce-only (compra)"
+      : "venta al mercado";
     if (!window.confirm(
-      `¿Cerrar manualmente este trade?\n\nEntrada: $${trade.entry_price.toFixed(2)}\nCantidad: ${trade.quantity_btc.toFixed(6)} BTC\n\nEl engine ejecutará la orden de venta al precio de mercado en el próximo ciclo (~30s).`
+      `¿Cerrar manualmente este trade ${dir}?\n\nEntrada: $${trade.entry_price.toFixed(2)}\nCantidad: ${trade.quantity_btc.toFixed(6)} BTC\n\nEl engine ejecutará ${closeHint} en el próximo ciclo (~30s).`
     )) return;
 
     setClosing(trade.id);
@@ -162,6 +157,7 @@ export function Trades() {
   const [allTrades, setAllTrades] = useState<Trade[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
   const [resultFilter, setResultFilter] = useState<"all" | "win" | "loss">("all");
+  const [sideFilter, setSideFilter] = useState<"all" | PositionSide>("all");
   const {
     liveSinceIso,
     dateFrom,
@@ -211,6 +207,9 @@ export function Trades() {
     else if (resultFilter === "loss")
       list = list.filter(t => (t.pnl_usdt ?? 0) < 0);
 
+    if (sideFilter !== "all")
+      list = list.filter(t => tradeDirection(t) === sideFilter);
+
     if (dateFrom) {
       const cutoff = cutoffFromDateInput(dateFrom, liveSinceIso);
       list = list.filter(t => new Date(t.ts_open) >= cutoff);
@@ -231,7 +230,7 @@ export function Trades() {
     });
 
     return list;
-  }, [allTrades, resultFilter, dateFrom, dateTo, sortKey, sortDir, liveSinceIso]);
+  }, [allTrades, resultFilter, sideFilter, dateFrom, dateTo, sortKey, sortDir, liveSinceIso]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -272,6 +271,15 @@ export function Trades() {
           {(["all", "open", "closed"] as const).map(s => (
             <button key={s} onClick={() => setStatusFilter(s)} className={btnCls(statusFilter === s)}>
               {s === "all" ? "Todos" : s === "open" ? "Abiertos" : "Cerrados"}
+            </button>
+          ))}
+        </div>
+
+        {/* Dirección */}
+        <div className="flex gap-1">
+          {(["all", "LONG", "SHORT"] as const).map(s => (
+            <button key={s} onClick={() => setSideFilter(s)} className={btnCls(sideFilter === s)}>
+              {s === "all" ? "Long+Short" : s}
             </button>
           ))}
         </div>
@@ -333,17 +341,18 @@ export function Trades() {
 
       {/* ── Listado ── */}
       {trades.map(t => {
+        const dir = tradeDirection(t);
         const valueUsdt = t.quantity_btc * t.entry_price;
         const isOpen = t.status === "open";
         const currentPrice = isOpen ? (livePrice ?? t.current_price ?? null) : null;
         const unrealizedPnlUsdt = isOpen
           ? (livePrice != null
-            ? computePnlUsdt(t.entry_price, t.quantity_btc, livePrice, t.side)
+            ? computePnlUsdtDirectional(t.entry_price, t.quantity_btc, livePrice, dir)
             : t.unrealized_pnl_usdt)
           : t.pnl_usdt;
         const unrealizedPnlPct = isOpen
           ? (livePrice != null
-            ? computePnlPct(t.entry_price, livePrice, t.side)
+            ? computePnlPctDirectional(t.entry_price, livePrice, dir)
             : t.unrealized_pnl_pct)
           : t.pnl_pct;
         const pnlPositive = (unrealizedPnlUsdt ?? 0) >= 0;
@@ -354,9 +363,15 @@ export function Trades() {
 
             {/* ── Header ── */}
             <div className="flex flex-wrap items-center gap-2 mb-4">
-              <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                t.side === "BUY" ? "bg-emerald-900/60 text-emerald-300" : "bg-red-900/60 text-red-300"
-              }`}>{t.side}</span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded ${sideBadgeClass(dir)}`}>
+                {dir}
+              </span>
+              <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 font-mono">
+                {t.side}
+              </span>
+              {t.leverage != null && (
+                <span className="text-xs text-zinc-500">{t.leverage}x</span>
+              )}
 
               <span className={`text-xs px-2 py-0.5 rounded ${
                 isOpen ? "bg-blue-900/50 text-blue-300" :
@@ -439,7 +454,7 @@ export function Trades() {
                 </div>
                 <div className="font-mono text-sm text-red-400">{fmt(t.stop_loss)}</div>
                 <div className="text-xs text-zinc-600 mt-0.5">
-                  {slDistance(t.entry_price, t.stop_loss)} abajo
+                  {formatSlDistance(t.entry_price, t.stop_loss, dir)}
                 </div>
               </div>
               <div>
@@ -454,19 +469,25 @@ export function Trades() {
                 </div>
                 <div className="font-mono text-sm text-emerald-400">{fmt(t.take_profit)}</div>
                 <div className="text-xs text-zinc-600 mt-0.5">
-                  {tpDistance(t.entry_price, t.take_profit)} arriba
+                  {formatTpDistance(t.entry_price, t.take_profit, dir)}
                 </div>
               </div>
               <div>
                 <div className="text-xs text-zinc-500 mb-1">R:R ratio</div>
                 <div className="font-mono text-sm text-zinc-300">
-                  {rrRatio(t.entry_price, t.stop_loss, t.take_profit)}
+                  {rrRatioDirectional(t.entry_price, t.stop_loss, t.take_profit, dir)}
                 </div>
               </div>
               <div>
                 <div className="text-xs text-zinc-500 mb-1">Fees pagadas</div>
                 <div className="font-mono text-sm text-zinc-400">{fmt(t.fees_usdt)}</div>
               </div>
+              {t.liquidation_price != null && (
+                <div className="sm:col-span-2">
+                  <div className="text-xs text-zinc-500 mb-1">Precio de liquidación</div>
+                  <div className="font-mono text-sm text-orange-400">{fmt(t.liquidation_price)}</div>
+                </div>
+              )}
             </div>
 
             {/* ── P&L ── */}

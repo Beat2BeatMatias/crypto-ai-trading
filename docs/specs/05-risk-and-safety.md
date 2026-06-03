@@ -32,9 +32,9 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
                           ▼  JSON validado por Pydantic
 ┌─────────────────────────────────────────────────────────┐
 │ Capa 2: CoherenceChecker (NUEVO — auditoría)            │
-│  - Reglas C1–C8: consistencia declaración vs. datos     │
-│  - C1/C2/C3 → two-pass (LLM se auto-corrige)           │
-│  - strict_mode: C1/C2/C3 → HOLD (configurable)         │
+│  - Reglas C1–C8 + C1P/C2P/C3P (bajistas)               │
+│  - C1/C2/C3/C1P/C2P/C3P → two-pass                     │
+│  - strict_mode: C1–C3/C1P–C3P → HOLD (configurable)    │
 │  - NO bloquea por defecto; persiste warnings para       │
 │    retroalimentación al LLM en el ciclo siguiente       │
 └─────────────────────────────────────────────────────────┘
@@ -100,7 +100,7 @@ Para cualquier ciclo del Decisor, el sistema garantiza que toda decisión con `e
 | `max_drawdown_pct` | Operador / config manual | Excluido de `_SAFE_BOUNDS`. |
 | `position_size_pct` ejecutado > `max_position_pct` | Risk Gate R1 | Bloquea la orden; LLM debe proponer valores dentro del rango. A diferencia de v1.2, **no hay reescritura silenciosa**: el trade queda bloqueado y el LLM aprende del rechazo. |
 | Bracket SL/TP (post-orden) | Sistema (Binance) | Una vez emitido, el bracket se ejecuta server-side; el LLM no puede modificarlo en ciclos siguientes. |
-| Catálogo de confluencias A–H | Sistema (prompt + Supervisor system prompt) | El playbook no puede introducir códigos A–H nuevos. Letras I–Z solo vía `confluence_registry` promovido. |
+| Catálogo de confluencias A–J | Sistema (prompt + Supervisor system prompt) | A–H alcistas, I–J bajistas (SHORT). Letras K–Z solo vía `confluence_registry` promovido. |
 
 ### 1.bis.4 CoherenceChecker — detección de inconsistencias del LLM
 
@@ -110,18 +110,21 @@ El `CoherenceChecker` (`trading-engine/risk/coherence_checker.py`) es la Capa 2 
 |-------|----------------------|
 | C1 | El LLM declara confluencia A (RSI_OVERSOLD_BOUNCE) pero RSI(15m) y RSI(1h) no están en zona de sobreventa (<35). |
 | C2 | El LLM declara confluencia B (MACD_BULLISH_CROSS) pero el MACD no cruzó al alza en el ciclo actual. |
-| C3 | El LLM declara régimen TRENDING_UP pero ADX < 20 y las EMAs no están alineadas. |
-| C4 | Confianza ≥ 0.85 con menos de 2 confluencias en `decision.confluences` (post-filtro: A–H + I–Z activas, cada una peso 1.0 en el cálculo de base). |
+| C3 | El LLM declara régimen TRENDING_UP/TRENDING_DOWN pero ADX/EMAs no respaldan el régimen alcista/bajista declarado. |
+| C1P | Confluencia I (RSI_OVERBOUGHT_REJECTION) pero RSI(15m) y RSI(1h) no están en sobrecompra (>65). Espejo de C1 para SHORT. |
+| C2P | Confluencia J (MACD_BEARISH_CROSS) pero MACD ≥ Signal en 15m y 1h. Espejo de C2 para SHORT. |
+| C3P | `action=SHORT` con régimen/EMAs incoherentes (p. ej. TRENDING_UP, o TRENDING_DOWN sin estructura bajista ni ADX>20). |
+| C4 | Confianza ≥ 0.85 con menos de 2 confluencias en `decision.confluences` (post-filtro: A–J + K–Z activas, cada una peso 1.0 en el cálculo de base). |
 | C5 | El LLM emite BUY con confianza < 0.60 sin justificación explícita en `reasoning`. |
 | C6 | `expected_holding_min` está fuera del rango típico del perfil operativo derivado. |
 | C7 | R:R real calculado en código ≤ `min_rr_ratio` (**siempre critical** — fuerza HOLD/rechazo independiente de `strict_mode`). |
-| C8 | Confluencia extendida I–Z declarada pero `verify_spec` del registry no cumple en el ciclo actual (warning). |
+| C8 | Confluencia extendida K–Z declarada pero `verify_spec` del registry no cumple en el ciclo actual (warning). |
 
-**Comportamiento por defecto (non-blocking)**: los warnings C1–C6 y C8 se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del ciclo siguiente. **C7 siempre bloquea** (equivalente a rechazo duro).
+**Comportamiento por defecto (non-blocking)**: los warnings C1–C6, C1P–C3P y C8 se persisten en `decisions.output.coherence_warnings` y se inyectan en el Bloque G del ciclo siguiente. **C7 siempre bloquea** (equivalente a rechazo duro).
 
-**Con `COHERENCE_STRICT_MODE=true`**: warnings de C1/C2/C3 (inconsistencias factuales) se vuelven críticos y fuerzan HOLD de seguridad, como si el Risk Gate hubiera rechazado la decisión. C7 bloquea en cualquier modo.
+**Con `COHERENCE_STRICT_MODE=true`**: warnings de C1/C2/C3/C1P/C2P/C3P (inconsistencias factuales) se vuelven críticos y fuerzan HOLD de seguridad, como si el Risk Gate hubiera rechazado la decisión. C7 bloquea en cualquier modo.
 
-**Two-pass**: si hay C1/C2/C3 y `TWO_PASS_ENABLED=true`, se realiza una segunda llamada al LLM en el mismo ciclo para auto-corrección antes de llegar al Risk Gate.
+**Two-pass**: si hay C1/C2/C3/C1P/C2P/C3P y `TWO_PASS_ENABLED=true`, se realiza una segunda llamada al LLM en el mismo ciclo para auto-corrección antes de llegar al Risk Gate.
 
 ### 1.bis.5 Trazabilidad de la autonomía (v1.3)
 

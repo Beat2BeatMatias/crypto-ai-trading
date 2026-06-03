@@ -22,6 +22,10 @@ interface OutcomeStats {
   good_hold: number;
   bad_buy: number;
   good_buy: number;
+  good_short: number;
+  bad_short: number;
+  good_sell: number;
+  bad_sell: number;
   blocked_good_trade: number;
   correctly_blocked: number;
   pending: number;
@@ -296,11 +300,13 @@ export function Health() {
             const missedRate = evaluated > 0 ? ((s.missed_opportunity / evaluated) * 100).toFixed(1) : "—";
             const badBuyRate = (s.good_buy + s.bad_buy) > 0
               ? ((s.bad_buy / (s.good_buy + s.bad_buy)) * 100).toFixed(1) : "—";
+            const badShortRate = (s.good_short + s.bad_short) > 0
+              ? ((s.bad_short / (s.good_short + s.bad_short)) * 100).toFixed(1) : "—";
 
             return (
               <div className="space-y-3">
                 {/* Métricas clave */}
-                <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
                   <div className="bg-zinc-800 rounded p-3">
                     <p className="text-zinc-400 text-xs">Evaluadas (24h)</p>
                     <p className="text-lg font-semibold">{evaluated}</p>
@@ -320,6 +326,13 @@ export function Health() {
                     </p>
                     <p className="text-xs text-zinc-500">{s.bad_buy} bad / {s.good_buy} good</p>
                   </div>
+                  <div className={`rounded p-3 ${s.bad_short > 0 ? "bg-red-950" : "bg-zinc-800"}`}>
+                    <p className="text-zinc-400 text-xs">Bad short rate</p>
+                    <p className={`text-lg font-semibold ${s.bad_short > 0 ? "text-red-400" : ""}`}>
+                      {badShortRate}%
+                    </p>
+                    <p className="text-xs text-zinc-500">{s.bad_short} bad / {s.good_short} good</p>
+                  </div>
                 </div>
 
                 {/* Distribución completa */}
@@ -329,6 +342,10 @@ export function Health() {
                     { label: "MISSED_OPPORTUNITY",  value: s.missed_opportunity, color: "text-amber-400" },
                     { label: "GOOD_BUY",            value: s.good_buy,           color: "text-emerald-400" },
                     { label: "BAD_BUY",             value: s.bad_buy,            color: "text-red-400" },
+                    { label: "GOOD_SHORT",          value: s.good_short ?? 0,  color: "text-emerald-400" },
+                    { label: "BAD_SHORT",           value: s.bad_short ?? 0,   color: "text-red-400" },
+                    { label: "GOOD_SELL",           value: s.good_sell ?? 0,   color: "text-zinc-300" },
+                    { label: "BAD_SELL",            value: s.bad_sell ?? 0,    color: "text-red-400" },
                     { label: "BLOCKED_GOOD_TRADE",  value: s.blocked_good_trade, color: "text-amber-300" },
                     { label: "CORRECTLY_BLOCKED",   value: s.correctly_blocked,  color: "text-zinc-400" },
                     { label: "PENDING",             value: s.pending,            color: "text-zinc-500" },

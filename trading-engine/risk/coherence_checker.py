@@ -1,8 +1,8 @@
 """
 CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Decisor.
 
-Reglas C1–C7: producen CoherenceWarning (warnings auditables).
-En modo strict (coherence_strict_mode=True), C1/C2/C3/C7 se convierten en rechazos duros.
+Reglas C1–C8 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
+En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7 se convierten en rechazos duros.
 
 C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
 el R:R porque el código lo recalcula con el precio real del contexto.
@@ -26,7 +26,7 @@ logger = structlog.get_logger()
 
 @dataclass
 class CoherenceWarning:
-    rule_id: str          # "C1" … "C7"
+    rule_id: str          # "C1" … "C8", "C1P" … "C3P"
     message: str
     severity: str = "warning"   # "warning" | "critical" (cuando strict_mode)
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -45,7 +45,7 @@ class CoherenceChecker:
     Evalúa la consistencia del output del LLM contra la evidencia técnica del ciclo.
 
     Args:
-        strict_mode: si True, C1/C2/C3 pasan de warning a critical y deben
+        strict_mode: si True, C1/C2/C3/C1P/C2P/C3P pasan de warning a critical y deben
                      tratarse como rechazo en el Decisor.
     """
 
@@ -63,6 +63,9 @@ class CoherenceChecker:
         warnings.extend(self._c1_rsi_oversold_bounce(decision, ctx))
         warnings.extend(self._c2_macd_bullish_cross(decision, ctx))
         warnings.extend(self._c3_regime_vs_indicators(decision, ctx))
+        warnings.extend(self._c1p_rsi_overbought_rejection(decision, ctx))
+        warnings.extend(self._c2p_macd_bearish_cross(decision, ctx))
+        warnings.extend(self._c3p_short_regime_vs_indicators(decision, ctx))
         warnings.extend(self._c4_confidence_without_confluences(decision, ctx))
         warnings.extend(self._c5_buy_low_confidence_no_tag(decision, ctx))
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
@@ -199,6 +202,128 @@ class CoherenceChecker:
                     ),
                     evidence={
                         "price": price, "ema20_1h": ema20_1h, "ema50_1h": ema50_1h,
+                    },
+                ))
+
+        return warnings
+
+    def _c1p_rsi_overbought_rejection(self, decision: DecisorOutput,
+                                      ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        """
+        C1P (C1′): Confluencia I (RSI_OVERBOUGHT_REJECTION) declarada pero ningún RSI
+        relevante (15m y 1h) está en zona de sobrecompra (>65).
+        """
+        if "I" not in decision.confluences:
+            return []
+        rsi_15m = ctx.get("rsi_15m") or 0
+        rsi_1h = ctx.get("rsi_1h") or 0
+        overbought_threshold = float(ctx.get("rsi_overbought_threshold", 65))
+        if rsi_15m > overbought_threshold or rsi_1h > overbought_threshold:
+            return []
+
+        severity = "critical" if self.strict_mode else "warning"
+        return [CoherenceWarning(
+            rule_id="C1P",
+            severity=severity,
+            message=(
+                f"Confluencia 'I' (RSI_OVERBOUGHT_REJECTION) declarada pero "
+                f"RSI(15m)={rsi_15m:.1f} y RSI(1h)={rsi_1h:.1f} — "
+                f"ninguno está en zona de sobrecompra (>{overbought_threshold:.0f})."
+            ),
+            evidence={
+                "rsi_15m": rsi_15m,
+                "rsi_1h": rsi_1h,
+                "overbought_threshold": overbought_threshold,
+            },
+        )]
+
+    def _c2p_macd_bearish_cross(self, decision: DecisorOutput,
+                                ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        """
+        C2P (C2′): Confluencia J (MACD_BEARISH_CROSS) declarada pero MACD ≥ Signal
+        tanto en 15m como en 1h.
+        """
+        if "J" not in decision.confluences:
+            return []
+        macd_15m = ctx.get("macd_15m") or 0
+        sig_15m = ctx.get("sig_15m") or 0
+        macd_1h = ctx.get("macd_1h") or 0
+        sig_1h = ctx.get("sig_1h") or 0
+
+        cross_15m = macd_15m < sig_15m
+        cross_1h = macd_1h < sig_1h
+        if cross_15m or cross_1h:
+            return []
+
+        severity = "critical" if self.strict_mode else "warning"
+        return [CoherenceWarning(
+            rule_id="C2P",
+            severity=severity,
+            message=(
+                f"Confluencia 'J' (MACD_BEARISH_CROSS) declarada pero "
+                f"MACD(15m)={macd_15m:.2f}>={sig_15m:.2f} y "
+                f"MACD(1h)={macd_1h:.2f}>={sig_1h:.2f}."
+            ),
+            evidence={
+                "macd_15m": macd_15m, "sig_15m": sig_15m,
+                "macd_1h": macd_1h, "sig_1h": sig_1h,
+            },
+        )]
+
+    def _c3p_short_regime_vs_indicators(self, decision: DecisorOutput,
+                                        ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        """
+        C3P (C3′): Incoherencia régimen/estructura para aperturas SHORT.
+        - TRENDING_DOWN + SHORT: requiere EMAs bajistas en 1h O ADX > 20.
+        - TRENDING_UP + SHORT: régimen alcista declarado con acción bajista.
+        """
+        if decision.action != DecisorAction.SHORT:
+            return []
+
+        from shared.schemas import MarketRegime
+        regime = decision.regime
+        price = ctx.get("price") or 0
+        ema20_1h = ctx.get("ema20_1h") or 0
+        ema50_1h = ctx.get("ema50_1h") or 0
+
+        tf_blocks = ctx.get("block_c_tf_blocks", {})
+        adx_15m = (tf_blocks.get("15m") or {}).get("adx")
+        adx_1h = (tf_blocks.get("1h") or {}).get("adx")
+        adx = adx_1h or adx_15m
+
+        warnings: list[CoherenceWarning] = []
+        severity = "critical" if self.strict_mode else "warning"
+
+        if regime == MarketRegime.TRENDING_UP:
+            warnings.append(CoherenceWarning(
+                rule_id="C3P",
+                severity=severity,
+                message=(
+                    "SHORT declarado con régimen TRENDING_UP — "
+                    "estructura alcista incompatible con apertura bajista."
+                ),
+                evidence={"regime": regime.value, "action": decision.action.value},
+            ))
+            return warnings
+
+        if regime == MarketRegime.TRENDING_DOWN:
+            emas_bearish = (
+                price > 0 and ema20_1h > 0 and ema50_1h > 0
+                and price < ema20_1h < ema50_1h
+            )
+            adx_strong = adx is not None and adx > 20
+            if not emas_bearish and not adx_strong:
+                warnings.append(CoherenceWarning(
+                    rule_id="C3P",
+                    severity=severity,
+                    message=(
+                        f"SHORT con régimen TRENDING_DOWN pero EMAs(1h) no alineadas "
+                        f"a la baja (precio={price:,.0f}, EMA20={ema20_1h:,.0f}, "
+                        f"EMA50={ema50_1h:,.0f}) y ADX={adx or 'n/d'} (<20 o desconocido)."
+                    ),
+                    evidence={
+                        "price": price, "ema20_1h": ema20_1h,
+                        "ema50_1h": ema50_1h, "adx": adx,
                     },
                 ))
 

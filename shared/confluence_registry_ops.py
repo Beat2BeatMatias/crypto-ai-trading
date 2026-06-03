@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.db.models import ConfluenceCandidate, ConfluenceRegistry
 
-STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGH")
+STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJ")
 EXTENDED_LETTERS = [chr(c) for c in range(ord("I"), ord("Z") + 1)]
 LETTER_RECYCLE_DAYS = 30
 
@@ -79,6 +79,8 @@ async def next_available_letter(session: AsyncSession, *, now: datetime) -> str 
         if row.deactivated_at is None or row.deactivated_at > recycle_cutoff:
             reserved.add(row.code)
     for letter in EXTENDED_LETTERS:
+        if letter in STATIC_CONFLUENCE_CODES:
+            continue
         if letter not in reserved:
             return letter
     return None
@@ -188,7 +190,7 @@ async def deactivate_registry_code(
 ) -> ConfluenceRegistry:
     now = now or datetime.now(tz=timezone.utc)
     if code in STATIC_CONFLUENCE_CODES:
-        raise ConfluenceOpsError("static_code", "No se puede desactivar el catálogo fijo A–H")
+        raise ConfluenceOpsError("static_code", "No se puede desactivar el catálogo fijo A–J")
     row = await session.get(ConfluenceRegistry, code)
     if row is None or not row.active:
         raise ConfluenceOpsError("not_found", "Confluencia no encontrada o ya inactiva")

@@ -48,8 +48,8 @@ Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desd
 | D-028 | 🟡 MEDIO | 📋 DOCUMENTADA | `daily_stats` sigue sin job batch; query on-the-fly OK para volúmenes actuales. |
 | D-029 | 🟢 INFO | 📋 DOCUMENTADA | Health no expone uptime RSS del proceso engine (requiere endpoint de telemetría en engine). |
 | D-034 | 🟢 INFO | ✅ ENTREGADO | Futuros USDT-M + shorts: `ExchangeAdapter`, `SHORT`, R12–R15, migración 016, specs v1.11–v1.12. Diseño: `docs/superpowers/specs/2026-06-02-futures-shorts-design.md`. |
-| D-035 | 🟡 MEDIO | ⏳ PENDIENTE | `GET /api/balance` no expone `margin_balance` / `available_margin` aunque el engine los persiste en `balance_snapshots` (futures). |
-| D-036 | 🟡 MEDIO | ⏳ PENDIENTE | Frontend: markers SHORT y línea de liquidación en `PriceChart`; filtros CSV por `position_side` en `/trades` (parcial en Decisions). |
+| D-035 | 🟡 MEDIO | ✅ RESUELTO | `GET /api/balance` expone `margin_balance` y `available_margin` cuando el snapshot los tiene. |
+| D-036 | 🟡 MEDIO | ✅ RESUELTO | `PriceChart`: markers SHORT + línea liquidación; `/trades`: filtro LONG/SHORT, badges, SL/TP direccionales, CSV; Dashboard y Health actualizados. |
 
 ### 1.3.bis Estado de resolución (histórico 2026-05-17)
 

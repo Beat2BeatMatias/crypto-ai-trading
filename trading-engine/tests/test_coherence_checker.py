@@ -76,6 +76,122 @@ def _ctx(**overrides) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# C1P / C2P / C3P — espejo bajista (SHORT)
+# ---------------------------------------------------------------------------
+
+def _short(**kwargs) -> DecisorOutput:
+    defaults = dict(
+        action=DecisorAction.SHORT,
+        regime=MarketRegime.TRENDING_DOWN,
+        confluences=["I", "J"],
+        confidence_base=0.75,
+        confidence_adjustment=0.0,
+        confidence=0.75,
+        stop_loss=68500.0,
+        take_profit=65000.0,
+        position_size_pct=0.05,
+        expected_holding_min=45,
+        reasoning="[DECISION] short [MERCADO] test [SENALES] test [CONFIANZA] test [NIVELES] test",
+    )
+    defaults.update(kwargs)
+    return DecisorOutput(**defaults)
+
+
+class TestC1pC2pC3pBearish:
+
+    def test_c1p_no_warning_when_rsi_overbought(self):
+        decision = _short(confluences=["I", "F"])
+        ctx = _ctx(rsi_15m=68.0, rsi_1h=55.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c1p = [w for w in warnings if w.rule_id == "C1P"]
+
+        assert c1p == []
+
+    def test_c1p_warning_when_rsi_not_overbought(self):
+        decision = _short(confluences=["I", "F"])
+        ctx = _ctx(rsi_15m=55.0, rsi_1h=52.0)
+
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c1p = [w for w in warnings if w.rule_id == "C1P"]
+
+        assert len(c1p) == 1
+        assert c1p[0].severity == "warning"
+        assert "RSI_OVERBOUGHT" in c1p[0].message
+
+    def test_c1p_critical_in_strict_mode(self):
+        decision = _short(confluences=["I"])
+        ctx = _ctx(rsi_15m=50.0, rsi_1h=50.0)
+
+        warnings = CoherenceChecker(strict_mode=True).evaluate(decision, ctx)
+        c1p = [w for w in warnings if w.rule_id == "C1P"]
+
+        assert len(c1p) == 1
+        assert c1p[0].severity == "critical"
+
+    def test_c2p_no_warning_when_macd_bearish_on_one_tf(self):
+        decision = _short(confluences=["J", "F"])
+        ctx = _ctx(macd_15m=5.0, sig_15m=8.0, macd_1h=10.0, sig_1h=8.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c2p = [w for w in warnings if w.rule_id == "C2P"]
+
+        assert c2p == []
+
+    def test_c2p_warning_when_macd_not_bearish(self):
+        decision = _short(confluences=["J", "F"])
+        ctx = _ctx(macd_15m=10.0, sig_15m=8.0, macd_1h=10.0, sig_1h=8.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c2p = [w for w in warnings if w.rule_id == "C2P"]
+
+        assert len(c2p) == 1
+        assert "MACD_BEARISH" in c2p[0].message
+
+    def test_c3p_warning_short_in_trending_up(self):
+        decision = _short(regime=MarketRegime.TRENDING_UP, confluences=["F"])
+        ctx = _ctx(price=78000.0, ema20_1h=77500.0, ema50_1h=77000.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c3p = [w for w in warnings if w.rule_id == "C3P"]
+
+        assert len(c3p) == 1
+        assert "TRENDING_UP" in c3p[0].message
+
+    def test_c3p_warning_trending_down_without_bearish_structure(self):
+        decision = _short(regime=MarketRegime.TRENDING_DOWN, confluences=["F"])
+        ctx = _ctx(
+            price=78000.0,
+            ema20_1h=77500.0,
+            ema50_1h=77000.0,
+            block_c_tf_blocks={"15m": {"adx": 15.0}, "1h": {"adx": 18.0}},
+        )
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c3p = [w for w in warnings if w.rule_id == "C3P"]
+
+        assert len(c3p) == 1
+
+    def test_c3p_no_warning_when_bearish_emas_aligned(self):
+        decision = _short(regime=MarketRegime.TRENDING_DOWN, confluences=["F"])
+        ctx = _ctx(price=76000.0, ema20_1h=77000.0, ema50_1h=77500.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c3p = [w for w in warnings if w.rule_id == "C3P"]
+
+        assert c3p == []
+
+    def test_c3p_skipped_for_buy(self):
+        decision = _buy(confluences=["A"])
+        ctx = _ctx(rsi_15m=55.0, rsi_1h=52.0)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c3p = [w for w in warnings if w.rule_id == "C3P"]
+
+        assert c3p == []
+
+
+# ---------------------------------------------------------------------------
 # C6 — expected_holding_min vs rango del perfil
 # ---------------------------------------------------------------------------
 
@@ -365,10 +481,10 @@ class TestC7RRRatioVerification:
 
 def test_c8_extended_confluence_verify_fails_when_spec_not_met():
     checker = CoherenceChecker(strict_mode=False)
-    decision = _buy(confluences=["H", "I"])
+    decision = _buy(confluences=["H", "K"])
     ctx = _ctx(
         registry_verify_specs={
-            "I": {"all": [{"ctx": "volume_ratio", "lt": 0.8}]},
+            "K": {"all": [{"ctx": "volume_ratio", "lt": 0.8}]},
         },
         volume_ratio=1.2,
     )

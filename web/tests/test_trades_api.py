@@ -140,3 +140,22 @@ async def test_list_trades_excludes_paper_when_live(client, app_with_db):
     r_all = await client.get("/api/trades?include_paper=true")
     assert r_all.status_code == 200
     assert len(r_all.json()) == 2
+
+
+async def test_trade_response_includes_futures_fields(client, app_with_db):
+    await _create_trade(
+        app_with_db.state.session_factory,
+        side="SELL",
+        position_side="SHORT",
+        leverage=Decimal("1"),
+        liquidation_price=Decimal("95000.00"),
+        margin_mode="isolated",
+    )
+
+    r = await client.get("/api/trades")
+    assert r.status_code == 200
+    data = r.json()[0]
+    assert data["position_side"] == "SHORT"
+    assert data["leverage"] == pytest.approx(1.0)
+    assert data["liquidation_price"] == pytest.approx(95000.0)
+    assert data["margin_mode"] == "isolated"

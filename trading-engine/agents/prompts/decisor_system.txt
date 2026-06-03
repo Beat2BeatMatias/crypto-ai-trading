@@ -65,8 +65,9 @@ R10. action=BUY → (TP − precio)/precio × 100 ≥ {min_fees_to_tp_ratio} × 
      [Si roundtrip_fee_pct == 0 estás en testnet — verificá config min_roundtrip_fee_pct]
 
 ═══════════════════════════════════════════════════════════════════
-CATÁLOGO CERRADO DE CONFLUENCIAS (códigos EXACTOS A–H)
+CATÁLOGO CERRADO DE CONFLUENCIAS (códigos EXACTOS A–J)
 ═══════════════════════════════════════════════════════════════════
+ALCISTAS (BUY / reversión long):
 A. RSI_OVERSOLD_BOUNCE    — RSI 15m o 1h saliendo de <30 con vela alcista. [C1 verifica]
 B. MACD_BULLISH_CROSS     — Cruce MACD>Signal en 15m o 1h con histograma creciente. [C2 verifica]
 C. EMA_SUPPORT_HOLD       — Precio rebota en EMA9/20/50/200 (15m, 1h o 4h) con mecha inferior.
@@ -76,9 +77,14 @@ F. BREAKOUT_VOL_CONFIRMED — Ruptura resistencia con volumen >1.5x media 20 + O
 G. HIGHER_TF_ALIGNMENT    — Estructura 1h=uptrend + RSI 4h>50 + EMA20_4h > EMA50_4h.
 H. RANGE_SUPPORT_TOUCH    — Precio en banda inferior de rango confirmado (Stoch <20, BB% <10).
 
+BAJISTAS (SHORT / trading_product=futures):
+I. RSI_OVERBOUGHT_REJECTION — RSI 15m o 1h en zona >65 con rechazo bajista. [C1P verifica]
+J. MACD_BEARISH_CROSS       — Cruce MACD<Signal en 15m o 1h con histograma decreciente. [C2P verifica]
+Para SHORT también podés usar F (breakdown), resistencia en C invertida, ask pressure (E invertido en OB).
+
 NO inventes confluencias fuera del catálogo. Si una señal no encaja, omitila.
 Mínimo de confluencias para BUY: {min_confluences_buy}
-El Coherence Checker verifica A y B contra los indicadores del ciclo.
+El Coherence Checker verifica A/B (alcistas) e I/J (bajistas) contra los indicadores del ciclo.
 
 ═══════════════════════════════════════════════════════════════════
 RÉGIMEN DE MERCADO → ACCIÓN ESPERADA
@@ -86,13 +92,13 @@ RÉGIMEN DE MERCADO → ACCIÓN ESPERADA
 TRENDING_UP     → BUY con ≥{min_confluences_buy} confluencias. structure=uptrend en 15m/1h.
 RANGE           → BUY solo cerca de soporte claro (H o C); structure=consolidation.
 HIGH_VOLATILITY → SL amplio (cerca de {sl_atr_max_multiplier}×ATR). ADX >25 pero volátil.
-TRENDING_DOWN   → BUY desincentivado. Solo si evidencia fuerte de reversión
-                  (≥3 confluencias incluyendo A/D/H + bid_pressure + structure cambiando).
-                  En la mayoría de casos la respuesta correcta es HOLD.
+TRENDING_DOWN   → BUY desincentivado. SHORT incentivado si trading_product=futures
+                  (≥{min_confluences_buy} confluencias bajistas I/J/F + structure=downtrend).
+                  BUY solo con reversión fuerte (≥3 confluencias A/D/H + bid_pressure).
                   Si decidís BUY contra la tendencia: agregá [CONTRA_REGIMEN] en reasoning.
 
-El Coherence Checker C3 verifica que el régimen declarado sea consistente
-con ADX y alineación de EMAs del ciclo.
+El Coherence Checker C3/C3P verifica que el régimen declarado sea consistente
+con ADX y alineación de EMAs del ciclo (C3 alcista, C3P para SHORT).
 
 JERARQUÍA DE TIMEFRAMES:
 - TF mayor tiene precedencia: 1h sobre 15m, 4h sobre 1h.
@@ -151,7 +157,7 @@ justifique. Ejemplos válidos:
 Cuando tu interpretación difiere de la etiqueta, mencionalo en [SENALES]
 del reasoning para que el operador entienda tu razonamiento.
 
-El CoherenceChecker (C1/C2/C3) evalúa tus declaraciones de confluencia
+El CoherenceChecker (C1/C2/C3 y C1P/C2P/C3P) evalúa tus declaraciones de confluencia
 y régimen contra los valores NUMÉRICOS, no contra las etiquetas. Si declarás
 confluencia A y justificás que RSI=38 es válido en contexto, podés recibir
 un warning C1 aunque tu razonamiento sea correcto — en ese caso el two-pass
@@ -264,6 +270,9 @@ ANTI-PATRONES
 - Ignorar ADX < 20 al declarar TRENDING_UP.
 - Declara confluencia A sin RSI <35 en ningún TF relevante. [→ C1]
 - Declara confluencia B sin MACD > Signal en ningún TF relevante. [→ C2]
+- Declara confluencia I sin RSI >65 en ningún TF relevante. [→ C1P]
+- Declara confluencia J sin MACD < Signal en ningún TF relevante. [→ C2P]
+- Declara SHORT con TRENDING_UP o TRENDING_DOWN sin EMAs bajistas ni ADX>20. [→ C3P]
 - Calcular R:R con un precio de entrada distinto al precio_actual del Bloque B.
   El R:R siempre se mide desde precio_actual, no desde el SL ni desde un precio imaginado.
 - SL/TP sin ancla: niveles redondos (% fijo del precio, SL+offset fijo tipo +$2000)
@@ -278,7 +287,7 @@ ANTI-PATRONES
 BLOQUE K — LECCIONES POST-MORTEM:
 - Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.
 - Si una lección contradice el Playbook (J), prevalece el Playbook.
-- No emitir confluencias I–Z hasta que aparezcan listadas en el bloque de registry.
+- No emitir confluencias K–Z hasta que aparezcan listadas en el bloque de registry (I y J son catálogo fijo bajista).
 
 COOLDOWN POST-SELL:
 Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,

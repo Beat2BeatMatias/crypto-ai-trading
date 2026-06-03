@@ -386,13 +386,15 @@ Body opcional: `{ "reason": "string" }` (max 500 chars).
   "open_positions": 1,
   "balance_ts": "2026-05-14T12:05:00Z",
   "balance_source": "binance",
-  "realized_pnl_today": 0.0
+  "realized_pnl_today": 0.0,
+  "margin_balance": 1200.50,
+  "available_margin": 950.25
 }
 ```
 
 - `usdt` / `btc_exchange` toman el último `balance_snapshots`.
 - `btc_in_positions` = Σ `quantity_btc` de `positions WHERE status='open'`.
-- **v1.7:** con futures, el engine también persiste `margin_balance` y `available_margin` en `balance_snapshots`; `GET /api/balance` aún no los expone en el JSON (ver D-035 en `07-discrepancies-and-gaps.md`).
+- `margin_balance` / `available_margin`: poblados en futures; `null` en Spot puro.
 - `realized_pnl_today` actualmente fijo `0.0` (TODO: cómputo real, ver `stats/daily`).
 
 ---

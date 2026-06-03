@@ -31,6 +31,8 @@ class BalanceOut(BaseModel):
     balance_ts: datetime | None
     balance_source: str | None
     realized_pnl_today: float
+    margin_balance: float | None = None
+    available_margin: float | None = None
 
 
 async def _session(request: Request) -> AsyncSession:
@@ -54,6 +56,9 @@ async def get_balance(session: Annotated[AsyncSession, Depends(_session)]):
     btc_free    = float(snap.btc)         if snap else 0.0
     btc_locked  = float(snap.btc_locked)  if snap else 0.0
 
+    margin_balance = float(snap.margin_balance) if snap and snap.margin_balance is not None else None
+    available_margin = float(snap.available_margin) if snap and snap.available_margin is not None else None
+
     return BalanceOut(
         usdt=usdt_free,
         usdt_locked=usdt_locked,
@@ -66,4 +71,6 @@ async def get_balance(session: Annotated[AsyncSession, Depends(_session)]):
         balance_ts=snap.ts if snap else None,
         balance_source=snap.source if snap else None,
         realized_pnl_today=0.0,
+        margin_balance=margin_balance,
+        available_margin=available_margin,
     )
