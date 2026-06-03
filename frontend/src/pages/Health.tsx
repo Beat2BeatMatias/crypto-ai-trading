@@ -79,11 +79,36 @@ function AlertBanner({ color, icon, title, detail }: {
   );
 }
 
+interface CalibrationBucket {
+  range: string;
+  count: number;
+  success_count: number;
+  success_rate: number | null;
+  avg_confidence: number | null;
+}
+
+interface CalibrationData {
+  window_hours: number;
+  sample_size: number;
+  buckets: CalibrationBucket[];
+  brier_score: number | null;
+  expected_calibration_error: number | null;
+  discriminates: boolean | null;
+  recommendation: string;
+}
+
 export function Health() {
   const [data, setData] = useState<HealthData | null>(null);
+  const [calibration, setCalibration] = useState<CalibrationData | null>(null);
   const [resetting, setResetting] = useState(false);
 
-  const refresh = () => fetch("/api/health").then(r => r.json()).then(setData).catch(() => {});
+  const refresh = () => {
+    fetch("/api/health").then(r => r.json()).then(setData).catch(() => {});
+    fetch("/api/decisions/calibration?window=168")
+      .then(r => r.ok ? r.json() : null)
+      .then(setCalibration)
+      .catch(() => setCalibration(null));
+  };
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 5000);
@@ -216,6 +241,36 @@ export function Health() {
           <span className={`font-semibold ${(data.recent_rejections_1h ?? 0) > 0 ? "text-orange-400" : "text-zinc-300"}`}>
             {data.recent_rejections_1h ?? "—"}
           </span>
+        </div>
+      )}
+
+      {/* Calibración de confianza */}
+      {calibration && (
+        <div className="rounded-xl bg-zinc-900 p-5">
+          <h2 className="text-lg font-semibold mb-2">Calibración de confianza</h2>
+          <p className="text-xs text-zinc-500 mb-3">
+            Ventana {calibration.window_hours}h · {calibration.sample_size} decisiones con outcome
+            {calibration.brier_score != null && ` · Brier ${calibration.brier_score}`}
+            {calibration.expected_calibration_error != null &&
+              ` · ECE ${calibration.expected_calibration_error}`}
+          </p>
+          <p className={`text-sm mb-3 ${
+            calibration.discriminates === true ? "text-emerald-400"
+              : calibration.discriminates === false ? "text-amber-400" : "text-zinc-400"
+          }`}>
+            {calibration.recommendation}
+          </p>
+          <div className="grid grid-cols-2 gap-1.5 text-xs">
+            {calibration.buckets.filter(b => b.count > 0).map(b => (
+              <div key={b.range} className="flex justify-between bg-zinc-800 rounded px-2.5 py-1.5">
+                <span className="text-zinc-400">{b.range}</span>
+                <span className="text-zinc-200">
+                  n={b.count}
+                  {b.success_rate != null && ` · ${(b.success_rate * 100).toFixed(0)}% ok`}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

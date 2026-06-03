@@ -36,7 +36,8 @@ def test_trade_columns():
         "id", "decision_id", "ts_open", "ts_close", "side", "quantity_btc",
         "entry_price", "exit_price", "pnl_usdt", "pnl_pct", "status",
         "stop_loss", "take_profit", "close_reason", "order_id_open",
-        "order_id_close", "fees_usdt",
+        "order_id_close", "fees_usdt", "position_side", "leverage",
+        "liquidation_price", "margin_mode", "funding_paid_usdt",
     } <= cols
 
 
@@ -45,7 +46,8 @@ def test_position_columns():
     assert {
         "id", "trade_id", "symbol", "quantity_btc", "entry_price",
         "current_price", "unrealized_pnl", "unrealized_pct",
-        "status", "opened_at", "updated_at",
+        "status", "opened_at", "updated_at", "position_side",
+        "leverage", "liquidation_price",
     } <= cols
 
 

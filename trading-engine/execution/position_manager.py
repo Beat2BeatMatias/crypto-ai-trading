@@ -29,8 +29,13 @@ class PositionManager:
             p.current_price = Decimal(str(current_price))
             entry = float(p.entry_price)
             qty = float(p.quantity_btc)
-            pnl = (current_price - entry) * qty
-            pct = (current_price - entry) / entry * 100 if entry > 0 else 0
+            side = getattr(p, "position_side", "LONG") or "LONG"
+            if side == "LONG":
+                pnl = (current_price - entry) * qty
+                pct = (current_price - entry) / entry * 100 if entry > 0 else 0
+            else:
+                pnl = (entry - current_price) * qty
+                pct = (entry - current_price) / entry * 100 if entry > 0 else 0
             p.unrealized_pnl = Decimal(str(round(pnl, 4)))
             p.unrealized_pct = Decimal(str(round(pct, 4)))
             p.updated_at = now

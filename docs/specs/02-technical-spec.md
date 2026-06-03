@@ -1,11 +1,17 @@
 # Especificación Técnica — Crypto AI Trading
 
 > Audiencia: Tech leads, devs, SRE.
-> Versión: 1.8 — 2026-05-25.
+> Versión: 1.11 — 2026-06-02.
+>
+> Cambios v1.11: **Futuros USDT-M.** `ExchangeAdapter` (`trading-engine/execution/exchange_adapter.py`: `SpotAdapter`, `FuturesAdapter`, `build_adapter()`). `Executor.execute_open` / `execute_close`. `TRADING_PRODUCT` / `engine_symbol()` (`BTC/USDT:USDT`). Risk Gate R0–R15. Migración 016. `validate_futures_sizing()` en bootstrap. Contexto Decisor con funding/margen/liquidación.
+>
+> Cambios v1.9: `shared/confidence.py` — `compute_confidence_base` / `apply_server_confidence` invocado en `decisor.py` tras `_filter_confluence_codes` (conteo A–H + I–Z activas, peso 1.0). Persistencia de `confidence_meta`. `_hold_datos_insuficientes` (confidence 0.95) en early-exit. Frontend: `components/ConfidenceBreakdown.tsx`, `types/decisorOutput.ts`; `/decisions` y Dashboard.
 >
 > Cambios v1.8: `outcome_attribution_window_hours` (config + migración 015). Ventana compartida entre outcome attribution y post-mortem (default 25 h). UI `/config` sección Outcome Attribution.
 >
 > Cambios v1.7: `postmortem_fallback_providers` (config + migración 013). `coerce_lesson_raw()` en `postmortem_schemas.py`. Reintento post-mortem (`failed` re-elegible, máx. 3 intentos, `_meta` en `lesson_raw`). UI `/config` sección Post-mortem + `FallbackChain`. Documentada semántica 1 LLM call / decisión.
+>
+> Cambios v1.10: Sizing por riesgo fijo (`shared/position_sizing.py`), temperatura Decisor (`decisor_llm_temperature`), self-consistency (`decisor_self_consistency_n`, `agents/decisor_aggregate.py`). Nuevas config keys §6.
 >
 > Cambios v1.6: Pipeline post-mortem encadenado a outcome attribution (`postmortem_job`, `PostMortemAgent`, `lesson_normalizer`, Bloque K). Catálogo extendido I–Z (`confluence_candidates`, `confluence_registry`, `shared/confluence_registry_ops.py`). API y UI `/confluence`. CoherenceChecker C7/C8. `_filter_confluence_codes` acepta registry dinámico. Migraciones 011–012. Nuevas config keys post-mortem y promoción.
 >
@@ -128,16 +134,17 @@ run():
 | Módulo | Responsabilidad |
 |--------|-----------------|
 | `config.py` | `EngineSettings` (Pydantic Settings). Solo settings env-derivados (URLs, keys, símbolo). El resto vive en DB. |
-| `exchange.py` | Factory `ccxt_async.binance` con sandbox según `BINANCE_TESTNET`. |
+| `exchange.py` | Factory `ccxt_async.binance` (`defaultType` spot \| future según producto). |
+| `execution/exchange_adapter.py` | `SpotAdapter` / `FuturesAdapter`: open/close, brackets (OCO vs STOP/TP MARKET), balance, funding, `min_notional`. |
 | `scheduler.py` | `EngineScheduler` envoltura tipada de APScheduler. |
 | `collectors/price_collector.py` | Fetch OHLCV vía CCXT, upsert por (`time`,`timeframe`), recomputa indicadores. Soporta sqlite + postgres. |
 | `collectors/indicators.py` | RSI/MACD/EMA/BB/ATR; TR **winsorizado** a 3×mediana móvil para neutralizar velas anómalas. |
 | `collectors/orderbook_collector.py` | `OrderBookCollector` con WS CCXT pro; expone `snapshot(levels=10)` derivando spread, imbalance, walls. |
 | `execution/fee_manager.py` | Fetch trading fees; cachea + refresca 24 h; fallback a último `FeeSnapshot` si Binance falla. |
-| `execution/executor.py` | `execute_buy` (market + bracket SL/TP), `execute_sell`, `record_bracket_fill` (no emite orden, solo reconcilia BD). |
-| `execution/order_tracker.py` | Cada 30 s lista trades abiertos; si `close_requested=true` → SELL; recorre `fetch_my_trades` y matchea fills de venta dentro de ±2% qty. |
-| `execution/position_manager.py` | Count/list de open positions; recálculo P&L no realizado con precio actual. |
-| `risk/risk_gate.py` | `RiskGate.validate` aplica R1–R10 (ver `05-risk-and-safety.md`). |
+| `execution/executor.py` | `execute_open` (LONG/SHORT), `execute_close`, `execute_buy`/`execute_sell` (legacy Spot), `record_bracket_fill`. Adapter opcional inyectado. |
+| `execution/order_tracker.py` | Poll 30 s; `close_requested`; fills de cierre direccionales (sell long / buy reduceOnly short); guardians SL/TP invertidos en SHORT. |
+| `execution/position_manager.py` | Open positions; PnL no realizado direccional por `position_side`. |
+| `risk/risk_gate.py` | `RiskGate.validate` aplica R0–R15 (ver `05-risk-and-safety.md`). |
 | `risk/circuit_breaker.py` | Cuenta fallas consecutivas (LLM, exchange) y daily/max drawdown; setea `engine_paused`. |
 | `agents/llm_client.py` | `LLMClient` con cascade de providers (Gemini Flash/Pro + 8 modelos Groq). Retry con backoff exponencial salvo rate-limit (salta al siguiente provider). |
 | `agents/prompt_manager.py` | Carga `prompts/*.txt`, sustitución de placeholders, persiste `PlaybookVersion`. |
@@ -169,7 +176,8 @@ APScheduler ──▶ decisor_tick()
    │    ├─ PriceCollector.fetch_and_persist (5 timeframes)
    │    ├─ PriceCollector.compute_and_persist_indicators
    │    ├─ FeeManager.get_or_refresh
-   │    ├─ fetch_balance → BalanceSnapshot
+   │    ├─ build_adapter(trading_product) + validate_futures_sizing (bootstrap)
+   │    ├─ fetch_balance → BalanceSnapshot (+ margin_balance/available_margin si futures)
    │    │     (si falla: usdt=0, btc=Σ posiciones abiertas)
    │    ├─ orderbook.snapshot(levels=10)
    │    ├─ Decisor.decide(...)
@@ -180,7 +188,7 @@ APScheduler ──▶ decisor_tick()
    │    │     └─ INSERT Decision (input + output + metrics)
    │    ├─ RiskGate.validate(...)
    │    │     └─ Si rechazado: UPDATE Decision.rejected_reason → return
-   │    └─ Executor.execute_buy / execute_sell (si action ≠ HOLD)
+   │    └─ execute_open(BUY|SHORT) / execute_close (SELL) según action y producto
    │
    └─ Commit + close session
 ```
@@ -269,6 +277,20 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 │   • Enums (regime, action), bounds (confidence_adjustment) │
 │   • Falla → _hold_decision("parse_error")                  │
 └──────────────────┬─────────────────────────────────────────┘
+                   ▼ _filter_confluence_codes (A–H + I–Z activas)
+┌────────────────────────────────────────────────────────────┐
+│ Capa 2b: Confianza server-side (v1.9)                      │
+│   • shared/confidence.py:apply_server_confidence           │
+│   • Recalcula confidence_base; persiste confidence_meta    │
+│   • confluence_count = len(confluences filtradas)          │
+└──────────────────┬─────────────────────────────────────────┘
+                   ▼ apply_risk_based_sizing (BUY, v1.10)
+┌────────────────────────────────────────────────────────────┐
+│ Capa 2d: Sizing por riesgo fijo                            │
+│   • shared/position_sizing.py                              │
+│   • position_size_pct = risk_per_trade_pct / sl_distance   │
+│   • Cap R1 + piso min_position_size; position_size_meta  │
+└──────────────────┬─────────────────────────────────────────┘
                    ▼
 ┌────────────────────────────────────────────────────────────┐
 │ Capa 3: CoherenceChecker + two-pass (NUEVO, auditoría)     │
@@ -282,8 +304,8 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 ┌────────────────────────────────────────────────────────────┐
 │ Capa 4: Risk Gate                                          │
 │   • risk/risk_gate.py:RiskGate.validate                    │
-│   • R1–R10 + drawdown total + kill_switch                  │
-│   • Cada rechazo lleva rule_id ("R1"..."R10")              │
+│   • R0–R15 + drawdown + kill_switch + futures              │
+│   • Cada rechazo lleva rule_id ("R0"..."R15")              │
 │   • Falla → UPDATE Decision.rejected_reason → return       │
 └──────────────────┬─────────────────────────────────────────┘
                    ▼
@@ -311,10 +333,15 @@ Esta sección complementa `01-functional-spec.md §F2.bis` con la vista técnica
 | 1b | `agents/context_builder.py:build` | Construcción bloques A–K con indicadores enriquecidos y labelers. | Contexto inyectado en el user prompt. |
 | 1c | `agents/decisor.py:_filter_confluence_codes` | Filtra códigos fuera de A–H y letras I–Z no activas en registry. | Log `decisor.invalid_confluence_codes_filtered`. |
 | 2 | `shared/schemas.py:DecisorOutput` (Pydantic) | Validación estructural (tipos, enums, bounds). | Excepción → `_hold_decision("parse_error")`. |
+| 2b | `shared/confidence.py` + `decisor.py:_apply_server_confidence` | Recalcula `confidence_base` y adjunta `confidence_meta`. | Base alineada a confluencias post-filtro; I–Z activas cuentan 1.0. |
+| 2c | `agents/decisor.py:_hold_datos_insuficientes` | Early-exit si `critical_null_indicator`. | HOLD, `confidence=0.95`, sin tokens LLM. |
+| 2d | `shared/position_sizing.py` + `decisor.py:_apply_sizing_from_ctx` | Recalcula `position_size_pct` en BUY (`risk_per_trade_pct`). | `position_size_meta` en output. |
+| 1d | `agents/decisor_aggregate.py` + `_initial_llm_decision` | Self-consistency: N muestras LLM + votación si `decisor_self_consistency_n > 1`. | `self_consistency` en output; empate → HOLD. |
+| 1e | `agents/llm_client.py` + config `decisor_llm_temperature` | Temperatura baja en llamadas Decisor (y two-pass). | Menor variación entre ciclos. |
 | 3a | `risk/coherence_checker.py:CoherenceChecker.evaluate` | Auditoría de consistencia C1–C8. | `coherence_warnings` en output; C7 siempre critical. |
 | 3b | `agents/decisor.py:_build_review_ctx` + pass 2 | Two-pass auto-revisión si hay C1/C2/C3. | Log `decisor.two_pass_triggered` + `decisor.two_pass_result`. |
 | 3c | `agents/labelers.py` | Etiquetas interpretativas pre-calculadas. | Sugerencias en contexto; el LLM puede discrepar. |
-| 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange (R1–R10). | `Decision.rejected_reason` = `"risk_gate: R{n}"`, `rule_id` estructurado. |
+| 4 | `risk/risk_gate.py:RiskGate.validate` | Bloqueo absoluto pre-exchange (R0–R15). | `Decision.rejected_reason` = `"risk_gate: R{n}"`, `rule_id` estructurado. |
 | 5 | `risk/circuit_breaker.py:CircuitBreaker` | Pausa global del engine. | `engine_paused=true` + `engine_pause_reason`. |
 | 6 | `web/api/control.py` + `COHERENCE_STRICT_MODE` | Intervención humana + control de rigor vía config. | `config_history`, `changed_by="user"/"operator"`. |
 
@@ -540,7 +567,7 @@ FastAPI + uvicorn. Solo escribe en `config`, `config_history`, `trades.close_req
 | POST | `/api/mode` | `{ok, mode}` | Cambia entre PAPER_TRADING/LIVE. Para LIVE requiere `confirmation == "CONFIRMO TRADING REAL"`. |
 | POST | `/api/supervisor/run` | `{ok, queued:true}` | Setea `supervisor_run_now=true`; el engine lo consume en el próximo tick. |
 | GET | `/api/stats/daily` | `DailyStatsOut` | Métricas del día desde 00:00 UTC. |
-| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | Rechazos por `rule_id` (R0–R11), warnings C1–C8, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
+| GET | `/api/decisions/stats?window=24` | `DecisionStatsOut` | Rechazos por `rule_id` (R0–R15), warnings C1–C8, histogramas confidence/sizing, tasa two_pass. Ventana 1–168h. |
 | GET | `/api/supervisor/runs` | `SupervisorRunOut[]` | Historial de ratificaciones/regeneraciones del Supervisor. |
 | GET | `/api/decisions/outcomes?classification=&limit=&since_hours=&include_lessons=` | `DecisionOutcomeOut[]` | Outcomes contrafactuales; `include_lessons=true` expone post-mortem. |
 | GET | `/api/confluence/candidates?status=&limit=` | `ConfluenceCandidateOut[]` | Cola de patrones aprendidos pendientes de promoción. |
@@ -589,7 +616,9 @@ frontend/src/
 ├── pages/
 │   ├── Dashboard.tsx    ← balance, posiciones, chart, última decisión, P&L día
 │   ├── Trades.tsx       ← listado + cerrar
-│   ├── Decisions.tsx    ← historial con input/output JSON
+│   ├── Decisions.tsx    ← historial; filtros acción/conf/fecha; ConfidenceBreakdown
+│   ├── components/ConfidenceBreakdown.tsx
+│   ├── types/decisorOutput.ts
 │   ├── Playbook.tsx     ← markdown + rollback + edit
 │   ├── Config.tsx       ← 60+ parámetros; secciones LLM (Decisor/Supervisor/Post-mortem) + FallbackChain
 │   ├── Confluence.tsx   ← candidatos post-mortem, registry I–Z, promote/reject/deactivate
@@ -653,13 +682,16 @@ Singleton `ConfigStore` (`shared/config_store.py`). Enum `ConfigKey` define **60
 | ATR / R:R | `atr_timeframe`, `min_rr_ratio`, `sl_atr_multiplier`, `sl_atr_max_multiplier`. |
 | Umbrales confidence por régimen | `conf_threshold_trending_up`, `conf_threshold_range`, `conf_threshold_high_vol`. |
 | RSI filter | `rsi_overbought_1h`. |
-| Fórmula de confianza | `conf_base_*`, `peso_timeframe_*`, `peso_regime_*`, `adj_*`, `factor_conf_*`, `factor_regime_non_trending`. |
+| Fórmula de confianza | `conf_base_*`, `peso_regime_range`, `peso_regime_high_vol`, `adj_*` (guías LLM); **enforcement** de base en `shared/confidence.py`. `confluence_weak_factor` sigue en config como referencia LLM (no usado en conteo v1.9; peso I–Z = 1.0). |
 | Decisor v2 | `min_fees_to_tp_ratio`, `min_confluences_buy`, `cooldown_after_sell_min`, `subjective_adj_max`, `expected_holding_max_min`, `confluence_weak_factor`. |
 | Supervisor — Ratificación | `max_playbook_age_days`, `playbook_force_regen_wr_delta_pct`. |
-| Coherence / two-pass | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`. |
+| Coherence / two-pass / LLM Decisor | `coherence_strict_mode`, `two_pass_enabled`, `min_position_size`, `decisor_llm_temperature`, `decisor_self_consistency_n`. |
+| Sizing por riesgo | `risk_per_trade_pct` (default `0.005`; usado por `apply_risk_based_sizing` en BUY). |
+| Supervisor auto-config | `supervisor_config_window_hours` (168), `supervisor_config_auto_apply` (false), `supervisor_config_min_evaluated_decisions` (30). |
 | Outcome attribution | `outcome_attribution_interval_min`, `outcome_attribution_horizon_min`, `outcome_attribution_window_hours`, `outcome_coverage_threshold_pct`. |
 | Post-mortem / Bloque K | `postmortem_enabled`, `postmortem_max_per_tick`, `postmortem_provider`, `postmortem_fallback_providers`, `block_k_max_lines`, `block_k_window_hours`. |
 | Confluencias I–Z | `confluence_promotion_min_occurrences`, `confluence_promotion_window_days`, `confluence_registry_max_active`. |
+| Producto / derivados | `trading_product`, `max_leverage`, `margin_mode`, `funding_rate_max_pct`, `liquidation_buffer_atr` (operator-only salvo `funding_rate_max_pct` si se agrega a bounds). |
 | Engine interno | `engine_paused`, `engine_pause_reason`, `drawdown_reset_ts`. |
 
 Comportamiento:
@@ -718,6 +750,7 @@ docker-compose run --rm web pytest
 | `GEMINI_API_KEY` | — | LLM Decisor / Supervisor. |
 | `GROQ_API_KEY` | — | Fallbacks. |
 | `TRADING_MODE` | `PAPER_TRADING` | Sólo informativo en .env; la verdad es `config.mode`. |
+| `TRADING_PRODUCT` | `spot` | `spot` \| `futures`; puede sobreescribirse por `config.trading_product`. |
 | `LOG_LEVEL` | `INFO` | structlog. |
 | `WEB_HOST` / `WEB_PORT` | `0.0.0.0` / `8000` | uvicorn. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Notificaciones opcionales. |
@@ -752,10 +785,11 @@ docker-compose logs -f trading-engine
 | 012 | Tablas `confluence_candidates`, `confluence_registry`. |
 | 013 | Seed config `postmortem_fallback_providers` (idempotente). |
 | 015 | Seed config `outcome_attribution_window_hours` (idempotente). |
+| 016 | Campos futures en `trades`, `positions`, `balance_snapshots`. |
 
 ### 8.4 Operaciones rutinarias
 
-- **Logs**: `docker-compose logs -f trading-engine` (eventos clave: `scheduler.started`, `ohlcv.persisted`, `indicators.persisted`, `decisor.decided`, `decision.rejected`, `executor.buy_executed`, `supervisor.playbook_saved`, `order_tracker.bracket_detected`).
+- **Logs**: `docker-compose logs -f trading-engine` (eventos: `scheduler.started`, `ohlcv.persisted`, `decisor.decided`, `decision.rejected`, `executor.open_executed`, `futures.sizing_unfeasible`, `order_tracker.bracket_detected`).
 - **Backup DB**: `docker-compose exec postgres pg_dump -U trader crypto_ai_trading > backup_$(date +%Y%m%d).sql`.
 - **Kill switch**: dashboard `/` botón rojo o `POST /api/kill-switch {enabled:true}`.
 - **Rollback de playbook**: dashboard `/playbook` → "Activar" sobre versión anterior.
@@ -773,7 +807,8 @@ docker-compose logs -f trading-engine
 | Decisión | Justificación |
 |----------|---------------|
 | **Postgres como único canal entre engine y web** | Elimina necesidad de bus de mensajes; permite restart independiente; trazabilidad total. |
-| **Risk Gate determinístico post-LLM** | El LLM puede alucinar; las reglas R0–R11 son no-negociables y verificadas en código. |
+| **Risk Gate determinístico post-LLM** | El LLM puede alucinar; las reglas R0–R15 son no-negociables y verificadas en código. |
+| **ExchangeAdapter + default Spot** | Futuros opt-in vía `trading_product`; rollback sin redeploy. Guard de sizing evita operar bajo `min_notional`. |
 | **CoherenceChecker + two-pass** | Audita inconsistencias lógicas del LLM sin reescribir silenciosamente (salvo `strict_mode`). |
 | **TR winsorizado en ATR** | Velas anómalas del testnet inflaban ATR 4–5× durante horas. |
 | **Playbook como markdown versionado en BD** | El Supervisor escribe lenguaje natural que el Decisor lee como prompt; permite auditoría y rollback. |
@@ -781,7 +816,7 @@ docker-compose logs -f trading-engine
 | **Frase literal `CONFIRMO TRADING REAL`** | Imposibilita scripts accidentales que toggleen LIVE. |
 | **Cascade de providers LLM con skip en 429** | Free tiers de Gemini/Groq tienen rate limits agresivos; saltar evita degradación de calidad. |
 | **OrderTracker pasivo basado en `fetch_my_trades`** | Binance ejecuta el bracket; el bot solo reconcilia, evita doble cierre. |
-| **Sin shorts / sin margin / sin retiros** | Spot puro, llave API restringida → superficie de ataque mínima. |
+| **Spot por defecto; futures opt-in** | `TRADING_PRODUCT=spot` mantiene comportamiento legacy; shorts solo con futures + R12–R15. API key sin retiros. |
 
 ---
 
@@ -792,7 +827,7 @@ Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0
 | Componente | Rol | Primary (0.8–1.0) | Supporting (0.5–0.79) | Shared (0.2–0.49) |
 |------------|-----|--------------------|------------------------|-------------------|
 | Engine entrypoint | Bootstrap | `trading-engine/main.py` | `trading-engine/config.py`, `trading-engine/exchange.py`, `trading-engine/scheduler.py` | `shared/db/base.py` |
-| Decisor | Agent | `trading-engine/agents/decisor.py`, `trading-engine/agents/prompts/decisor_system.txt`, `trading-engine/agents/prompts/decisor_user.txt` | `agents/context_builder.py`, `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/schemas.py`, `shared/db/models.py` |
+| Decisor | Agent | `trading-engine/agents/decisor.py`, `trading-engine/agents/prompts/decisor_system.txt`, `trading-engine/agents/prompts/decisor_user.txt` | `agents/context_builder.py`, `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/schemas.py`, `shared/confidence.py`, `shared/db/models.py` |
 | Supervisor | Agent | `trading-engine/agents/supervisor.py`, `agents/prompts/supervisor_system.txt`, `agents/prompts/supervisor_user.txt`, `agents/prompts/playbook_v0.md` | `agents/llm_client.py`, `agents/prompt_manager.py` | `shared/config_store.py`, `shared/db/models.py` |
 | Risk Gate | Risk | `trading-engine/risk/risk_gate.py` | — | `shared/schemas.py` |
 | Circuit Breaker | Risk | `trading-engine/risk/circuit_breaker.py` | — | Integrado en `main.py`; pausas operacionales auto-reset ~10 min vs financieras manuales. |
@@ -803,7 +838,7 @@ Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0
 | PriceCollector | Data | `collectors/price_collector.py`, `collectors/indicators.py` | — | `shared/db/models.py` |
 | OrderBookCollector | Data | `collectors/orderbook_collector.py` | — | — |
 | FeeManager | Execution | `execution/fee_manager.py` | — | `shared/db/models.py` |
-| Executor | Execution | `execution/executor.py` | — | `shared/db/models.py` |
+| Executor | Execution | `execution/executor.py`, `execution/exchange_adapter.py` | `exchange.py` | `shared/db/models.py`, `shared/schemas.py` |
 | PositionManager | Execution | `execution/position_manager.py` | — | `shared/db/models.py` |
 | OrderTracker | Execution | `execution/order_tracker.py` | `execution/executor.py` | `shared/db/models.py` |
 | Scheduler | Infra | `trading-engine/scheduler.py` | — | — |
@@ -811,7 +846,7 @@ Mapeo componente → archivos con scoring de propiedad (1.0 = owner principal, 0
 | Web API routers | API | `web/api/*.py` (uno por dominio) | — | `shared/db/models.py`, `shared/config_store.py` |
 | WebSocket feeds | API | `web/ws/feeds.py`, `web/ws/manager.py` | — | `shared/db/models.py` |
 | Frontend pages | UI | `frontend/src/pages/*.tsx` | `frontend/src/api/client.ts`, `frontend/src/hooks/useWebSocket.ts` | `frontend/src/types/index.ts` |
-| Schemas compartidos | Shared | `shared/schemas.py` | — | (usado por engine + web + tests) |
+| Schemas compartidos | Shared | `shared/schemas.py`, `shared/confidence.py` | — | (usado por engine + web + tests) |
 | Config store | Shared | `shared/config_store.py` | — | (usado por engine + web) |
 | DB layer | Shared | `shared/db/base.py`, `shared/db/models.py` | — | — |
 | Migraciones | Infra | `trading-engine/alembic/versions/*.py`, `trading-engine/alembic/env.py` | — | `shared/db/models.py` |

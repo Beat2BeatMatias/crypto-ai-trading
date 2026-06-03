@@ -58,6 +58,11 @@ _trades_table = Table(
     Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, nullable=False, default=False),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10), default="isolated"),
+    Column("funding_paid_usdt", Numeric(18, 4)),
 )
 
 _decision_outcomes_table = Table(

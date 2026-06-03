@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy import select as sa_select
 
 from execution.executor import Executor
+from execution.exchange_adapter import BracketResult, CloseResult, OpenResult
 from shared.db.models import Trade, Position, Decision
-from shared.schemas import DecisorAction, DecisorOutput, MarketRegime
+from shared.schemas import DecisorAction, DecisorOutput, MarketRegime, Direction
 
 # ---------------------------------------------------------------------------
 # SQLite-compatible schema — same table names, Python-side UUID defaults
@@ -62,6 +63,11 @@ Table(
     Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10), default="isolated"),
+    Column("funding_paid_usdt", Numeric(18, 4)),
 )
 
 Table(
@@ -77,6 +83,9 @@ Table(
     Column("status", String(10), default="open"),
     Column("opened_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True)),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
 )
 
 
@@ -131,6 +140,49 @@ def _make_exchange(order_id: str = "ORD-001", avg_price: float = 67000.0,
     # create_order se usa para STOP_LOSS_LIMIT y LIMIT (fallbacks)
     ex.create_order = AsyncMock(return_value={"id": f"{order_id}-sl"})
     return ex
+
+
+class _FakeFuturesAdapter:
+    product = "futures"
+
+    def __init__(self, *, entry_price: float = 100000.0, exit_price: float = 98000.0):
+        self.entry_price = entry_price
+        self.exit_price = exit_price
+        self.open_calls: list[dict] = []
+        self.close_calls: list[dict] = []
+
+    async def open_position(self, *, symbol, direction, notional_usdt, price):
+        self.open_calls.append({
+            "symbol": symbol, "direction": direction, "notional": notional_usdt, "price": price,
+        })
+        qty = notional_usdt / price if price > 0 else 0.0
+        return OpenResult(filled_qty=qty, avg_price=self.entry_price, order_id="FUT-OPEN-1")
+
+    async def close_position(self, *, symbol, direction, qty, close_reason):
+        self.close_calls.append({
+            "symbol": symbol, "direction": direction, "qty": qty, "reason": close_reason,
+        })
+        return CloseResult(filled_qty=qty, avg_price=self.exit_price, order_id="FUT-CLOSE-1")
+
+    async def place_brackets(self, *, symbol, direction, qty, stop_loss, take_profit):
+        return BracketResult(order_id_sl="FUT-SL-1", order_id_tp="FUT-TP-1")
+
+
+def _make_short_decision(
+    stop_loss: float = 102000.0,
+    take_profit: float = 96000.0,
+    size: float = 0.10,
+) -> DecisorOutput:
+    return DecisorOutput(
+        regime=MarketRegime.TRENDING_DOWN,
+        confluences=["a"],
+        action=DecisorAction.SHORT,
+        confidence=0.7,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        position_size_pct=size,
+        reasoning="test short",
+    )
 
 
 def _make_buy_decision(stop_loss: float = 66400.0, take_profit: float = 67800.0,
@@ -510,3 +562,51 @@ async def test_execute_buy_exchange_error_can_be_persisted_as_rejected_reason(se
     assert "NOTIONAL" in d.rejected_reason
     # AND la decisión no está marcada como ejecutada
     assert d.executed is False
+
+
+async def test_execute_open_short_persists_short_trade(session):
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    adapter = _FakeFuturesAdapter(entry_price=100000.0)
+    exchange = MagicMock()
+    executor = Executor(exchange, session, symbol="BTC/USDT:USDT", adapter=adapter)
+    decision = _make_short_decision()
+
+    trade = await executor.execute_open(
+        direction=Direction.SHORT,
+        decision=decision,
+        decision_id=decision_id,
+        available_margin=1000.0,
+        price=100000.0,
+    )
+
+    assert trade.position_side == "SHORT"
+    assert trade.side == "SELL"
+    assert float(trade.stop_loss) == pytest.approx(102000.0)
+    assert trade.order_id_sl == "FUT-SL-1"
+    assert trade.order_id_tp == "FUT-TP-1"
+
+
+async def test_execute_close_short_pnl_positive_when_price_drops(session):
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+    adapter = _FakeFuturesAdapter(entry_price=100000.0, exit_price=98000.0)
+    exchange = MagicMock()
+    executor = Executor(exchange, session, symbol="BTC/USDT:USDT", adapter=adapter)
+
+    trade = await executor.execute_open(
+        direction=Direction.SHORT,
+        decision=_make_short_decision(),
+        decision_id=decision_id,
+        available_margin=1000.0,
+        price=100000.0,
+    )
+
+    closed = await executor.execute_close(
+        trade_id=trade.id,
+        decision_id=None,
+        close_reason="manual_close",
+    )
+
+    assert closed.status == "closed"
+    assert float(closed.pnl_usdt) > 0

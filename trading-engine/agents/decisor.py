@@ -5,8 +5,11 @@ from typing import Any
 import structlog
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from shared.confidence import apply_server_confidence
 from shared.db.models import Decision
+from shared.position_sizing import apply_risk_based_sizing
 from shared.schemas import DecisorOutput, DecisorAction, MarketRegime
+from agents.decisor_aggregate import aggregate_decisor_outputs
 from agents.context_builder import ContextBuilder
 from agents.llm_client import LLMClient, LLMProvider, AllProvidersExhaustedError
 from agents.prompt_manager import PromptManager
@@ -20,6 +23,20 @@ _VALID_STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGH")
 
 def _valid_confluence_codes(active_registry: frozenset[str]) -> frozenset[str]:
     return _VALID_STATIC_CONFLUENCE_CODES | active_registry
+
+
+def _apply_server_confidence(
+    decision: DecisorOutput,
+    *,
+    calibration: dict[str, Any],
+    raw_confluences: list[str],
+) -> tuple[DecisorOutput, dict[str, Any]]:
+    dropped = [c for c in raw_confluences if c not in decision.confluences]
+    return apply_server_confidence(
+        decision,
+        calibration=calibration,
+        confluences_dropped=dropped or None,
+    )
 
 
 def _filter_confluence_codes(
@@ -58,7 +75,9 @@ class Decisor:
                  provider: LLMProvider = LLMProvider.GROQ_LLAMA,
                  fallbacks: list[LLMProvider] | None = None,
                  coherence_strict_mode: bool = False,
-                 two_pass_enabled: bool = True):
+                 two_pass_enabled: bool = True,
+                 llm_temperature: float = 0.1,
+                 self_consistency_n: int = 0):
         self.session = session
         self.llm = llm
         self.symbol = symbol
@@ -68,6 +87,8 @@ class Decisor:
         self.fallbacks = fallbacks or [LLMProvider.GEMINI_FLASH]
         self.coherence_checker = CoherenceChecker(strict_mode=coherence_strict_mode)
         self.two_pass_enabled = two_pass_enabled
+        self.llm_temperature = llm_temperature
+        self.self_consistency_n = max(0, int(self_consistency_n))
 
     async def decide(self, *, orderbook: OrderBookSnapshot | None, usdt_balance: float,
                      btc_held: float, max_position_pct: float, max_simultaneous_trades: int,
@@ -76,7 +97,12 @@ class Decisor:
                      atr_timeframe: str = "15m", min_rr_ratio: float = 1.3,
                      sl_atr_multiplier: float = 0.3,
                      calibration: dict | None = None,
-                     current_drawdown_pct: float = 0.0) -> DecisorOutput:
+                     current_drawdown_pct: float = 0.0,
+                     trading_product: str = "spot",
+                     funding_rate: float = 0.0,
+                     available_margin: float | None = None,
+                     open_position_side: str | None = None,
+                     liquidation_price: float | None = None) -> DecisorOutput:
 
         playbook = await self.prompt_manager.get_active_playbook()
         playbook_content = playbook.content if playbook else "# No playbook."
@@ -90,6 +116,11 @@ class Decisor:
             atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
             sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
             current_drawdown_pct=current_drawdown_pct,
+            trading_product=trading_product,
+            funding_rate=funding_rate,
+            available_margin=available_margin,
+            open_position_side=open_position_side,
+            liquidation_price=liquidation_price,
         )
 
         if ctx.get("playbook"):
@@ -98,7 +129,7 @@ class Decisor:
         # ── Early-exit: critical indicators absent → HOLD without calling LLM ──
         if ctx.get("critical_null_indicator"):
             logger.warning("decisor.critical_null_indicator_early_exit")
-            validated = _hold_decision(
+            validated = _hold_datos_insuficientes(
                 "[DATOS_INSUFICIENTES] Indicadores críticos nulos."
             )
             self.session.add(Decision(
@@ -121,6 +152,7 @@ class Decisor:
             return validated
 
         active_ext = frozenset(ctx.get("active_registry_confluence_codes") or [])
+        cal = calibration or {}
 
         system_prompt = self.prompt_manager.load_system_prompt("decisor")
         system_prompt = _safe_substitute(system_prompt, ctx)
@@ -128,22 +160,28 @@ class Decisor:
 
         resp = None
         resp_review = None
+        llm_responses: list[Any] = []
         coherence_warnings: list[CoherenceWarning] = []
         rejected_reason: str | None = None
         two_pass_triggered = False
         llm_error_tried: list[dict] | None = None
+        confidence_meta: dict[str, Any] | None = None
+        position_size_meta: dict[str, Any] | None = None
+        self_consistency_meta: dict[str, Any] | None = None
 
         try:
-            # ── PASS 1: decisión inicial ───────────────────────────────────
-            resp = await self.llm.call(
-                provider=self.provider, system_prompt=system_prompt,
-                user_prompt=user_prompt, fallbacks=self.fallbacks,
+            validated, confidence_meta, position_size_meta, self_consistency_meta, llm_responses = (
+                await self._initial_llm_decision(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    active_ext=active_ext,
+                    cal=cal,
+                    ctx=ctx,
+                    max_position_pct=max_position_pct,
+                    usdt_balance=usdt_balance,
+                )
             )
-            validated = _parse_llm_output(resp.text)
-
-            clean_confluences = _filter_confluence_codes(validated.confluences, active_ext)
-            if len(clean_confluences) != len(validated.confluences):
-                validated = validated.model_copy(update={"confluences": clean_confluences})
+            resp = llm_responses[0] if llm_responses else None
 
             coherence_warnings = self.coherence_checker.evaluate(validated, ctx)
 
@@ -167,16 +205,21 @@ class Decisor:
                 try:
                     resp_review = await self.llm.call(
                         provider=self.provider,
-                        system_prompt=system_prompt,  # mismo system prompt
+                        system_prompt=system_prompt,
                         user_prompt=review_prompt,
                         fallbacks=self.fallbacks,
+                        temperature=self.llm_temperature,
                     )
-                    validated_review = _parse_llm_output(resp_review.text)
-                    clean_review = _filter_confluence_codes(validated_review.confluences, active_ext)
-                    if len(clean_review) != len(validated_review.confluences):
-                        validated_review = validated_review.model_copy(
-                            update={"confluences": clean_review}
-                        )
+                    parsed_review = _parse_llm_output(resp_review.text)
+                    validated_review, confidence_meta, position_size_meta = _post_process_decision(
+                        parsed_review,
+                        raw_confluences=list(parsed_review.confluences),
+                        active_ext=active_ext,
+                        calibration=cal,
+                        ctx=ctx,
+                        max_position_pct=max_position_pct,
+                        usdt_balance=usdt_balance,
+                    )
                     # Re-evaluar coherencia de la decisión revisada
                     coherence_warnings_review = self.coherence_checker.evaluate(
                         validated_review, ctx
@@ -245,14 +288,23 @@ class Decisor:
         output_dict = validated.model_dump()
         output_dict["coherence_warnings"] = [w.to_dict() for w in coherence_warnings]
         output_dict["two_pass_triggered"] = two_pass_triggered
+        if confidence_meta is not None:
+            output_dict["confidence_meta"] = confidence_meta
+        if position_size_meta is not None:
+            output_dict["position_size_meta"] = position_size_meta
+        if self_consistency_meta is not None:
+            output_dict["self_consistency"] = self_consistency_meta
         if llm_error_tried is not None:
             output_dict["llm_error_tried"] = llm_error_tried
 
-        # Tokens totales = pass 1 + pass 2 (si hubo)
-        tokens_in = (resp.tokens_in if resp else 0) + (resp_review.tokens_in if resp_review else 0)
-        tokens_out = (resp.tokens_out if resp else 0) + (resp_review.tokens_out if resp_review else 0)
-        latency_ms = (resp.latency_ms if resp else 0) + (resp_review.latency_ms if resp_review else 0)
-        model = resp.provider if resp else self.provider.value
+        tokens_in = sum(r.tokens_in for r in llm_responses)
+        tokens_out = sum(r.tokens_out for r in llm_responses)
+        latency_ms = sum(r.latency_ms for r in llm_responses)
+        if resp_review is not None:
+            tokens_in += resp_review.tokens_in
+            tokens_out += resp_review.tokens_out
+            latency_ms += resp_review.latency_ms
+        model = llm_responses[0].provider if llm_responses else self.provider.value
 
         self.session.add(Decision(
             agent="decisor",
@@ -279,6 +331,125 @@ class Decisor:
             rejected=rejected_reason,
         )
         return validated
+
+    async def _initial_llm_decision(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        active_ext: frozenset[str],
+        cal: dict[str, Any],
+        ctx: dict[str, Any],
+        max_position_pct: float,
+        usdt_balance: float,
+    ) -> tuple[DecisorOutput, dict[str, Any] | None, dict[str, Any] | None,
+               dict[str, Any] | None, list[Any]]:
+        if self.self_consistency_n > 1:
+            candidates: list[DecisorOutput] = []
+            responses: list[Any] = []
+            for _ in range(self.self_consistency_n):
+                r = await self._llm_call(system_prompt, user_prompt)
+                responses.append(r)
+                parsed = _parse_llm_output(r.text)
+                processed, _, _ = _post_process_decision(
+                    parsed,
+                    raw_confluences=list(parsed.confluences),
+                    active_ext=active_ext,
+                    calibration=cal,
+                    ctx=ctx,
+                    max_position_pct=max_position_pct,
+                    usdt_balance=usdt_balance,
+                    apply_sizing=False,
+                )
+                candidates.append(processed)
+            validated, sc_meta = aggregate_decisor_outputs(candidates)
+            raw_agg = list(validated.confluences)
+            clean = _filter_confluence_codes(validated.confluences, active_ext)
+            if len(clean) != len(validated.confluences):
+                validated = validated.model_copy(update={"confluences": clean})
+            validated, confidence_meta = _apply_server_confidence(
+                validated, calibration=cal, raw_confluences=raw_agg,
+            )
+            validated, position_meta = _apply_sizing_from_ctx(
+                validated, calibration=cal, ctx=ctx,
+                max_position_pct=max_position_pct, usdt_balance=usdt_balance,
+            )
+            return validated, confidence_meta, position_meta, sc_meta, responses
+
+        r = await self._llm_call(system_prompt, user_prompt)
+        parsed = _parse_llm_output(r.text)
+        validated, confidence_meta, position_meta = _post_process_decision(
+            parsed,
+            raw_confluences=list(parsed.confluences),
+            active_ext=active_ext,
+            calibration=cal,
+            ctx=ctx,
+            max_position_pct=max_position_pct,
+            usdt_balance=usdt_balance,
+        )
+        return validated, confidence_meta, position_meta, None, [r]
+
+    async def _llm_call(self, system_prompt: str, user_prompt: str):
+        return await self.llm.call(
+            provider=self.provider,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            fallbacks=self.fallbacks,
+            temperature=self.llm_temperature,
+        )
+
+
+def _post_process_decision(
+    decision: DecisorOutput,
+    *,
+    raw_confluences: list[str],
+    active_ext: frozenset[str],
+    calibration: dict[str, Any],
+    ctx: dict[str, Any],
+    max_position_pct: float,
+    usdt_balance: float,
+    apply_sizing: bool = True,
+) -> tuple[DecisorOutput, dict[str, Any] | None, dict[str, Any] | None]:
+    validated = decision
+    clean = _filter_confluence_codes(validated.confluences, active_ext)
+    if len(clean) != len(validated.confluences):
+        validated = validated.model_copy(update={"confluences": clean})
+    validated, confidence_meta = _apply_server_confidence(
+        validated, calibration=calibration, raw_confluences=raw_confluences,
+    )
+    position_meta = None
+    if apply_sizing:
+        validated, position_meta = _apply_sizing_from_ctx(
+            validated,
+            calibration=calibration,
+            ctx=ctx,
+            max_position_pct=max_position_pct,
+            usdt_balance=usdt_balance,
+        )
+    return validated, confidence_meta, position_meta
+
+
+def _apply_sizing_from_ctx(
+    decision: DecisorOutput,
+    *,
+    calibration: dict[str, Any],
+    ctx: dict[str, Any],
+    max_position_pct: float,
+    usdt_balance: float,
+) -> tuple[DecisorOutput, dict[str, Any] | None]:
+    risk_pct = float(calibration.get("risk_per_trade_pct", 0.005))
+    if risk_pct <= 0:
+        return decision, None
+    return apply_risk_based_sizing(
+        decision,
+        price=float(ctx.get("price") or 0),
+        capital_total=float(ctx.get("capital_total") or ctx.get("usdt_available") or usdt_balance),
+        usdt_available=float(ctx.get("usdt_available") or usdt_balance),
+        risk_per_trade_pct=risk_pct,
+        max_position_pct=max_position_pct,
+        min_position_size=float(calibration.get("min_position_size", 0.005)),
+        min_position_size_pct_notional=float(ctx.get("min_position_size_pct_notional", 0)),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -453,6 +624,15 @@ def _hold_decision(reason: str) -> DecisorOutput:
     return DecisorOutput(
         regime=MarketRegime.RANGE, confluences=[], action=DecisorAction.HOLD,
         confidence_base=0.0, confidence_adjustment=0.0, confidence=0.0,
+        stop_loss=None, take_profit=None, position_size_pct=0.0,
+        expected_holding_min=1, reasoning=reason,
+    )
+
+
+def _hold_datos_insuficientes(reason: str) -> DecisorOutput:
+    return DecisorOutput(
+        regime=MarketRegime.RANGE, confluences=[], action=DecisorAction.HOLD,
+        confidence_base=0.95, confidence_adjustment=0.0, confidence=0.95,
         stop_loss=None, take_profit=None, position_size_pct=0.0,
         expected_holding_min=1, reasoning=reason,
     )

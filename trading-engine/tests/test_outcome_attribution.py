@@ -183,8 +183,33 @@ def test_classify_hold_as_good_when_mfe_below_tp_target():
     assert result.classification == "GOOD_HOLD"
 
 
+def test_hold_good_when_sl_hits_before_tp_on_same_candle_despite_high_wick():
+    """Bracket: SL tocado antes que TP aunque el wick supere TP (anti-sesgo MFE pico)."""
+    t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    decision = _make_decision(
+        input={
+            "price": 100.0, "atr_ref_pct": 1.0,
+            "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3,
+        },
+        output={
+            "action": "HOLD",
+            "stop_loss": 99.7,
+            "take_profit": 100.39,
+        },
+        ts=t0,
+    )
+    candles = _dense_candles(t0, horizon_min=10, peaks=[
+        {"min": 1, "high": 100.5, "low": 99.5, "close": 100.1},
+    ])
+    result = attribute(
+        decision=decision, ohlcv_1m=candles, associated_trade=None,
+        horizon_min=10, now=t0 + timedelta(minutes=15),
+    )
+    assert result.classification == "GOOD_HOLD"
+
+
 def test_classify_buy_rejected_as_blocked_good_when_mfe_hits_first():
-    """AC OA-04: BUY rechazado, MFE llega al TP_target sin MAE cruzar SL → BLOCKED_GOOD_TRADE."""
+    """AC OA-04: BUY rechazado, bracket TP alcanzado sin SL previo → BLOCKED_GOOD_TRADE."""
     t0 = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
     decision = _make_decision(
         input={"price": 100.0, "atr_ref_pct": 1.0,
@@ -620,3 +645,26 @@ def test_classify_buy_default_threshold_zero_preserves_backward_compat():
         # sin net_fee_threshold_pct → default 0.0
     )
     assert result == "GOOD_BUY"
+
+
+def test_short_good_when_price_drops():
+    t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    price = 100.0
+    candles = _dense_candles(
+        t0, horizon_min=10,
+        peaks=[{"min": 5, "high": 101.0, "low": 95.0, "close": 96.0}],
+    )
+    decision = _make_decision(
+        input={"price": price, "atr_ref_pct": 1.0, "sl_atr_multiplier": 0.3, "min_rr_ratio": 1.3},
+        output={"action": "SHORT", "stop_loss": 102.0, "take_profit": 94.0},
+        executed=True,
+    )
+    trade = SimpleNamespace(pnl_pct=Decimal("2.5"), entry_price=Decimal("100"), position_side="SHORT")
+    att = attribute(
+        decision=decision,
+        ohlcv_1m=candles,
+        associated_trade=trade,
+        horizon_min=10,
+        now=t0 + timedelta(minutes=10),
+    )
+    assert att.classification == "GOOD_SHORT"

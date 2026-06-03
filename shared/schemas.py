@@ -6,8 +6,22 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class DecisorAction(str, Enum):
     BUY = "BUY"
+    SHORT = "SHORT"
     SELL = "SELL"
     HOLD = "HOLD"
+
+
+class Direction(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
+def direction_for_action(action: DecisorAction) -> Direction | None:
+    if action == DecisorAction.BUY:
+        return Direction.LONG
+    if action == DecisorAction.SHORT:
+        return Direction.SHORT
+    return None
 
 
 class MarketRegime(str, Enum):
@@ -61,15 +75,15 @@ class DecisorOutput(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _buy_requires_sl_and_tp(self) -> "DecisorOutput":
-        if self.action == DecisorAction.BUY:
+    def _entry_requires_sl_and_tp(self) -> "DecisorOutput":
+        if self.action in (DecisorAction.BUY, DecisorAction.SHORT):
             if self.stop_loss is None:
-                raise ValueError("stop_loss is required when action=BUY")
+                raise ValueError(f"stop_loss is required when action={self.action.value}")
             if self.take_profit is None:
-                raise ValueError("take_profit is required when action=BUY")
+                raise ValueError(f"take_profit is required when action={self.action.value}")
         return self
 
-    # Runs after _buy_requires_sl_and_tp — order matters in Pydantic v2 (mode="after" runs in definition order).
+    # Runs after _entry_requires_sl_and_tp — order matters in Pydantic v2 (mode="after" runs in definition order).
     @model_validator(mode="after")
     def _recompute_confidence(self) -> "DecisorOutput":
         # Recompute confidence deterministically from its components.

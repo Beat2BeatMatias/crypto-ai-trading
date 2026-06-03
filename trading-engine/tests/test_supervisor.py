@@ -85,6 +85,11 @@ _trades_table = Table(
     Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10), default="isolated"),
+    Column("funding_paid_usdt", Numeric(18, 4)),
 )
 
 _ohlcv_table = Table(
@@ -155,6 +160,8 @@ _balance_snapshots_table = Table(
     Column("usdt_locked", Numeric(18, 4), nullable=False, server_default="0"),
     Column("btc_locked", Numeric(18, 8), nullable=False, server_default="0"),
     Column("source", String(20), nullable=False, default="binance"),
+    Column("margin_balance", Numeric(18, 4)),
+    Column("available_margin", Numeric(18, 4)),
 )
 
 _confluence_candidates_table = Table(
@@ -624,6 +631,46 @@ async def test_ratify_verdict_includes_age_and_baseline_in_decision(session):
 # Config suggestions — v1.3 LLM-Centric (toggles + removed legacy keys)
 # ---------------------------------------------------------------------------
 
+async def test_apply_config_rejected_when_auto_apply_disabled(session, fake_llm):
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    suggestions = {
+        "suggestions": [
+            {"key": "min_rr_ratio", "current": "1.3", "suggested": "1.5", "reason": "test"},
+        ],
+        "summary": "test",
+    }
+    applied, rejected = await sup._apply_config_suggestions(
+        suggestions,
+        {"min_rr_ratio": 1.3},
+        auto_apply_enabled=False,
+        config_metrics={"evaluated_decisions": 100},
+        min_evaluated_decisions=30,
+    )
+    assert applied == []
+    assert len(rejected) == 1
+    assert "auto-apply desactivado" in rejected[0]["reject_reason"]
+
+
+async def test_apply_config_rejected_when_insufficient_evaluated_decisions(session, fake_llm):
+    sup = Supervisor(session=session, llm=fake_llm, symbol="BTC/USDT", min_trades=5)
+    suggestions = {
+        "suggestions": [
+            {"key": "min_rr_ratio", "current": "1.3", "suggested": "1.5", "reason": "test"},
+        ],
+        "summary": "test",
+    }
+    applied, rejected = await sup._apply_config_suggestions(
+        suggestions,
+        {"min_rr_ratio": 1.3},
+        auto_apply_enabled=True,
+        config_metrics={"evaluated_decisions": 10},
+        min_evaluated_decisions=30,
+    )
+    assert applied == []
+    assert len(rejected) == 1
+    assert "muestra insuficiente" in rejected[0]["reject_reason"]
+
+
 async def test_apply_suggestions_accepts_coherence_strict_mode_toggle(session, fake_llm):
     # GIVEN a Supervisor and a current config with strict_mode off (entry seeded)
     session.add(ConfigEntry(key="coherence_strict_mode", value="false",
@@ -874,6 +921,18 @@ async def test_supervisor_stores_baseline_when_config_applied(session):
                             description="test", updated_at=datetime.now(tz=timezone.utc)))
     session.add(ConfigEntry(key="default_rr_ratio", value="2.5", value_type="float",
                             description="test", updated_at=datetime.now(tz=timezone.utc)))
+    session.add(ConfigEntry(
+        key="supervisor_config_auto_apply", value="true", value_type="bool",
+        description="test", updated_at=datetime.now(tz=timezone.utc),
+    ))
+    session.add(ConfigEntry(
+        key="supervisor_config_min_evaluated_decisions", value="0", value_type="int",
+        description="test", updated_at=datetime.now(tz=timezone.utc),
+    ))
+    session.add(ConfigEntry(
+        key="supervisor_config_window_hours", value="48", value_type="int",
+        description="test", updated_at=datetime.now(tz=timezone.utc),
+    ))
     await session.commit()
 
     # LLM responde: regenerar + sugerencia de config válida

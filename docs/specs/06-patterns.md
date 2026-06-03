@@ -1,9 +1,9 @@
 # Patrones de Implementación — Crypto AI Trading
 
 > Audiencia: Devs / Tech leads.
-> Versión: 1.3 — 2026-05-25.
+> Versión: 1.4 — 2026-06-02.
 
-Catálogo de **18 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
+Catálogo de **19 patrones reutilizables** descubiertos en el código y **4 anti-patrones** a evitar. Cada patrón tiene 2+ evidencias en el repositorio y se documenta con un ejemplo mínimo y la regla de cuándo aplicarlo.
 
 Este documento complementa la [Especificación Técnica](./02-technical-spec.md) describiendo *cómo* se construye el sistema, no *qué* hace. Sirve para nuevas features que deben mantener consistencia con la arquitectura existente.
 
@@ -305,19 +305,39 @@ async def test_decision_persists_correct_ts(session):
 
 **Categoría**: Frontend / i18n
 
-**Evidencia**: `frontend/src/pages/Dashboard.tsx:153-157`, `Trades.tsx`, `Decisions.tsx`, `frontend/index.html:2`.
+**Evidencia**: `frontend/src/types/decisorOutput.ts:fmtConfidencePct`, `components/ConfidenceBreakdown.tsx`, `pages/Decisions.tsx`, `pages/Dashboard.tsx`.
 
 ```tsx
-<div className="text-2xl font-bold">
-  {balance.usdt.toLocaleString("es-AR", { minimumFractionDigits: 2 })} USDT
-</div>
-
-<span>
-  {(decision.confidence * 100).toLocaleString("es-AR", { maximumFractionDigits: 0 })}%
-</span>
+export function fmtConfidencePct(value: number | null | undefined): string {
+  const n = typeof value === "number" ? value : 0;
+  return `${(n * 100).toLocaleString("es-AR", { maximumFractionDigits: 0 })}%`;
+}
 ```
 
 **Cuándo usar**: cuando el target es es-AR exclusivo y agregar `i18next` sería overkill. `toLocaleString` cubre números, moneda, fechas y respeta el separador decimal con coma.
+
+---
+
+## P-14 — Desglose de confianza del Decisor (`ConfidenceBreakdown`)
+
+**Categoría**: Frontend / observabilidad
+
+**Evidencia**: `frontend/src/components/ConfidenceBreakdown.tsx`, `frontend/src/types/decisorOutput.ts`, `shared/confidence.py`, `decisions.output.confidence_meta`.
+
+```tsx
+<ConfidenceBreakdown
+  confidence={out.confidence}
+  confidenceBase={out.confidence_base}
+  confidenceAdjustment={out.confidence_adjustment}
+  meta={out.confidence_meta}
+/>
+```
+
+**Cuándo usar**: en cualquier vista que muestre decisiones del agente `decisor`. La confianza final **no** debe leerse solo del campo `confidence` histórico sin contexto: desde v1.9 la base es server-side y las decisiones antiguas pueden carecer de `confidence_meta`.
+
+**Campos UI relevantes**:
+- `confidence_meta.confluences_counted` — post-filtro (A–H + I–Z activas).
+- `confidence_meta.confluences_dropped` — códigos que el LLM citó pero el servidor eliminó (p. ej. letra desactivada).
 
 ---
 
@@ -493,6 +513,23 @@ Flujo interno del tick post-mortem:
 
 ---
 
+## P-19 — `ExchangeAdapter` para Spot vs Futures
+
+**Categoría**: Execution / Exchange
+
+**Evidencia**: `trading-engine/execution/exchange_adapter.py` (`SpotAdapter`, `FuturesAdapter`, `build_adapter`); `trading-engine/main.py` (bootstrap, `validate_futures_sizing`); `trading-engine/execution/executor.py` (`execute_open`, `execute_close`).
+
+```python
+adapter = build_adapter(trading_product)  # "spot" | "futures"
+await adapter.setup_symbol(symbol, leverage=1, margin_mode="isolated")
+result = await adapter.open_position(symbol=symbol, direction=Direction.SHORT, notional_usdt=n, price=p)
+await adapter.place_brackets(symbol=symbol, direction=Direction.SHORT, qty=result.qty, stop_loss=sl, take_profit=tp)
+```
+
+**Cuándo usar**: cuando la lógica de órdenes difiere por producto (OCO Spot vs reduceOnly en Futures). El `Executor` y `OrderTracker` reciben el adapter inyectado; **no** esparcir `if futures:` por todo el módulo. Rollback operativo: `trading_product=spot` sin cambiar código.
+
+---
+
 ## Anti-patrones identificados (a evitar)
 
 Lista corta de patrones presentes en el código que **no deben replicarse** y conviene corregir cuando se toque el área:
@@ -504,6 +541,8 @@ Lista corta de patrones presentes en el código que **no deben replicarse** y co
 | ~~Dependencia npm no usada (`recharts`)~~ | ✅ Resuelto (D-017): eliminada; chart usa `lightweight-charts` | — |
 | Tests con `pd.Series` que omiten columnas esperadas | `backtesting/tests/test_runner.py` (D-019 resuelto) | Verificar fixtures completas al mockear indicadores. |
 | Reescribir silenciosamente decisiones del LLM | Overrides deterministas (eliminados v1.3) | Oculta la intención real del LLM; usar CoherenceChecker + Risk Gate con `rejected_reason` explícito. |
+| Asumir `btc_held > 0` para cerrar posiciones | Pre-futures en Risk Gate R6 | En short no hay BTC spot; usar `has_open_position` + `position_side`. |
+| PnL / SL siempre long | `Dashboard`, `Trades` legacy | Usar `position_side` y helpers en `shared/pnl.py` / `frontend/src/lib/pnl.ts`. |
 
 ---
 

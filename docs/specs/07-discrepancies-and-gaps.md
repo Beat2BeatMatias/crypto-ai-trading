@@ -1,8 +1,8 @@
 # Discrepancias y Gaps de Documentación — Crypto AI Trading
 
 > Audiencia: Tech leads / SRE / Risk.
-> Versión: 1.3 — 2026-05-25.
-> Base de comparación: design doc 2026-05-02 vs. código en HEAD (2026-05-25).
+> Versión: 1.5 — 2026-06-02 (futuros/shorts documentados; D-034 entregado).
+> Base de comparación: design docs + `docs/specs/` vs. código en HEAD (2026-06-02).
 
 Este documento consolida el resultado del cross-validation entre la documentación de diseño existente y la implementación real. La **regla de oro**: cuando un campo difiere entre design doc y código, **el código manda**. Las discrepancias se registran para que el equipo decida si actualizar el código a la spec o la spec al código.
 
@@ -26,8 +26,8 @@ Este documento consolida el resultado del cross-validation entre la documentaci�
 | 🔴 CRÍTICO | 3 | D-001, D-002, D-003 |
 | 🟠 ALTO | 5 | D-004, D-005, D-006, D-009, D-013 |
 | 🟡 MEDIO | 8 | D-007, D-008, D-010, D-011, D-014, D-015, D-019, D-021 |
-| 🟢 INFO | 9 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032, D-033 |
-| **Total** | **25** | |
+| 🟢 INFO | 10 | D-012, D-016, D-017, D-018, D-020, D-030, D-031, D-032, D-033, D-034 |
+| **Total** | **27** | |
 
 ### 1.3 Estado de resolución (actualizado 2026-05-25)
 
@@ -47,6 +47,9 @@ Todos los gaps D-001–D-021 resueltos o documentados (ver tabla inferior). Desd
 | D-027 | 🟡 MEDIO | ⏳ PENDIENTE | Diff viewer playbook a nivel de palabra. |
 | D-028 | 🟡 MEDIO | 📋 DOCUMENTADA | `daily_stats` sigue sin job batch; query on-the-fly OK para volúmenes actuales. |
 | D-029 | 🟢 INFO | 📋 DOCUMENTADA | Health no expone uptime RSS del proceso engine (requiere endpoint de telemetría en engine). |
+| D-034 | 🟢 INFO | ✅ ENTREGADO | Futuros USDT-M + shorts: `ExchangeAdapter`, `SHORT`, R12–R15, migración 016, specs v1.11–v1.12. Diseño: `docs/superpowers/specs/2026-06-02-futures-shorts-design.md`. |
+| D-035 | 🟡 MEDIO | ⏳ PENDIENTE | `GET /api/balance` no expone `margin_balance` / `available_margin` aunque el engine los persiste en `balance_snapshots` (futures). |
+| D-036 | 🟡 MEDIO | ⏳ PENDIENTE | Frontend: markers SHORT y línea de liquidación en `PriceChart`; filtros CSV por `position_side` en `/trades` (parcial en Decisions). |
 
 ### 1.3.bis Estado de resolución (histórico 2026-05-17)
 
@@ -226,34 +229,32 @@ Mismatch entre `shared/db/models.py` (ORM) y `trading-engine/alembic/versions/00
 
 ### D-008 — Overrides determinísticos pre-RiskGate en Decisor
 
-| Fuente | Lógica |
-|--------|--------|
-| Design doc §7.1 | Decisor produce JSON y el RG valida. |
-| Código `decisor.py:127-160` | Decisor aplica **overrides** ANTES de persistir y ANTES del RG: BUY en `TRENDING_DOWN` → HOLD; confidence < 0.60 → HOLD; tamaño según confianza (≥0.70 → max_position_pct, sino 0.03, piso 0.01). |
-
-**Severidad**: 🟡 MEDIO. Los overrides protegen pero no están en el design doc original — quien lo lee esperaría que esa lógica viva en el RG, no en el Decisor.
-
-> Documentado formalmente en `05-risk-and-safety.md` §3.
+| Estado | **RESUELTO** (v1.4 / LLM-centric) |
+|--------|----------------------------------|
+| Código actual | No hay overrides de `action` ni sizing por confianza/régimen. Sizing BUY/SHORT server-side (`risk_per_trade_pct`). Self-consistency opcional. Risk Gate (R0–R15) y `coherence_strict_mode` son barreras hard. Futuros opt-in (`trading_product`). |
+| Histórico | Antes existían overrides pre-RG (TRENDING_DOWN→HOLD, confidence-floor); eliminados en rediseño v1.3–v1.4. |
 
 ---
 
 ### D-010 — `DecisorOutput`: campos del JSON
 
-| Campo | Design doc §7.1 (ejemplo) | Código `shared/schemas.py:20-68` |
-|-------|---------------------------|-----------------------------------|
+| Campo | Design doc §7.1 (ejemplo) | Código actual (v1.9) |
+|-------|---------------------------|----------------------|
 | `regime` | ✅ | ✅ idéntico. |
-| `confluences` | ✅ list[str] | ✅ list[str] max_length=10. |
+| `confluences` | ✅ list[str] | ✅ post-filtro A–H + I–Z activas, max_length=10. |
 | `action` | ✅ | ✅ |
-| `confidence` | ✅ float 0-1 | ✅ pero **derivado** de `confidence_base + confidence_adjustment`. |
-| `confidence_base` | ❌ no en design doc | ✅ float [0,1] default 0.0. |
-| `confidence_adjustment` | ❌ no en design doc | ✅ float [-0.10, 0.10] default 0.0. |
-| `stop_loss` | ✅ float \| null | ✅ |
-| `take_profit` | ✅ float \| null | ✅ |
-| `position_size_pct` | ✅ 0.01-0.10 | ✅ pero rango **[0, 0.25]** más amplio. |
-| `expected_holding_min` | ❌ no en design doc | ✅ int >= 1 default 1. |
-| `reasoning` | ✅ max 240 chars | ✅ pero **max 800 chars** (4× más). |
+| `confidence_base` | ❌ | ✅ **calculado en servidor** (`shared/confidence.py`), no por el LLM. |
+| `confidence_adjustment` | ❌ | ✅ LLM, clamp ±0.10. |
+| `confidence` | ✅ float 0-1 | ✅ derivado `clip(base+adj, 0, 1)` en Pydantic. |
+| `confidence_meta` | ❌ | ✅ auditoría del cálculo (conteo, factores, dropped). |
+| `stop_loss` / `take_profit` | ✅ | ✅ |
+| `position_size_pct` | ✅ 0.01-0.10 | ✅ rango **[0, 0.25]**. |
+| `expected_holding_min` | ❌ | ✅ int ≥ 1. |
+| `reasoning` | ✅ max 240 chars | ✅ max **1000** chars. |
 
-**Severidad**: 🟡 MEDIO. La spec del JSON evolucionó. El refactor "Decisor v2" justifica `confidence_base`/`confidence_adjustment` y `expected_holding_min`.
+**Severidad**: 🟢 BAJO — documentado en `04-api-contracts.md` §1.3 y `01-functional-spec.md` §6.3 / §F2.bis.1.
+
+**Nota v1.9**: el conteo de confluencias para la base incluye I–Z promovidas (peso 1.0). Códigos desactivados se eliminan antes del cálculo.
 
 ---
 
@@ -287,14 +288,15 @@ Mismatch entre `shared/db/models.py` (ORM) y `trading-engine/alembic/versions/00
 
 | Filtro design doc | Implementado |
 |-------------------|--------------|
-| Agent (decisor/supervisor) | ✅ (`?agent=`). |
-| Action (BUY/SELL/HOLD) | ❌ |
-| Confidence range slider | ❌ |
-| Executed (yes/no/rejected) | 🟡 parcial (`?executed=`). |
-| Date range | ❌ |
+| Agent (decisor/supervisor) | ✅ (`?agent=` API; selector en UI). |
+| Action (BUY/SELL/HOLD) | ✅ (filtro client-side en UI). |
+| Confidence range slider | ✅ (filtro client-side en UI). |
+| Executed (yes/no/rejected) | 🟡 parcial (`?executed=` API). |
+| Date range | ✅ (filtro client-side en UI). |
 | Click row → side panel con input/output | ✅ |
+| Desglose confianza (base / adj / meta) | ✅ v1.9 (`ConfidenceBreakdown`) |
 
-**Severidad**: 🟡 MEDIO. Funcionalidad básica OK, UX power-user incompleta.
+**Severidad**: 🟡 MEDIO. Faltan filtros server-side para acción/confianza/fecha y export CSV.
 
 ---
 

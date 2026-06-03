@@ -197,13 +197,12 @@ def test_render_user_prompt_with_strict_false_leaves_unknown_placeholders():
     assert "{playbook}" in rendered
 
 
-def test_decisor_system_prompt_sizing_is_flat():
+def test_decisor_system_prompt_risk_sizing_and_no_dead_confidence_formula():
     import pathlib
     prompt_text = (
         pathlib.Path(__file__).parent.parent / "agents" / "prompts" / "decisor_system.txt"
     ).read_text(encoding="utf-8")
-    # El nuevo bloque debe contener "Sizing plano"
-    assert "Sizing plano" in prompt_text, "El prompt debe tener sizing plano"
-    # No debe quedar la guía vieja de confidence≥0.85
-    assert "confidence ≥ 0.85 + ≥3 confluencias" not in prompt_text, \
-        "La tabla de sizing por confidence debe haber sido removida"
+    assert "riesgo fijo por trade" in prompt_text or "risk_per_trade_pct" in prompt_text
+    assert "CÁLCULO DE CONFIDENCE (7 pasos" not in prompt_text
+    assert "base y total las calcula el servidor" in prompt_text
+    assert "confidence ≥ 0.85 + ≥3 confluencias" not in prompt_text

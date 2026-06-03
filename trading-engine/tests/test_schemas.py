@@ -2,7 +2,61 @@
 import pytest
 from pydantic import ValidationError
 
-from shared.schemas import DecisorAction, DecisorOutput, MarketRegime, TradeOutcome
+from shared.schemas import (
+    DecisorAction,
+    DecisorOutput,
+    Direction,
+    MarketRegime,
+    TradeOutcome,
+    direction_for_action,
+)
+
+
+def test_direction_enum_values():
+    assert Direction.LONG.value == "LONG"
+    assert Direction.SHORT.value == "SHORT"
+
+
+def test_decisor_action_includes_short():
+    assert DecisorAction.SHORT.value == "SHORT"
+
+
+def test_direction_for_action_maps_entries():
+    assert direction_for_action(DecisorAction.BUY) == Direction.LONG
+    assert direction_for_action(DecisorAction.SHORT) == Direction.SHORT
+    assert direction_for_action(DecisorAction.SELL) is None
+    assert direction_for_action(DecisorAction.HOLD) is None
+
+
+def _valid_short_payload() -> dict:
+    return {
+        "regime": "TRENDING_DOWN",
+        "confluences": ["RSI overbought 5m"],
+        "action": "SHORT",
+        "confidence_base": 0.60,
+        "confidence_adjustment": 0.0,
+        "confidence": 0.60,
+        "stop_loss": 102000.0,
+        "take_profit": 96000.0,
+        "position_size_pct": 0.05,
+        "reasoning": "Régimen bajista con rechazo en resistencia",
+    }
+
+
+def test_short_requires_sl_and_tp():
+    payload = _valid_short_payload()
+    payload["stop_loss"] = None
+    payload["take_profit"] = None
+    with pytest.raises(ValidationError) as exc_info:
+        DecisorOutput(**payload)
+    assert "stop_loss is required when action=SHORT" in str(exc_info.value)
+
+
+def test_short_with_sl_tp_ok():
+    output = DecisorOutput(**_valid_short_payload())
+    assert output.action == DecisorAction.SHORT
+    assert output.stop_loss == 102000.0
+    assert output.take_profit == 96000.0
 
 
 def _valid_buy_payload() -> dict:

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Position, Trade
-from shared.pnl import compute_pnl_usdt, compute_pnl_pct
+from shared.pnl import compute_pnl_usdt_directional, compute_pnl_pct_directional
 
 router = APIRouter()
 
@@ -28,6 +28,9 @@ class PositionOut(BaseModel):
     sl_pnl_pct: float | None = None
     tp_pnl_usdt: float | None = None
     tp_pnl_pct: float | None = None
+    position_side: str | None = "LONG"
+    leverage: float | None = None
+    liquidation_price: float | None = None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
@@ -36,7 +39,11 @@ async def _session(request: Request) -> AsyncSession:
 def _to_out(r: Position, trade: Trade | None) -> PositionOut:
     entry = float(r.entry_price)
     qty = float(r.quantity_btc)
-    side = trade.side if trade else "BUY"
+    direction = (
+        getattr(r, "position_side", None)
+        or (getattr(trade, "position_side", None) if trade else None)
+        or "LONG"
+    )
     sl = float(trade.stop_loss) if trade and trade.stop_loss else None
     tp = float(trade.take_profit) if trade and trade.take_profit else None
 
@@ -54,10 +61,17 @@ def _to_out(r: Position, trade: Trade | None) -> PositionOut:
         updated_at=r.updated_at,
         stop_loss=sl,
         take_profit=tp,
-        sl_pnl_usdt=compute_pnl_usdt(entry=entry, quantity=qty, exit_price=sl, side=side),
-        sl_pnl_pct=compute_pnl_pct(entry=entry, exit_price=sl, side=side),
-        tp_pnl_usdt=compute_pnl_usdt(entry=entry, quantity=qty, exit_price=tp, side=side),
-        tp_pnl_pct=compute_pnl_pct(entry=entry, exit_price=tp, side=side),
+        sl_pnl_usdt=compute_pnl_usdt_directional(
+            entry=entry, quantity=qty, exit_price=sl, direction=direction,
+        ),
+        sl_pnl_pct=compute_pnl_pct_directional(entry=entry, exit_price=sl, direction=direction),
+        tp_pnl_usdt=compute_pnl_usdt_directional(
+            entry=entry, quantity=qty, exit_price=tp, direction=direction,
+        ),
+        tp_pnl_pct=compute_pnl_pct_directional(entry=entry, exit_price=tp, direction=direction),
+        position_side=direction,
+        leverage=float(r.leverage) if getattr(r, "leverage", None) else None,
+        liquidation_price=float(r.liquidation_price) if getattr(r, "liquidation_price", None) else None,
     )
 
 @router.get("/positions", response_model=list[PositionOut])

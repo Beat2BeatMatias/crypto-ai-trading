@@ -52,6 +52,8 @@ const SELECT_OPTIONS = {
         "ollama-kimi-k2-thinking", "ollama-deepseek-v4-flash", "ollama-qwen3.5-32b"],
     mode: ["PAPER_TRADING", "LIVE"],
     atr_timeframe: ["5m", "15m", "1h"],
+    trading_product: ["spot", "futures"],
+    margin_mode: ["isolated", "cross"],
 };
 const FALLBACK_KEYS = new Set([
     "fallback_providers",
@@ -228,6 +230,41 @@ const FIELD_DEFS = {
         description: "Permite que el LLM se auto-corrija: si detecta inconsistencias factuales (C1/C2/C3), hace una segunda llamada al LLM en el mismo ciclo para revisar su decisión.",
         type: "toggle",
     },
+    decisor_llm_temperature: {
+        label: "Temperatura LLM — Decisor",
+        description: "Aleatoriedad de las respuestas del Decisor. Valores bajos (≈0.1) reducen variación entre ciclos y facilitan decisiones más estables.",
+        type: "slider", min: 0.0, max: 1.0, step: 0.05, unit: "",
+        format: fmt2, parse: parseFloat,
+    },
+    decisor_self_consistency_n: {
+        label: "Self-consistency (muestras por ciclo)",
+        description: "Llamadas LLM por ciclo con votación mayoritaria. 0 = una sola llamada. 3 = tres muestras; sin mayoría clara → HOLD por consenso incierto.",
+        type: "slider", min: 0, max: 5, step: 1, unit: "muestras",
+        format: v => (v === 0 ? "off" : String(v)), parse: parseInt,
+    },
+    risk_per_trade_pct: {
+        label: "Riesgo por trade (% capital)",
+        description: "Fracción del capital en riesgo si el SL se ejecuta. En BUY el servidor calcula position_size_pct = riesgo / distancia al SL (tope max_position_pct y piso min_position_size).",
+        type: "slider", min: 0.001, max: 0.02, step: 0.001, unit: "%",
+        format: v => `${(v * 100).toFixed(2)}%`, parse: parseFloat,
+    },
+    supervisor_config_window_hours: {
+        label: "Ventana métricas — auto-config",
+        description: "Horas de historial para sugerencias y auto-apply de parámetros numéricos. El playbook diario sigue usando 24h.",
+        type: "slider", min: 24, max: 336, step: 24, unit: "h",
+        format: v => `${v}h`, parse: parseInt,
+    },
+    supervisor_config_min_evaluated_decisions: {
+        label: "Mín. decisiones evaluadas (auto-config)",
+        description: "Outcomes maduros mínimos en la ventana de config antes de permitir auto-apply de parámetros.",
+        type: "slider", min: 10, max: 200, step: 5, unit: "decisiones",
+        format: v => String(v), parse: parseInt,
+    },
+    supervisor_config_auto_apply: {
+        label: "Auto-apply de parámetros (Supervisor)",
+        description: "Si está desactivado, el Supervisor solo sugiere cambios numéricos sin aplicarlos (recomendado en paper hasta validar edge).",
+        type: "toggle",
+    },
     // ── Guías para el LLM (no enforcement, solo referencia en el prompt) ──────
     sl_atr_max_multiplier: {
         label: "Multiplicador SL máximo (ATR)",
@@ -400,7 +437,7 @@ const GROUPS = [
         title: "Gestión de riesgo",
         color: "amber",
         keys: ["sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
-            "max_position_pct", "min_position_size", "max_simultaneous_trades",
+            "max_position_pct", "min_position_size", "risk_per_trade_pct", "max_simultaneous_trades",
             "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe"],
         note: "Parámetros con enforcement real en el Risk Gate (R1–R10). El LLM no puede ignorarlos.",
     },
@@ -410,10 +447,23 @@ const GROUPS = [
         keys: ["decisor_interval_min", "orderbook_levels", "kill_switch"],
     },
     {
+        title: "Supervisor — auto-config de parámetros",
+        color: "cyan",
+        keys: [
+            "supervisor_config_window_hours",
+            "supervisor_config_min_evaluated_decisions",
+            "supervisor_config_auto_apply",
+        ],
+        note: "Playbook y diagnóstico usan 24h. Auto-apply de min_rr, sl_atr, etc. usa la ventana larga y requiere muestra mínima.",
+    },
+    {
         title: "LLM-Centric — Decisor autónomo",
         color: "sky",
-        keys: ["coherence_strict_mode", "two_pass_enabled"],
-        note: "Controles del nuevo modelo LLM-centric. El CoherenceChecker audita inconsistencias del LLM; en modo estricto las bloquea.",
+        keys: [
+            "coherence_strict_mode", "two_pass_enabled",
+            "decisor_llm_temperature", "decisor_self_consistency_n",
+        ],
+        note: "Controles del Decisor LLM-centric: coherencia, two-pass, temperatura y votación multi-muestra. El sizing en BUY lo recalcula el servidor (ver riesgo por trade en Gestión de riesgo).",
     },
     {
         title: "Guías para el LLM — Umbrales de confianza",
@@ -539,6 +589,7 @@ function FallbackChain({ label, configKey, currentValue, onSave }) {
 const COLOR_CLASSES = {
     amber: { border: "border-amber-800/40", title: "text-amber-300", dot: "bg-amber-400" },
     orange: { border: "border-orange-800/40", title: "text-orange-300", dot: "bg-orange-400" },
+    cyan: { border: "border-cyan-800/40", title: "text-cyan-300", dot: "bg-cyan-400" },
     emerald: { border: "border-emerald-800/40", title: "text-emerald-300", dot: "bg-emerald-400" },
     sky: { border: "border-sky-800/40", title: "text-sky-300", dot: "bg-sky-400" },
     violet: { border: "border-violet-800/40", title: "text-violet-300", dot: "bg-violet-400" },
@@ -639,7 +690,7 @@ export function Config() {
     ]);
     const otherEntries = entries.filter(e => !knownKeys.has(e.key));
     return (_jsxs("div", { className: "space-y-4", children: [msg && (_jsx("div", { className: "rounded bg-zinc-800 px-4 py-2 text-sm text-emerald-400 border border-emerald-800/40", children: msg })), _jsxs("div", { className: "flex flex-wrap gap-3", children: [modeEntry?.value === "PAPER_TRADING" && (_jsx("button", { onClick: () => setLiveModal(true), className: "rounded bg-amber-600 px-4 py-2 text-sm font-semibold hover:bg-amber-500", children: "Cambiar a LIVE (trading real) \u2192" })), _jsx("button", { onClick: onRunSupervisor, disabled: supRunning, className: "rounded bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50", children: supRunning ? "Encolando..." : "Ejecutar Supervisor ahora" }), _jsx("button", { onClick: () => setDrawdownResetModal(true), className: "rounded bg-amber-700 px-4 py-2 text-sm font-semibold hover:bg-amber-600", children: "Resetear pico de drawdown" })] }), GROUPS.map(group => {
-                const c = COLOR_CLASSES[group.color];
+                const c = COLOR_CLASSES[group.color] ?? COLOR_CLASSES.zinc;
                 const groupEntries = group.keys
                     .map(k => entryMap[k])
                     .filter((e) => e !== undefined);

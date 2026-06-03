@@ -31,6 +31,9 @@ Table(
     Column("status", String(10), default="open"),
     Column("opened_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True)),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
 )
 
 

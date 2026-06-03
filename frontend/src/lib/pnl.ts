@@ -41,3 +41,48 @@ export function pnlColorClass(pnl: number | null | undefined): string {
   if (pnl < 0) return "text-red-400";
   return "text-zinc-400";
 }
+
+export type PositionSide = "LONG" | "SHORT";
+
+export function tradeDirection(trade: { position_side?: string; side?: string }): PositionSide {
+  if (trade.position_side === "SHORT") return "SHORT";
+  if (trade.side === "SELL" && trade.position_side !== "LONG") return "SHORT";
+  return "LONG";
+}
+
+export function computePnlUsdtDirectional(
+  entry: number,
+  quantity: number,
+  exitPrice: number | null | undefined,
+  direction: PositionSide,
+): number | null {
+  return computePnlUsdt(entry, quantity, exitPrice, direction === "SHORT" ? "SELL" : "BUY");
+}
+
+export function computePnlPctDirectional(
+  entry: number,
+  exitPrice: number | null | undefined,
+  direction: PositionSide,
+): number | null {
+  return computePnlPct(entry, exitPrice, direction === "SHORT" ? "SELL" : "BUY");
+}
+
+export function slDistancePct(
+  entry: number,
+  stopLoss: number,
+  direction: PositionSide,
+): number | null {
+  if (entry <= 0) return null;
+  if (direction === "SHORT") return ((stopLoss - entry) / entry) * 100;
+  return ((entry - stopLoss) / entry) * 100;
+}
+
+export function tpDistancePct(
+  entry: number,
+  takeProfit: number,
+  direction: PositionSide,
+): number | null {
+  if (entry <= 0) return null;
+  if (direction === "SHORT") return ((entry - takeProfit) / entry) * 100;
+  return ((takeProfit - entry) / entry) * 100;
+}

@@ -1,6 +1,8 @@
 # Crypto AI Trading
 
-Bot autónomo de day trading BTC/USDT en Binance Spot, impulsado por dos agentes LLM (Decisor + Supervisor) con risk gate determinístico.
+Bot autónomo de day trading BTC/USDT en Binance (Spot o USDT-M perpetuos), impulsado por dos agentes LLM (Decisor + Supervisor) con risk gate determinístico.
+
+**Futuros / shorts:** por defecto opera en **spot** (`TRADING_PRODUCT=spot`). Con `TRADING_PRODUCT=futures` usa `BTC/USDT:USDT`, margen isolated y leverage 1x; el decisor emite `BUY` / `SHORT` / `SELL` / `HOLD`. Ver diseño en [`docs/superpowers/specs/2026-06-02-futures-shorts-design.md`](docs/superpowers/specs/2026-06-02-futures-shorts-design.md).
 
 ## Documentación
 

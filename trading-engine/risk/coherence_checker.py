@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 
 from agents.confluence_registry import STATIC_CONFLUENCE_CODES, evaluate_verify_spec
-from shared.schemas import DecisorOutput, DecisorAction
+from shared.schemas import DecisorOutput, DecisorAction, Direction, direction_for_action
 
 logger = structlog.get_logger()
 
@@ -220,7 +220,7 @@ class CoherenceChecker:
                 rule_id="C4",
                 message=(
                     f"confidence={conf:.2f} (≥0.85) pero solo {n} confluencias. "
-                    f"La fórmula de 7 pasos difícilmente alcanza ese valor con <2 señales."
+                    f"La base server-side difícilmente alcanza ese valor con <2 señales."
                 ),
                 evidence={"confidence": conf, "confluences": n},
             ))
@@ -305,7 +305,8 @@ class CoherenceChecker:
         posible en two-pass (los niveles SL/TP no cambian con la revisión),
         por lo que el Decisor debe degradarlo a HOLD directamente.
         """
-        if decision.action != DecisorAction.BUY:
+        direction = direction_for_action(decision.action)
+        if direction is None:
             return []
         if decision.stop_loss is None or decision.take_profit is None:
             return []
@@ -316,11 +317,16 @@ class CoherenceChecker:
         if price <= 0:
             return []
 
-        sl_distance = price - decision.stop_loss
+        if direction == Direction.LONG:
+            sl_distance = price - decision.stop_loss
+            reward = decision.take_profit - price
+        else:
+            sl_distance = decision.stop_loss - price
+            reward = price - decision.take_profit
+
         if sl_distance <= 0:
             return []
 
-        reward = decision.take_profit - price
         rr_real = reward / sl_distance
 
         if rr_real > min_rr:

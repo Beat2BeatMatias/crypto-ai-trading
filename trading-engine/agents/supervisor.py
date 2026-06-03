@@ -50,6 +50,7 @@ _SAFE_BOUNDS: dict[str, tuple] = {
 _SAFE_TOGGLES: set[str] = {
     "coherence_strict_mode",
     "two_pass_enabled",
+    "supervisor_config_auto_apply",
 }
 
 # Cross-parameter invariants: value_of[a] must be <= value_of[b] after applying suggestions.
@@ -334,14 +335,34 @@ class Supervisor:
                     regen_reason=verdict.get("force_regen_reason") or "llm_decision",
                 )
 
-            # ----- Phase 3: config suggestions (always, independent of phases 1/2) -----
+            # ----- Phase 3: config suggestions (ventana larga; auto-apply opcional) -----
             if current_config:
                 try:
-                    suggestions = await self._generate_config_suggestions(metrics, current_config)
-                    applied, rejected = await self._apply_config_suggestions(suggestions, current_config)
+                    store = ConfigStore(self.session)
+                    auto_apply = await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY)
+                    config_window_h = int(
+                        await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_WINDOW_HOURS)
+                    )
+                    min_evaluated = int(
+                        await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_MIN_EVALUATED)
+                    )
+                    config_since = datetime.now(tz=timezone.utc) - timedelta(hours=config_window_h)
+                    config_metrics = await self._compute_metrics(config_since)
+                    suggestions = await self._generate_config_suggestions(
+                        config_metrics, current_config,
+                    )
+                    applied, rejected = await self._apply_config_suggestions(
+                        suggestions,
+                        current_config,
+                        auto_apply_enabled=auto_apply,
+                        config_metrics=config_metrics,
+                        min_evaluated_decisions=min_evaluated,
+                    )
                     output["config_suggestions"] = suggestions
                     output["config_applied"] = applied
                     output["config_rejected"] = rejected
+                    output["config_metrics_window_hours"] = config_window_h
+                    output["config_auto_apply_enabled"] = auto_apply
                     if applied:
                         output["config_applied_baseline"] = {
                             "win_rate": float(metrics.get("win_rate", 0.0)),
@@ -751,7 +772,13 @@ class Supervisor:
         return reverted
 
     async def _apply_config_suggestions(
-        self, suggestions: dict, current_config: dict
+        self,
+        suggestions: dict,
+        current_config: dict,
+        *,
+        auto_apply_enabled: bool = True,
+        config_metrics: dict | None = None,
+        min_evaluated_decisions: int = 30,
     ) -> tuple[list[dict], list[dict]]:
         """Apply suggestions that are within safe bounds and don't violate invariants.
 
@@ -764,6 +791,33 @@ class Supervisor:
         rejected: list[dict] = []
         store = ConfigStore(self.session)
         working = dict(current_config)
+
+        if not auto_apply_enabled:
+            for s in suggestions.get("suggestions", []):
+                if s.get("suggested") is None or s.get("suggested") == s.get("current"):
+                    continue
+                rejected.append({
+                    **s,
+                    "reject_reason": "auto-apply desactivado (supervisor_config_auto_apply=false)",
+                })
+            return applied, rejected
+
+        if config_metrics is not None:
+            evaluated = int(config_metrics.get("evaluated_decisions", 0))
+        else:
+            evaluated = min_evaluated_decisions
+        if evaluated < min_evaluated_decisions:
+            for s in suggestions.get("suggestions", []):
+                if s.get("suggested") is None or s.get("suggested") == s.get("current"):
+                    continue
+                rejected.append({
+                    **s,
+                    "reject_reason": (
+                        f"muestra insuficiente: {evaluated} decisiones evaluadas "
+                        f"< {min_evaluated_decisions} requeridas"
+                    ),
+                })
+            return applied, rejected
 
         for s in suggestions.get("suggestions", []):
             key = s.get("key", "")

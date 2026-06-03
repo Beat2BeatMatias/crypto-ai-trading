@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CandlestickSeries, HistogramSeries, LineSeries, createChart, } from "lightweight-charts";
+import { CandlestickSeries, HistogramSeries, LineSeries, TickMarkType, createChart, } from "lightweight-charts";
 import { createSeriesMarkers } from "lightweight-charts";
 import { api } from "../../api/client";
 import { useWebSocket } from "../../hooks/useWebSocket";
@@ -119,12 +119,33 @@ export function PriceChart({ defaultTimeframe, height = 540 }) {
                 textColor: "#848e9c",
                 entireTextOnly: true,
             },
+            localization: {
+                locale: "es-AR",
+                timeFormatter: (ts) => new Date(ts * 1000).toLocaleString("es-AR", { hour12: false }),
+            },
             timeScale: {
                 borderColor: "#2a2d3a",
                 timeVisible: true,
                 secondsVisible: false,
                 rightOffset: 8,
                 barSpacing: 8,
+                tickMarkFormatter: (ts, type) => {
+                    const d = new Date(ts * 1000);
+                    switch (type) {
+                        case TickMarkType.Year:
+                            return d.toLocaleDateString("es-AR", { year: "numeric" });
+                        case TickMarkType.Month:
+                            return d.toLocaleDateString("es-AR", { month: "short", year: "2-digit" });
+                        case TickMarkType.DayOfMonth:
+                            return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+                        case TickMarkType.Time:
+                            return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false });
+                        case TickMarkType.TimeWithSeconds:
+                            return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+                        default:
+                            return null;
+                    }
+                },
             },
         });
         const candleSeries = chart.addSeries(CandlestickSeries, {

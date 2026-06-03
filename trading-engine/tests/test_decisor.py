@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.types import JSON
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from shared.db.models import Indicators, Position, Decision, PlaybookVersion
+from shared.db.models import Indicators, Position, Decision, PlaybookVersion, ConfluenceRegistry
 from shared.schemas import DecisorAction
 from agents.decisor import Decisor
 from agents.llm_client import LLMClient, LLMProvider, LLMResponse
@@ -58,6 +58,9 @@ _positions_table = Table(
     Column("status", String(10), default="open"),
     Column("opened_at", DateTime, nullable=False),
     Column("updated_at", DateTime),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
 )
 
 _decisions_table = Table(
@@ -99,6 +102,11 @@ _trades_table = Table(
     Column("order_id_tp", String(50)),   # migration 007
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),  # migration 002
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10), default="isolated"),
+    Column("funding_paid_usdt", Numeric(18, 4)),
 )
 
 _decision_outcomes_table = Table(
@@ -363,6 +371,97 @@ async def test_valid_llm_response_persists_decision_with_action_buy(session: Asy
     assert row.tokens_in == 100
     assert row.tokens_out == 50
     assert row.output.get("two_pass_triggered") is False
+
+
+@pytest.mark.asyncio
+async def test_server_confidence_recomputes_base_with_promoted_i(session: AsyncSession):
+    session.add(ConfluenceRegistry(
+        code="I",
+        slug="test_pattern",
+        title="Patrón promovido",
+        definition_md="Definición de prueba.",
+        verify_spec={"all": [{"ctx": "price", "op": "gt", "value": 0}]},
+        active=True,
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    ))
+    await session.commit()
+
+    llm_payload = json.dumps({
+        "regime": "RANGE",
+        "confluences": ["B", "I"],
+        "action": "HOLD",
+        "confidence": 0.5,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "expected_holding_min": 1,
+        "reasoning": "[CONFIANZA] test sin base declarada.",
+    })
+    llm = _make_llm_client(llm_payload)
+    pm = _make_prompt_manager()
+    decisor = Decisor(
+        session=session,
+        llm=llm,
+        symbol="BTC/USDT",
+        prompt_manager=pm,
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=False,
+    )
+
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    expected_base = 0.70 * 0.85 * 0.85
+    assert result.confidence_base == pytest.approx(expected_base)
+    assert result.confidence == pytest.approx(expected_base)
+    row = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalar_one()
+    assert row.output["confidence_meta"]["confluence_count"] == 2
+    assert set(row.output["confidence_meta"]["confluences_counted"]) == {"B", "I"}
+
+
+@pytest.mark.asyncio
+async def test_server_confidence_drops_deactivated_registry_code(session: AsyncSession):
+    session.add(ConfluenceRegistry(
+        code="J",
+        slug="inactive_pattern",
+        title="Patrón inactivo",
+        definition_md="Ya no activo.",
+        verify_spec={"all": [{"ctx": "price", "op": "gt", "value": 0}]},
+        active=False,
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        deactivated_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+    ))
+    await session.commit()
+
+    llm_payload = json.dumps({
+        "regime": "RANGE",
+        "confluences": ["B", "J"],
+        "action": "HOLD",
+        "confidence_adjustment": 0.0,
+        "confidence": 0.0,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "expected_holding_min": 1,
+        "reasoning": "J desactivada.",
+    })
+    decisor = Decisor(
+        session=session,
+        llm=_make_llm_client(llm_payload),
+        symbol="BTC/USDT",
+        prompt_manager=_make_prompt_manager(),
+        provider=LLMProvider.GEMINI_FLASH,
+        fallbacks=[],
+        two_pass_enabled=False,
+    )
+
+    result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
+
+    assert result.confluences == ["B"]
+    expected_base = 0.55 * 0.85 * 0.85
+    assert result.confidence_base == pytest.approx(expected_base)
+    row = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalar_one()
+    assert row.output["confidence_meta"]["confluences_dropped"] == ["J"]
 
 
 @pytest.mark.asyncio
@@ -816,6 +915,7 @@ async def test_decisor_when_critical_null_indicator_should_early_exit_hold_witho
     # THEN result is HOLD (early-exit, not LLM decision)
     assert result.action == DecisorAction.HOLD
     assert "[DATOS_INSUFICIENTES]" in result.reasoning
+    assert result.confidence == pytest.approx(0.95)
 
     # AND the LLM was never called
     assert llm.call.call_count == 0

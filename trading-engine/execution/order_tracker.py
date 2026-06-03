@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 from collections import defaultdict
 from typing import Any
 import structlog
@@ -41,8 +42,8 @@ class OrderTracker:
                 logger.info("order_tracker.manual_close_requested", trade_id=str(trade.id))
                 try:
                     await self._cancel_bracket_orders(trade)
-                    await self.executor.execute_sell(
-                        trade_id=trade.id, decision_id=None, close_reason="manual_close",
+                    await self._close_open_trade(
+                        trade, decision_id=None, close_reason="manual_close",
                     )
                 except Exception as e:
                     error_str = str(e)
@@ -74,6 +75,7 @@ class OrderTracker:
 
         current_price = await self._fetch_current_price()
         last_candle_low = await self._fetch_last_candle_low()
+        last_candle_high = await self._fetch_last_candle_high()
 
         try:
             fills = await self.exchange.fetch_my_trades(self.symbol, limit=50)
@@ -81,29 +83,8 @@ class OrderTracker:
             logger.warning("order_tracker.fetch_trades_failed", error=str(e))
             fills = []
 
-        sell_fills = [f for f in fills if f.get("side") == "sell"]
-
-        # Agrupar sub-fills por order_id para detectar fills parciales de Binance.
-        # Binance puede partir una orden en múltiples registros con el mismo order_id
-        # pero cantidades menores. Sumar todos los sub-fills del mismo order para
-        # comparar contra la cantidad total del trade.
-        aggregated: dict[str, dict] = defaultdict(
-            lambda: {"amount": 0.0, "price": 0.0, "fee": 0.0, "timestamp": 0}
-        )
-        for fill in sell_fills:
-            oid = str(fill.get("order") or fill.get("id") or "")
-            if not oid:
-                continue
-            agg = aggregated[oid]
-            fill_qty = float(fill.get("amount") or 0)
-            fill_price = float(fill.get("price") or 0)
-            agg["amount"] += fill_qty
-            # precio promedio ponderado por cantidad
-            if agg["amount"] > 0:
-                prev_qty = agg["amount"] - fill_qty
-                agg["price"] = (agg["price"] * prev_qty + fill_price * fill_qty) / agg["amount"]
-            agg["fee"] += float((fill.get("fee") or {}).get("cost") or 0)
-            agg["timestamp"] = max(agg["timestamp"], fill.get("timestamp") or 0)
+        aggregated_sell = self._aggregate_fills_by_order([f for f in fills if f.get("side") == "sell"])
+        aggregated_buy = self._aggregate_fills_by_order([f for f in fills if f.get("side") == "buy"])
 
         # Re-fetch open trades: el loop de close_requested puede haber cerrado alguno
         open_trades = (await self.session.execute(
@@ -113,6 +94,8 @@ class OrderTracker:
         for trade in open_trades:
             qty = float(trade.quantity_btc)
             entry_ts = trade.ts_open.timestamp() * 1000  # ms epoch
+            pos_side = getattr(trade, "position_side", "LONG") or "LONG"
+            aggregated = aggregated_buy if pos_side == "SHORT" else aggregated_sell
             known_bracket_ids = {
                 oid for oid in (trade.order_id_sl, trade.order_id_tp) if oid
             }
@@ -149,12 +132,20 @@ class OrderTracker:
                 if fill_price > 0:
                     sl = float(trade.stop_loss or 0)
                     tp = float(trade.take_profit or 0)
-                    if sl > 0 and fill_price <= sl * 1.002:
-                        reason = "sl_triggered"
-                    elif tp > 0 and fill_price >= tp * 0.998:
-                        reason = "tp_triggered"
+                    if pos_side == "SHORT":
+                        if sl > 0 and fill_price >= sl * 0.998:
+                            reason = "sl_triggered"
+                        elif tp > 0 and fill_price <= tp * 1.002:
+                            reason = "tp_triggered"
+                        else:
+                            reason = "bracket_fill"
                     else:
-                        reason = "bracket_fill"
+                        if sl > 0 and fill_price <= sl * 1.002:
+                            reason = "sl_triggered"
+                        elif tp > 0 and fill_price >= tp * 0.998:
+                            reason = "tp_triggered"
+                        else:
+                            reason = "bracket_fill"
                     logger.info("order_tracker.bracket_detected",
                                 trade_id=str(trade.id), reason=reason,
                                 fill_price=fill_price, match_method=match_method)
@@ -169,16 +160,27 @@ class OrderTracker:
             # están por debajo del stop_loss. El ticker puntual puede no capturar
             # el mínimo intravela, por lo que el low de la vela cierra esa brecha.
             sl = float(trade.stop_loss or 0)
-            sl_breached = sl > 0 and (
-                (current_price is not None and current_price < sl)
-                or (last_candle_low is not None and last_candle_low < sl)
-            )
-            if sl_breached:
+            if pos_side == "SHORT":
+                sl_breached = sl > 0 and (
+                    (current_price is not None and current_price > sl)
+                    or (last_candle_high is not None and last_candle_high > sl)
+                )
+                trigger_price = (
+                    current_price
+                    if (current_price is not None and current_price > sl)
+                    else last_candle_high
+                )
+            else:
+                sl_breached = sl > 0 and (
+                    (current_price is not None and current_price < sl)
+                    or (last_candle_low is not None and last_candle_low < sl)
+                )
                 trigger_price = (
                     current_price
                     if (current_price is not None and current_price < sl)
                     else last_candle_low
                 )
+            if sl_breached:
                 logger.warning(
                     "order_tracker.sl_guardian_triggered",
                     trade_id=str(trade.id),
@@ -189,8 +191,8 @@ class OrderTracker:
                 )
                 try:
                     await self._cancel_bracket_orders(trade)
-                    await self.executor.execute_sell(
-                        trade_id=trade.id, decision_id=None, close_reason="sl_triggered",
+                    await self._close_open_trade(
+                        trade, decision_id=None, close_reason="sl_triggered",
                     )
                 except Exception as e:
                     error_str = str(e)
@@ -228,11 +230,18 @@ class OrderTracker:
             # En ese caso, monitorea el precio actual y cierra con market sell al alcanzar el TP.
             tp = float(trade.take_profit or 0)
             tp_guardian_active = not trade.order_id_tp and tp > 0
-            tp_reached = (
-                tp_guardian_active
-                and current_price is not None
-                and current_price >= tp
-            )
+            if pos_side == "SHORT":
+                tp_reached = (
+                    tp_guardian_active
+                    and current_price is not None
+                    and current_price <= tp
+                )
+            else:
+                tp_reached = (
+                    tp_guardian_active
+                    and current_price is not None
+                    and current_price >= tp
+                )
             if tp_reached:
                 logger.warning(
                     "order_tracker.tp_guardian_triggered",
@@ -241,8 +250,8 @@ class OrderTracker:
                     current_price=current_price,
                 )
                 try:
-                    await self.executor.execute_sell(
-                        trade_id=trade.id, decision_id=None, close_reason="tp_triggered",
+                    await self._close_open_trade(
+                        trade, decision_id=None, close_reason="tp_triggered",
                     )
                 except Exception as e:
                     error_str = str(e)
@@ -272,6 +281,43 @@ class OrderTracker:
                         logger.error("order_tracker.tp_guardian_failed",
                                      trade_id=str(trade.id), error=error_str)
 
+    @staticmethod
+    def _aggregate_fills_by_order(fills: list[dict]) -> dict[str, dict]:
+        aggregated: dict[str, dict] = defaultdict(
+            lambda: {"amount": 0.0, "price": 0.0, "fee": 0.0, "timestamp": 0}
+        )
+        for fill in fills:
+            oid = str(fill.get("order") or fill.get("id") or "")
+            if not oid:
+                continue
+            agg = aggregated[oid]
+            fill_qty = float(fill.get("amount") or 0)
+            fill_price = float(fill.get("price") or 0)
+            agg["amount"] += fill_qty
+            if agg["amount"] > 0:
+                prev_qty = agg["amount"] - fill_qty
+                agg["price"] = (agg["price"] * prev_qty + fill_price * fill_qty) / agg["amount"]
+            agg["fee"] += float((fill.get("fee") or {}).get("cost") or 0)
+            agg["timestamp"] = max(agg["timestamp"], fill.get("timestamp") or 0)
+        return aggregated
+
+    async def _close_open_trade(
+        self,
+        trade: Trade,
+        *,
+        decision_id: uuid.UUID | None,
+        close_reason: str,
+    ) -> None:
+        pos_side = getattr(trade, "position_side", "LONG") or "LONG"
+        if pos_side == "SHORT":
+            await self.executor.execute_close(
+                trade_id=trade.id, decision_id=decision_id, close_reason=close_reason,
+            )
+        else:
+            await self.executor.execute_sell(
+                trade_id=trade.id, decision_id=decision_id, close_reason=close_reason,
+            )
+
     async def _fetch_current_price(self) -> float | None:
         """Obtiene el precio actual del mercado para el guardian de SL."""
         try:
@@ -298,6 +344,19 @@ class OrderTracker:
             return float(row.low) if row else None
         except Exception as e:
             logger.warning("order_tracker.candle_low_fetch_failed", error=str(e))
+            return None
+
+    async def _fetch_last_candle_high(self) -> float | None:
+        try:
+            row = (await self.session.execute(
+                select(Ohlcv)
+                .where(Ohlcv.timeframe == "1m")
+                .order_by(Ohlcv.time.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            return float(row.high) if row else None
+        except Exception as e:
+            logger.warning("order_tracker.candle_high_fetch_failed", error=str(e))
             return None
 
     async def _cancel_bracket_orders(self, trade: Trade) -> None:

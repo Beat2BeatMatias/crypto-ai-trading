@@ -1,7 +1,9 @@
 # Riesgo y Seguridad — Crypto AI Trading
 
 > Audiencia: Risk / Compliance / SRE.
-> Versión: 1.6 — 2026-05-25.
+> Versión: 1.7 — 2026-06-02.
+>
+> Cambios v1.7: Futuros USDT-M y shorts. Reglas **R12–R15** (leverage, buffer de liquidación, margen, funding). R2/R3/R4/R5/R10 **direccionales** (BUY y SHORT). R6/R0_kill_switch usan `has_open_position` (no solo `btc_held`). Se **elimina** la antigua R7 “nunca shortear”. Capa 3 pasa a R0–R15.
 >
 > Cambios v1.6: Claves post-mortem (`postmortem_provider`, `postmortem_fallback_providers`, `postmortem_max_per_tick`) son **solo operador** — excluidas del auto-apply del Supervisor (§7.2). Costo LLM acotado por `postmortem_max_per_tick` (default 5 decisiones/tick).
 >
@@ -39,7 +41,7 @@ Este documento centraliza las reglas absolutas, controles deterministas, circuit
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Capa 3: Risk Gate (reglas R0–R11) — ÚNICA BARRERA HARD  │
+│ Capa 3: Risk Gate (reglas R0–R15) — ÚNICA BARRERA HARD  │
 │  - Bloqueo absoluto antes de emitir orden al exchange   │
 │  - Cada rechazo lleva rule_id estructurado              │
 │  - Persiste rejected_reason en la decisión              │
@@ -70,7 +72,7 @@ Esta sección formaliza qué garantías de seguridad ofrece el modelo de defensa
 
 ### 1.bis.1 Principio rector
 
-> **El LLM Decisor toma decisiones con autonomía total sobre `action` y `position_size_pct`. El CoherenceChecker audita la coherencia lógica. El Risk Gate (R1–R10) es la única barrera hard-blocking.** Ninguna salida del LLM puede provocar una acción que viole R1–R10 ni los guardrails del Supervisor (`_SAFE_BOUNDS`).
+> **El LLM Decisor toma decisiones con autonomía total sobre `action` y `position_size_pct`. El CoherenceChecker audita la coherencia lógica. El Risk Gate (R0–R15) es la única barrera hard-blocking.** Ninguna salida del LLM puede provocar una acción que viole R0–R15 ni los guardrails del Supervisor (`_SAFE_BOUNDS`).
 
 ### 1.bis.2 Garantías invariantes (contrato de Risk — v1.3)
 
@@ -78,12 +80,13 @@ Para cualquier ciclo del Decisor, el sistema garantiza que toda decisión con `e
 
 | ID | Garantía | Capa que la enforce | Estado v1.3 |
 |----|----------|---------------------|-------------|
-| GA-1 | Si `executed=true` y `action=="BUY"`, el LLM puede haber declarado cualquier régimen (incl. TRENDING_DOWN). | Risk Gate R1–R10 — no hay bloqueo por régimen. | **REVISADA** — ya no se garantiza que TRENDING_DOWN → BUY bloqueado. |
-| GA-2 | Si `executed=true` y `action=="BUY"`, el LLM puede tener cualquier `confidence`. | Risk Gate R1–R10 — no hay bloqueo por confidence-floor. | **REVISADA** — ya no se garantiza confidence ≥ 0.60. |
+| GA-1 | Si `executed=true` y `action` es apertura (`BUY` o `SHORT`), el LLM puede haber declarado cualquier régimen. | Risk Gate R0–R15 — no hay bloqueo por régimen. | **REVISADA** — sin override TRENDING_DOWN. |
+| GA-2 | Si `executed=true` y `action` es apertura, el LLM puede tener cualquier `confidence`. | Risk Gate R0–R15 — no hay bloqueo por confidence-floor. | **REVISADA** — sin umbral mínimo de confianza. |
 | GA-3 | `output.action != "BUY"` ó `output.position_size_pct <= max_position_pct`. | Capa 3 Risk Gate R1. | Sin cambios. |
 | GA-4 | `output.action != "BUY"` ó SL ∈ `[sl_atr_multiplier × ATR, sl_atr_max_multiplier × ATR]`. | Capa 3 Risk Gate R4. | Sin cambios. |
 | GA-5 | `output.action != "BUY"` ó R:R ≥ `min_rr_ratio`. | Capa 3 Risk Gate R5. | Sin cambios. |
-| GA-6 | `output.action != "SELL"` ó hay posición LONG abierta. | Capa 3 Risk Gate R6. | Sin cambios. |
+| GA-6 | `output.action != "SELL"` ó hay posición abierta (long o short). | Capa 3 Risk Gate R6 (`has_open_position`). | **REVISADA** v1.7 — ya no depende de `btc_held > 0`. |
+| GA-11 | Apertura SHORT solo si geometría short (SL > precio > TP) y reglas futures R12–R15 pasan. | Risk Gate R2/R3/R12–R15. | **NUEVA** v1.7. |
 | GA-7 | `output.action != "BUY"` con `kill_switch=true`. | Capa 3 Risk Gate (kill switch check). | Sin cambios. |
 | GA-8 | Si `daily_pnl_pct <= daily_stop_pct` → cero BUYs ejecutados ese día. | Capa 3 Risk Gate R9. | Sin cambios. |
 | GA-9 | `decisions.output.coherence_warnings` siempre presente (lista, puede ser vacía). | Capa 2 CoherenceChecker. | **NUEVA**. |
@@ -108,7 +111,7 @@ El `CoherenceChecker` (`trading-engine/risk/coherence_checker.py`) es la Capa 2 
 | C1 | El LLM declara confluencia A (RSI_OVERSOLD_BOUNCE) pero RSI(15m) y RSI(1h) no están en zona de sobreventa (<35). |
 | C2 | El LLM declara confluencia B (MACD_BULLISH_CROSS) pero el MACD no cruzó al alza en el ciclo actual. |
 | C3 | El LLM declara régimen TRENDING_UP pero ADX < 20 y las EMAs no están alineadas. |
-| C4 | El LLM declara confianza ≥ 0.85 pero tiene menos de 2 confluencias activas. |
+| C4 | Confianza ≥ 0.85 con menos de 2 confluencias en `decision.confluences` (post-filtro: A–H + I–Z activas, cada una peso 1.0 en el cálculo de base). |
 | C5 | El LLM emite BUY con confianza < 0.60 sin justificación explícita en `reasoning`. |
 | C6 | `expected_holding_min` está fuera del rango típico del perfil operativo derivado. |
 | C7 | R:R real calculado en código ≤ `min_rr_ratio` (**siempre critical** — fuerza HOLD/rechazo independiente de `strict_mode`). |
@@ -128,31 +131,37 @@ Toda decisión queda en `decisions` con:
 - `input`: snapshot completo del contexto en bloques A–K inyectado al LLM.
 - `output`: JSON resultante + `coherence_warnings` (lista C1–C8) + `two_pass_triggered` (bool).
 - `executed` + `rejected_reason` (si correspondiere).
-- `rule_id` en el rejected_reason (Risk Gate): `"R0_drawdown"`, `"R0_kill_switch"`, `"R1"`…`"R11"`.
+- `rule_id` en el rejected_reason (Risk Gate): `"R0_drawdown"`, `"R0_kill_switch"`, `"R1"`…`"R15"`.
 
 El operador puede auditar la calidad del LLM via `GET /api/decisions/stats?window=24` que desglosa rechazos por `rule_id` y warnings por regla de coherencia.
 
 ---
 
-## 2. Reglas absolutas R0–R11 (Risk Gate)
+## 2. Reglas absolutas R0–R15 (Risk Gate)
 
-Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siempre pasa automáticamente.
+Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siempre pasa automáticamente. `SELL` solo valida cierre (R6); no aplica R2–R5 ni R10–R15.
+
+**Firma relevante (v1.7):** además de `usdt_balance` / `btc_held` (Spot), el gate acepta `available_margin`, `has_open_position`, `open_position_side`, `leverage`, `liquidation_price`, `funding_rate`, `funding_rate_max_pct`, `liquidation_buffer_atr`. El notional y R14 usan `available_margin` cuando está presente.
 
 | ID | Regla | Comportamiento si falla |
 |----|-------|------------------------|
-| **R0_drawdown** | `total_drawdown_pct > max_drawdown_pct` (drawdown no superado) | Reject `max_drawdown breached`. Evaluado antes de checks BUY/SELL. |
-| **R0_kill_switch** | Con `kill_switch=true`, solo SELL-to-close permitido | Reject `kill_switch active — only SELL-to-close allowed`. |
-| **R1** | `position_size_pct ≤ max_position_pct + 1e-9` | Reject `position_size_pct X > max Y`. |
-| **R2** | `action=BUY` requiere `stop_loss` no nulo y `stop_loss < current_price` | Reject `BUY requires stop_loss` / `stop_loss must be < current_price`. |
-| **R3** | `action=BUY` requiere `take_profit` no nulo y `take_profit > current_price` | Reject `BUY requires take_profit` / `take_profit must be > current_price`. |
-| **R4** | Distancia SL entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR`. Defaults: **0.3×ATR (mín)**, **1.5×ATR (máx)**. | Reject `SL distance X < ...` o `SL distance X > ...`. |
-| **R5** | `R:R > min_rr_ratio`. Default operativo: **1.3**. | Reject `R:R ratio X ≤ min`. |
-| **R6** | `action=SELL` requiere `btc_held > 0` y al menos 1 posición abierta | Reject `SELL requested but no open position to close`. |
-| **R7** | Nunca shortear: SELL solo cierra LONG existente | Asegurado estructuralmente en `execute_buy`. |
-| **R8** | `open_positions < max_simultaneous_trades` | Reject `max_simultaneous_trades reached: N`. |
-| **R9** | `daily_pnl_pct > daily_stop_pct` | Reject `daily P&L breach: X`. |
-| **R10** | Movimiento al TP cubre fees round-trip | Reject `R10: TP move (X%) < N×fees (Y%)`. No aplica si `roundtrip_fee_pct == 0`. |
-| **R11** | Notional mínimo Binance (NOTIONAL filter) para MARKET BUY, SL y TP del bracket OCO | Reject `notional X USDT < min_notional 5.00 USDT`. Default `min_notional_usdt=5.0`. |
+| **R0_drawdown** | `total_drawdown_pct > max_drawdown_pct` (drawdown no superado) | Reject `max_drawdown breached`. Evaluado antes de checks de apertura/cierre. |
+| **R0_kill_switch** | Con `kill_switch=true`, solo `SELL` con posición abierta | Reject `kill_switch active — only close (SELL) allowed`. |
+| **R1** | `position_size_pct ≤ max_position_pct + 1e-9` (aperturas BUY/SHORT) | Reject `position_size_pct X > max Y`. |
+| **R2** | Apertura requiere `stop_loss` del lado correcto: LONG `SL < precio`; SHORT `SL > precio` | Reject según dirección. |
+| **R3** | Apertura requiere `take_profit` del lado correcto: LONG `TP > precio`; SHORT `TP < precio` | Reject según dirección. |
+| **R4** | `\|precio − SL\|` entre `sl_atr_multiplier × ATR` y `sl_atr_max_multiplier × ATR` | Reject distancia SL fuera de banda. |
+| **R5** | `reward / risk > min_rr_ratio` con reward/risk simétricos por dirección | Reject `R:R ratio X < min`. |
+| **R6** | `action=SELL` requiere `has_open_position` y `open_positions_count > 0` | Reject `SELL requested but no open position to close`. |
+| **R7** | *(Obsoleta v1.7)* Antigua regla “nunca shortear”. Reemplazada por producto `spot` + acción `SHORT` solo en futures. | — |
+| **R8** | `open_positions < max_simultaneous_trades` (aperturas) | Reject `max_simultaneous_trades reached`. |
+| **R9** | `daily_pnl_pct > daily_stop_pct` (aperturas) | Reject `daily P&L breach`. |
+| **R10** | Movimiento absoluto al TP cubre `min_fees_to_tp_ratio × fees` + slippage | Reject `R10: TP move …`. No aplica si `roundtrip_fee_pct == 0`. |
+| **R11** | Notional de entrada, SL y TP ≥ `min_notional_usdt` (del símbolo) | Reject `notional … < min_notional`. |
+| **R12** | `leverage ≤ max_leverage` | Reject `leverage X > max Y`. |
+| **R13** | Precio de liquidación más allá del SL por ≥ `liquidation_buffer_atr × ATR` | Reject `liquidation too close to SL`. Si `liquidation_price` es null, no evalúa. |
+| **R14** | `notional ≤ available_margin` | Reject `insufficient available margin`. |
+| **R15** | `\|funding_rate\| ≤ funding_rate_max_pct` | Reject `funding rate exceeds max`. |
 
 > ✅ `main.py` calcula `daily_pnl_pct` y `total_drawdown_pct` reales en cada tick mediante `_compute_risk_metrics()` (portfolio USDT + BTC×precio, anclado a `drawdown_reset_ts`).
 
@@ -160,7 +169,7 @@ Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siem
 
 ## 3. Overrides determinísticos — ELIMINADOS (v1.3)
 
-Desde el rediseño LLM-centric (2026-05-17), **`_apply_deterministic_overrides` fue eliminado**. El LLM tiene autonomía total sobre `action` y `position_size_pct`. La defensa post-LLM es exclusivamente CoherenceChecker (auditoría) + Risk Gate (bloqueo).
+Desde el rediseño LLM-centric (2026-05-17), **`_apply_deterministic_overrides` fue eliminado**. El LLM tiene autonomía sobre `action`; en BUY el **`position_size_pct` ejecutado** lo fija el servidor (`risk_per_trade_pct / sl_distance_pct`, cap R1). La defensa post-LLM es CoherenceChecker (auditoría) + Risk Gate (bloqueo).
 
 ---
 
@@ -201,7 +210,7 @@ Cuando `engine_paused = True`, cada tick del Decisor sale tempranamente con log 
 Disparado vía `POST /api/kill-switch {enabled:true}`.
 
 - Setea `config.kill_switch = "true"` + fila en `config_history`.
-- El Risk Gate, al ver el flag, rechaza cualquier acción **excepto** SELL para cerrar (`btc_held > 0`).
+- El Risk Gate, al ver el flag, rechaza cualquier apertura (**BUY** y **SHORT**) y permite solo **SELL** si `has_open_position`.
 - El operador debe desactivarlo explícitamente (`enabled:false`).
 
 > El kill switch **no** cancela órdenes ya enviadas a Binance ni cierra posiciones automáticamente. Para eso debe emitirse un SELL manual via el flujo de cierre de trade.
@@ -246,6 +255,7 @@ Endpoint: `POST /api/mode {mode, confirmation}`.
 - `max_drawdown_pct`
 - `decisor_interval_min` — frecuencia del ciclo del Decisor; solo operador.
 - `atr_timeframe` — timeframe del ATR de referencia; solo operador.
+- `trading_product`, `max_leverage`, `margin_mode`, `liquidation_buffer_atr` — producto y riesgo de derivados; solo operador.
 - `postmortem_provider`, `postmortem_fallback_providers`, `postmortem_enabled`, `postmortem_max_per_tick` (configuración de aprendizaje — solo operador vía `/config`)
 
 Estas son **explícitamente** marcadas como demasiado críticas o fuera del dominio de optimización automática. El Supervisor puede sugerirlas en el reporte (salvo post-mortem), pero el código rechaza la aplicación automática y deja constancia en `output.config_rejected`.

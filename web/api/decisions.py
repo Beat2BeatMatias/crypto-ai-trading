@@ -9,6 +9,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Decision, DecisionOutcome
 from shared.config_store import default_list_since
+from shared.confidence_calibration import compute_calibration
 
 router = APIRouter()
 
@@ -47,6 +48,7 @@ async def _session(request: Request) -> AsyncSession:
 @router.get("/decisions", response_model=list[DecisionOut])
 async def list_decisions(session: Annotated[AsyncSession, Depends(_session)],
                           agent: str | None = Query(None),
+                          action: str | None = Query(None),
                           executed: bool | None = Query(None),
                           since: datetime | None = Query(None),
                           include_paper: bool = Query(False),
@@ -54,6 +56,8 @@ async def list_decisions(session: Annotated[AsyncSession, Depends(_session)],
     stmt = select(Decision).order_by(desc(Decision.ts)).limit(limit)
     if agent:
         stmt = stmt.where(Decision.agent == agent)
+    if action:
+        stmt = stmt.where(Decision.output["action"].as_string() == action)
     if executed is not None:
         stmt = stmt.where(Decision.executed == executed)
     effective_since = since
@@ -96,6 +100,26 @@ class DecisionStatsOut(BaseModel):
     coherence: CoherenceBreakdown
     confidence_distribution: list[ConfidenceBucket]
     sizing_distribution: list[SizingBucket]
+
+
+class CalibrationBucketOut(BaseModel):
+    range: str
+    count: int
+    success_count: int
+    success_rate: float | None
+    avg_confidence: float | None
+
+
+class ConfidenceCalibrationOut(BaseModel):
+    window_hours: int
+    sample_size: int
+    buckets: list[CalibrationBucketOut]
+    brier_score: float | None
+    expected_calibration_error: float | None
+    discriminates: bool | None
+    low_bucket_success_rate: float | None
+    high_bucket_success_rate: float | None
+    recommendation: str
 
 
 @router.get("/decisions/stats", response_model=DecisionStatsOut)
@@ -203,6 +227,50 @@ async def decisions_stats(
             SizingBucket(range=r, count=sizing_buckets.get(r, 0))
             for r, *_ in _size_ranges
         ],
+    )
+
+
+@router.get("/decisions/calibration", response_model=ConfidenceCalibrationOut)
+async def decisions_calibration(
+    session: Annotated[AsyncSession, Depends(_session)],
+    window: int = Query(168, ge=24, le=336, description="Ventana en horas (24–336)"),
+):
+    """Curva de calibración: confidence vs tasa de éxito por bucket (outcomes maduros)."""
+    since = datetime.now(tz=timezone.utc) - timedelta(hours=window)
+    rows = (await session.execute(
+        select(Decision, DecisionOutcome)
+        .join(DecisionOutcome, Decision.id == DecisionOutcome.decision_id)
+        .where(Decision.ts >= since, Decision.agent == "decisor")
+        .order_by(desc(Decision.ts))
+    )).all()
+
+    samples: list[tuple[float, str]] = []
+    for decision, outcome in rows:
+        if outcome.classification in ("PENDING", "UNKNOWN"):
+            continue
+        conf = float((decision.output or {}).get("confidence") or 0.0)
+        samples.append((conf, outcome.classification))
+
+    report = compute_calibration(samples, window_hours=window)
+    return ConfidenceCalibrationOut(
+        window_hours=report.window_hours,
+        sample_size=report.sample_size,
+        buckets=[
+            CalibrationBucketOut(
+                range=b.range,
+                count=b.count,
+                success_count=b.success_count,
+                success_rate=b.success_rate,
+                avg_confidence=b.avg_confidence,
+            )
+            for b in report.buckets
+        ],
+        brier_score=report.brier_score,
+        expected_calibration_error=report.expected_calibration_error,
+        discriminates=report.discriminates,
+        low_bucket_success_rate=report.low_bucket_success_rate,
+        high_bucket_success_rate=report.high_bucket_success_rate,
+        recommendation=report.recommendation,
     )
 
 

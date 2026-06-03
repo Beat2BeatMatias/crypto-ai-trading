@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Position
-from shared.pnl import compute_pnl_usdt, compute_pnl_pct
+from shared.pnl import compute_pnl_usdt_directional, compute_pnl_pct_directional
 from shared.config_store import default_list_since
 
 router = APIRouter()
@@ -39,6 +39,10 @@ class TradeOut(BaseModel):
     sl_pnl_pct: float | None = None
     tp_pnl_usdt: float | None = None
     tp_pnl_pct: float | None = None
+    position_side: str = "LONG"
+    leverage: float | None = None
+    liquidation_price: float | None = None
+    margin_mode: str | None = None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
@@ -47,17 +51,25 @@ async def _session(request: Request) -> AsyncSession:
 def _open_trade_pnl(r: Trade, current_price: float | None) -> dict[str, float | None]:
     entry = float(r.entry_price)
     qty = float(r.quantity_btc)
-    side = r.side
+    direction = getattr(r, "position_side", None) or "LONG"
     sl = float(r.stop_loss) if r.stop_loss else None
     tp = float(r.take_profit) if r.take_profit else None
     return {
         "current_price": current_price,
-        "unrealized_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=current_price, side=side),
-        "unrealized_pnl_pct": compute_pnl_pct(entry=entry, exit_price=current_price, side=side),
-        "sl_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=sl, side=side),
-        "sl_pnl_pct": compute_pnl_pct(entry=entry, exit_price=sl, side=side),
-        "tp_pnl_usdt": compute_pnl_usdt(entry=entry, quantity=qty, exit_price=tp, side=side),
-        "tp_pnl_pct": compute_pnl_pct(entry=entry, exit_price=tp, side=side),
+        "unrealized_pnl_usdt": compute_pnl_usdt_directional(
+            entry=entry, quantity=qty, exit_price=current_price, direction=direction,
+        ),
+        "unrealized_pnl_pct": compute_pnl_pct_directional(
+            entry=entry, exit_price=current_price, direction=direction,
+        ),
+        "sl_pnl_usdt": compute_pnl_usdt_directional(
+            entry=entry, quantity=qty, exit_price=sl, direction=direction,
+        ),
+        "sl_pnl_pct": compute_pnl_pct_directional(entry=entry, exit_price=sl, direction=direction),
+        "tp_pnl_usdt": compute_pnl_usdt_directional(
+            entry=entry, quantity=qty, exit_price=tp, direction=direction,
+        ),
+        "tp_pnl_pct": compute_pnl_pct_directional(entry=entry, exit_price=tp, direction=direction),
     }
 
 def _to_out(r: Trade, *, current_price: float | None = None) -> TradeOut:
@@ -79,6 +91,10 @@ def _to_out(r: Trade, *, current_price: float | None = None) -> TradeOut:
         order_id_close=r.order_id_close,
         order_id_sl=r.order_id_sl,
         order_id_tp=r.order_id_tp,
+        position_side=getattr(r, "position_side", "LONG") or "LONG",
+        leverage=float(r.leverage) if getattr(r, "leverage", None) else None,
+        liquidation_price=float(r.liquidation_price) if getattr(r, "liquidation_price", None) else None,
+        margin_mode=getattr(r, "margin_mode", None),
         **open_pnl,
     )
 

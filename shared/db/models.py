@@ -137,6 +137,11 @@ class Trade(Base):
     order_id_tp: Mapped[str | None] = mapped_column(String(50))
     fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     close_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    position_side: Mapped[str] = mapped_column(String(5), nullable=False, server_default="LONG")
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), server_default="1")
+    liquidation_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    margin_mode: Mapped[str | None] = mapped_column(String(10), server_default="isolated")
+    funding_paid_usdt: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
 
     __table_args__ = (
         Index("idx_trades_status", "status"),
@@ -160,6 +165,9 @@ class Position(Base):
     status: Mapped[str] = mapped_column(String(10), default="open")
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    position_side: Mapped[str | None] = mapped_column(String(5), server_default="LONG")
+    leverage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), server_default="1")
+    liquidation_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
 
 
 class PlaybookVersion(Base):
@@ -266,6 +274,8 @@ class BalanceSnapshot(Base):
     usdt_locked: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, server_default=text("0"))
     btc_locked: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, server_default=text("0"))
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="binance")
+    margin_balance: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    available_margin: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
 
     __table_args__ = (
         Index("idx_balance_snapshots_ts", "ts"),

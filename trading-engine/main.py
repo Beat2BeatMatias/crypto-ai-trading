@@ -25,6 +25,28 @@ from notifications import notify, TelegramEvent
 
 logger = structlog.get_logger()
 
+FUTURES_SYMBOL = "BTC/USDT:USDT"
+
+
+def resolve_engine_symbol(product: str, spot_symbol: str) -> str:
+    return FUTURES_SYMBOL if product == "futures" else spot_symbol
+
+
+def validate_futures_sizing(
+    *,
+    available_margin: float,
+    max_position_pct: float,
+    leverage: int,
+    min_notional: float,
+) -> tuple[bool, str]:
+    max_trade_notional = available_margin * max_position_pct * leverage
+    if max_trade_notional < min_notional:
+        return False, (
+            f"futures.sizing_unfeasible: max trade notional {max_trade_notional:.2f} "
+            f"< min_notional {min_notional:.2f}"
+        )
+    return True, ""
+
 
 async def _compute_risk_metrics(
     session, usdt_balance: float, btc_balance: float = 0.0
@@ -175,20 +197,60 @@ async def run() -> None:
 
     llm = LLMClient(gemini_client=gemini_client, groq_client=groq_client,
                     ollama_client=ollama_client)
-    exchange = build_binance_client()
+
+    from execution.exchange_adapter import build_adapter
+
+    trading_product = settings.trading_product
+    engine_adapter = build_adapter(trading_product)
+    engine_symbol = resolve_engine_symbol(trading_product, settings.symbol)
+    exchange = engine_adapter.build_client()
 
     # Bootstrap
     async with session_factory() as s:
         store = ConfigStore(s)
         await store.seed_defaults()
+        db_product = await store.get(ConfigKey.TRADING_PRODUCT)
+        if db_product in ("spot", "futures"):
+            trading_product = db_product
+        engine_adapter = build_adapter(trading_product)
+        engine_symbol = resolve_engine_symbol(trading_product, settings.symbol)
+        exchange = engine_adapter.build_client()
+        if trading_product == "futures":
+            try:
+                max_lev = int(await store.get_typed(ConfigKey.MAX_LEVERAGE))
+                margin_mode = await store.get(ConfigKey.MARGIN_MODE)
+                await engine_adapter.setup_symbol(
+                    engine_symbol, leverage=max_lev, margin_mode=margin_mode,
+                )
+                bal = await engine_adapter.fetch_balance()
+                min_notional = engine_adapter.min_notional(engine_symbol)
+                max_pos = await store.get_typed(ConfigKey.MAX_POSITION_PCT)
+                ok, reason = validate_futures_sizing(
+                    available_margin=bal.available,
+                    max_position_pct=max_pos,
+                    leverage=max_lev,
+                    min_notional=min_notional,
+                )
+                if not ok:
+                    logger.error("engine.futures_sizing_unfeasible", reason=reason)
+                    await notify(TelegramEvent.ENGINE_PAUSED, {"motivo": reason})
+                    trading_product = "spot"
+                    engine_adapter = build_adapter("spot")
+                    engine_symbol = settings.symbol
+                    exchange = engine_adapter.build_client()
+            except Exception as e:
+                logger.error("engine.futures_setup_failed", error=str(e))
+                trading_product = "spot"
+                engine_adapter = build_adapter("spot")
+                engine_symbol = settings.symbol
+                exchange = engine_adapter.build_client()
         await PromptManager(s).seed_playbook_v0()
-        fee_mgr = FeeManager(exchange, s, symbol=settings.symbol)
+        fee_mgr = FeeManager(exchange, s, symbol=engine_symbol)
         await fee_mgr.refresh()
-        # Limpiar estado de pausa al arrancar (puede quedar de una sesión anterior)
         await store.set(ConfigKey.ENGINE_PAUSED, "false", changed_by="system")
         await store.set(ConfigKey.ENGINE_PAUSE_REASON, "", changed_by="system")
 
-    orderbook = OrderBookCollector(symbol=settings.symbol, exchange=exchange)
+    orderbook = OrderBookCollector(symbol=engine_symbol, exchange=exchange)
     try:
         await orderbook.start()
         logger.info("orderbook.ws_started", symbol=settings.symbol)
@@ -266,14 +328,19 @@ async def run() -> None:
                 "adj_volume_ratio": await store.get_typed(ConfigKey.ADJ_VOLUME_RATIO),
                 "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
                 "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
+                "confluence_weak_factor": await store.get_typed(ConfigKey.CONFLUENCE_WEAK_FACTOR),
                 "block_k_max_lines": await store.get_typed(ConfigKey.BLOCK_K_MAX_LINES),
                 "block_k_window_hours": await store.get_typed(ConfigKey.BLOCK_K_WINDOW_HOURS),
                 "min_roundtrip_fee_pct": await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT),
+                "min_position_size": await store.get_typed(ConfigKey.MIN_POSITION_SIZE),
+                "risk_per_trade_pct": await store.get_typed(ConfigKey.RISK_PER_TRADE_PCT),
             }
             coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
             two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
+            decisor_temperature = await store.get_typed(ConfigKey.DECISOR_LLM_TEMPERATURE)
+            decisor_self_consistency_n = await store.get_typed(ConfigKey.DECISOR_SELF_CONSISTENCY_N)
 
-            collector = PriceCollector(exchange, s, symbol=settings.symbol)
+            collector = PriceCollector(exchange, s, symbol=engine_symbol)
             try:
                 for tf in ("1m", "5m", "15m", "1h", "4h"):
                     await collector.fetch_and_persist(timeframe=tf)
@@ -281,23 +348,38 @@ async def run() -> None:
                 logger.warning("engine.ohlcv_fetch_failed_using_cached_data", error=str(e))
             await collector.compute_and_persist_indicators()
 
-            fees = FeeManager(exchange, s, symbol=settings.symbol)
+            fees = FeeManager(exchange, s, symbol=engine_symbol)
             await fees.get_or_refresh()
 
             balance_fetch_ok = True
             try:
-                balance = await exchange.fetch_balance()
-                usdt = float(balance.get("free", {}).get("USDT", 0.0))
-                btc  = float(balance.get("free", {}).get("BTC",  0.0))
-                usdt_locked = float(balance.get("used", {}).get("USDT", 0.0))
-                btc_locked  = float(balance.get("used", {}).get("BTC",  0.0))
+                if trading_product == "futures":
+                    bv = await engine_adapter.fetch_balance()
+                    usdt = bv.available
+                    btc = 0.0
+                    usdt_locked = max(0.0, bv.total - bv.available)
+                    btc_locked = 0.0
+                    margin_balance = bv.total
+                    available_margin = bv.available
+                else:
+                    balance = await exchange.fetch_balance()
+                    usdt = float(balance.get("free", {}).get("USDT", 0.0))
+                    btc = float(balance.get("free", {}).get("BTC", 0.0))
+                    usdt_locked = float(balance.get("used", {}).get("USDT", 0.0))
+                    btc_locked = float(balance.get("used", {}).get("BTC", 0.0))
+                    margin_balance = None
+                    available_margin = usdt
                 cb.record_exchange_success()
                 from shared.db.models import BalanceSnapshot
-                s.add(BalanceSnapshot(
+                snap = BalanceSnapshot(
                     usdt=usdt, btc=btc,
                     usdt_locked=usdt_locked, btc_locked=btc_locked,
                     source="binance",
-                ))
+                )
+                if trading_product == "futures":
+                    snap.margin_balance = margin_balance
+                    snap.available_margin = available_margin
+                s.add(snap)
                 await s.commit()
             except Exception as e:
                 logger.warning("engine.balance_unavailable_using_db_fallback", error=str(e))
@@ -348,10 +430,37 @@ async def run() -> None:
             else:
                 daily_pnl_frac, total_drawdown_frac = 0.0, 0.0
 
-            decisor = Decisor(session=s, llm=llm, symbol=settings.symbol,
+            pm = PositionManager(s)
+            open_count = await pm.count_open()
+            open_positions = await pm.list_open()
+            has_open_position = len(open_positions) > 0
+            open_position_side = (
+                getattr(open_positions[0], "position_side", None) if open_positions else None
+            )
+            leverage = float(await store.get_typed(ConfigKey.MAX_LEVERAGE))
+            liquidation_price = None
+            funding_rate = 0.0
+            funding_rate_max = float(await store.get_typed(ConfigKey.FUNDING_RATE_MAX_PCT))
+            liq_buffer_atr = float(await store.get_typed(ConfigKey.LIQUIDATION_BUFFER_ATR))
+            min_notional = float(calibration.get("min_notional_usdt", 5.0))
+            if trading_product == "futures":
+                try:
+                    min_notional = engine_adapter.min_notional(engine_symbol)
+                    funding_rate = await engine_adapter.fetch_funding_rate(engine_symbol)
+                    if open_positions:
+                        for pv in await engine_adapter.fetch_positions():
+                            if pv.direction and pv.liquidation_price:
+                                liquidation_price = pv.liquidation_price
+                                break
+                except Exception as e:
+                    logger.warning("engine.futures_risk_context_failed", error=str(e))
+
+            decisor = Decisor(session=s, llm=llm, symbol=engine_symbol,
                               provider=decisor_provider, fallbacks=fallbacks,
                               coherence_strict_mode=coherence_strict,
-                              two_pass_enabled=two_pass)
+                              two_pass_enabled=two_pass,
+                              llm_temperature=decisor_temperature,
+                              self_consistency_n=decisor_self_consistency_n)
             ob_snap = orderbook.snapshot(levels=10)
             try:
                 decision = await decisor.decide(
@@ -362,6 +471,11 @@ async def run() -> None:
                     atr_timeframe=atr_timeframe, min_rr_ratio=min_rr_ratio,
                     sl_atr_multiplier=sl_atr_multiplier, calibration=calibration,
                     current_drawdown_pct=total_drawdown_frac * 100,
+                    trading_product=trading_product,
+                    funding_rate=funding_rate if trading_product == "futures" else 0.0,
+                    available_margin=usdt,
+                    open_position_side=open_position_side,
+                    liquidation_price=liquidation_price,
                 )
                 cb.record_llm_success()
             except Exception as e:
@@ -377,9 +491,6 @@ async def run() -> None:
                         session_factory, f"llm_failures: {cb._llm_consecutive_failures} consecutivas"
                     )
                 return
-
-            pm = PositionManager(s)
-            open_count = await pm.count_open()
 
             from sqlalchemy import select as sa_select, desc
             from shared.db.models import Decision as DecisionModel, Indicators, Ohlcv
@@ -405,13 +516,22 @@ async def run() -> None:
                 max_slippage_pct=max_slippage_pct, taker_fee_pct=fees.taker,
                 min_rr_ratio=min_rr_ratio, sl_atr_multiplier=sl_atr_multiplier,
                 sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
-                min_notional_usdt=float(calibration.get("min_notional_usdt", 5.0)),
+                min_notional_usdt=min_notional,
+                max_leverage=leverage,
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_ref=atr,
                 open_positions_count=open_count, daily_pnl_pct=daily_pnl_frac,
                 total_drawdown_pct=total_drawdown_frac, kill_switch=kill,
                 usdt_balance=usdt, btc_held=btc,
+                available_margin=usdt,
+                has_open_position=has_open_position,
+                open_position_side=open_position_side,
+                leverage=leverage,
+                liquidation_price=liquidation_price,
+                funding_rate=funding_rate,
+                funding_rate_max_pct=funding_rate_max,
+                liquidation_buffer_atr=liq_buffer_atr,
                 roundtrip_fee_pct=effective_roundtrip_fee_pct(
                     taker_fee=fees.taker,
                     floor_pct=float(calibration.get("min_roundtrip_fee_pct", 0.20)),
@@ -436,20 +556,51 @@ async def run() -> None:
             if latest_d is None:
                 return
 
-            executor = Executor(exchange, s, symbol=settings.symbol)
-            from shared.schemas import DecisorAction
+            use_adapter = trading_product == "futures"
+            executor = Executor(
+                exchange, s, symbol=engine_symbol,
+                adapter=engine_adapter if use_adapter else None,
+            )
+            from shared.schemas import DecisorAction, Direction
             try:
                 if decision.action == DecisorAction.BUY:
-                    await executor.execute_buy(
-                        decision=decision, decision_id=latest_d.id, usdt_balance=usdt,
+                    if use_adapter:
+                        await executor.execute_open(
+                            direction=Direction.LONG,
+                            decision=decision,
+                            decision_id=latest_d.id,
+                            available_margin=usdt,
+                            price=current_price,
+                        )
+                    else:
+                        await executor.execute_buy(
+                            decision=decision, decision_id=latest_d.id, usdt_balance=usdt,
+                        )
+                elif decision.action == DecisorAction.SHORT:
+                    await executor.execute_open(
+                        direction=Direction.SHORT,
+                        decision=decision,
+                        decision_id=latest_d.id,
+                        available_margin=usdt,
+                        price=current_price,
                     )
                 elif decision.action == DecisorAction.SELL:
-                    open_positions = await pm.list_open()
                     if open_positions:
-                        await executor.execute_sell(
-                            trade_id=open_positions[0].trade_id,
-                            decision_id=latest_d.id, close_reason="decisor_sell",
-                        )
+                        tid = open_positions[0].trade_id
+                        if use_adapter or (
+                            getattr(open_positions[0], "position_side", "LONG") == "SHORT"
+                        ):
+                            await executor.execute_close(
+                                trade_id=tid,
+                                decision_id=latest_d.id,
+                                close_reason="decisor_sell",
+                            )
+                        else:
+                            await executor.execute_sell(
+                                trade_id=tid,
+                                decision_id=latest_d.id,
+                                close_reason="decisor_sell",
+                            )
             except Exception as e:
                 logger.error("execution.error", error=str(e))
                 # Persistir el error de ejecución en la decisión para que sea visible en el dashboard.
@@ -497,7 +648,7 @@ async def run() -> None:
                 "coherence_strict_mode": await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE),
                 "two_pass_enabled": await store.get_typed(ConfigKey.TWO_PASS_ENABLED),
             }
-            sup = Supervisor(session=s, llm=llm, symbol=settings.symbol,
+            sup = Supervisor(session=s, llm=llm, symbol=engine_symbol,
                              provider=sup_provider, fallbacks=sup_fallbacks)
             try:
                 await sup.run(current_config=current_config)
@@ -528,20 +679,23 @@ async def run() -> None:
 
     async def fees_tick() -> None:
         async with session_factory() as s:
-            await FeeManager(exchange, s, symbol=settings.symbol).refresh()
+            await FeeManager(exchange, s, symbol=engine_symbol).refresh()
 
     async def positions_tick() -> None:
         async with session_factory() as s:
             try:
-                ticker = await exchange.fetch_ticker(settings.symbol)
+                ticker = await exchange.fetch_ticker(engine_symbol)
                 await PositionManager(s).refresh_unrealized(current_price=float(ticker["last"]))
             except Exception as e:
                 logger.warning("positions.refresh_failed", error=str(e))
 
     async def order_tracker_tick() -> None:
         async with session_factory() as s:
-            executor = Executor(exchange, s, symbol=settings.symbol)
-            tracker = OrderTracker(exchange, s, executor, symbol=settings.symbol)
+            executor = Executor(
+                exchange, s, symbol=engine_symbol,
+                adapter=engine_adapter if trading_product == "futures" else None,
+            )
+            tracker = OrderTracker(exchange, s, executor, symbol=engine_symbol)
             try:
                 await tracker.poll_once()
             except Exception as e:

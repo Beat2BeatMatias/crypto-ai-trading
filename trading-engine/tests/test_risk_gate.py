@@ -379,7 +379,7 @@ def test_r11_buy_rejected_when_notional_below_minimum():
     # THEN se rechaza por R11 (4.0 USDT < 5.0 USDT)
     assert verdict.passed is False
     assert verdict.rule_id == "R11"
-    assert "NOTIONAL" in verdict.reason
+    assert "notional" in verdict.reason.lower()
 
 
 def test_r11_buy_passes_when_notional_above_sl_minimum():
@@ -585,5 +585,75 @@ def test_r10_passes_when_tp_move_covers_fees_plus_slippage():
         open_positions_count=0, daily_pnl_pct=0.0, total_drawdown_pct=0.0,
         kill_switch=False, usdt_balance=1000.0, btc_held=0.0,
         roundtrip_fee_pct=0.20, min_fees_to_tp_ratio=1.0,
+    )
+    assert verdict.passed
+
+
+def _short_decision(
+    stop_loss: float = 69000.0,
+    take_profit: float = 64000.0,
+    position_size_pct: float = 0.10,
+) -> DecisorOutput:
+    return DecisorOutput(
+        regime=MarketRegime.TRENDING_DOWN,
+        confluences=["RSI overbought"],
+        action=DecisorAction.SHORT,
+        confidence=0.7,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        position_size_pct=position_size_pct,
+        reasoning="Test SHORT decision.",
+    )
+
+
+def test_short_valid_geometry_passes():
+    gate = _make_gate()
+    price = 67000.0
+    decision = _short_decision(stop_loss=price + 500.0, take_profit=price - 1500.0)
+    verdict = gate.validate(
+        decision=decision,
+        current_price=price,
+        atr_ref=500.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=-0.05,
+        kill_switch=False,
+        available_margin=2000.0,
+    )
+    assert verdict.passed
+
+
+def test_short_sl_below_price_rejected():
+    gate = _make_gate()
+    price = 67000.0
+    decision = _short_decision(stop_loss=66000.0, take_profit=64000.0)
+    verdict = gate.validate(
+        decision=decision,
+        current_price=price,
+        atr_ref=500.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=-0.05,
+        kill_switch=False,
+        available_margin=2000.0,
+    )
+    assert not verdict.passed
+    assert verdict.rule_id == "R2"
+
+
+def test_sell_closes_short_without_btc_held():
+    gate = _make_gate()
+    verdict = gate.validate(
+        decision=_sell_decision(),
+        current_price=67000.0,
+        atr_ref=500.0,
+        open_positions_count=1,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=-0.05,
+        kill_switch=False,
+        usdt_balance=500.0,
+        btc_held=0.0,
+        has_open_position=True,
+        open_position_side="SHORT",
     )
     assert verdict.passed

@@ -1,7 +1,9 @@
 # Modelo de Datos — Crypto AI Trading
 
 > Audiencia: Devs / DBAs.
-> Versión: 1.4 — 2026-05-25.
+> Versión: 1.5 — 2026-06-02.
+>
+> Cambios v1.5: Migración **016** — campos direccionales en `trades` y `positions` (`position_side`, `leverage`, `liquidation_price`, `margin_mode`, `funding_paid_usdt`); `balance_snapshots.margin_balance` / `available_margin`.
 >
 > Cambios v1.4: Clave `outcome_attribution_window_hours` (migration 015). Tabla claves outcome attribution.
 >
@@ -133,7 +135,7 @@ Atribución contrafactual 1:1 con `decisions.id`. Poblada por `outcome_attributi
 | `time_to_mae_min` | INT | YES | Minutos hasta MAE |
 | `sl_dist_pct` | NUMERIC(10,5) | YES | Distancia SL declarada (%) |
 | `tp_target_pct` | NUMERIC(10,5) | YES | Distancia TP declarada (%) |
-| `classification` | VARCHAR(32) | NO | `GOOD_BUY`, `BAD_BUY`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN` |
+| `classification` | VARCHAR(32) | NO | Incluye `GOOD_SHORT`, `BAD_SHORT` además de `GOOD_BUY`, `BAD_BUY`, `GOOD_SELL`, `BAD_SELL`, `GOOD_HOLD`, `MISSED_OPPORTUNITY`, `BLOCKED_GOOD_TRADE`, `CORRECTLY_BLOCKED`, `PENDING`, `UNKNOWN` |
 | `computed_at` | TIMESTAMPTZ | NO | `now()` |
 | `postmortem_status` | VARCHAR(16) | YES | `completed` \| `failed` \| `null` (migration 011) |
 | `lesson_raw` | JSONB | YES | Payload validado del PostMortemAgent |
@@ -190,12 +192,17 @@ Operación concreta (BUY → SELL).
 | `decision_id` | UUID | YES | FK (deferred) `decisions.id` |
 | `ts_open` | TIMESTAMPTZ | NO | |
 | `ts_close` | TIMESTAMPTZ | YES | |
-| `side` | VARCHAR(4) | NO | `BUY` (sólo se abre como BUY; SELL cierra) |
+| `side` | VARCHAR(4) | NO | Lado de la **orden** Binance al abrir (`BUY` long, `SELL` short en futures) |
+| `position_side` | VARCHAR(5) | NO | `LONG` \| `SHORT` — dirección económica (default `LONG`, migration 016) |
+| `leverage` | NUMERIC(5,2) | YES | default `1` |
+| `liquidation_price` | NUMERIC(18,8) | YES | Futures; null en Spot |
+| `margin_mode` | VARCHAR(10) | YES | default `isolated` |
+| `funding_paid_usdt` | NUMERIC(18,4) | YES | Acumulado funding al cerrar (futures) |
 | `quantity_btc` | NUMERIC(18,8) | NO | |
 | `entry_price` | NUMERIC(18,8) | NO | |
 | `exit_price` | NUMERIC(18,8) | YES | |
 | `pnl_usdt` | NUMERIC(18,4) | YES | Neto de fees |
-| `pnl_pct` | NUMERIC(8,4) | YES | `(exit - entry) / entry * 100` |
+| `pnl_pct` | NUMERIC(8,4) | YES | % según dirección (long/short) |
 | `status` | VARCHAR(12) | NO | `open` \| `closed` \| `cancelled` |
 | `stop_loss` | NUMERIC(18,8) | YES | |
 | `take_profit` | NUMERIC(18,8) | YES | |
@@ -217,7 +224,10 @@ Vista en tiempo real de las posiciones abiertas (1 fila por trade abierto).
 |---------|------|----------|-------|
 | `id` | UUID | NO | PK |
 | `trade_id` | UUID | YES | FK `trades.id` |
-| `symbol` | VARCHAR(20) | NO | default `BTC/USDT` |
+| `symbol` | VARCHAR(20) | NO | `BTC/USDT` o `BTC/USDT:USDT` |
+| `position_side` | VARCHAR(5) | YES | default `LONG` (016) |
+| `leverage` | NUMERIC(5,2) | YES | default `1` |
+| `liquidation_price` | NUMERIC(18,8) | YES | |
 | `quantity_btc` | NUMERIC(18,8) | NO | |
 | `entry_price` | NUMERIC(18,8) | NO | |
 | `current_price` | NUMERIC(18,8) | YES | Actualizado cada 30 s |
@@ -227,7 +237,7 @@ Vista en tiempo real de las posiciones abiertas (1 fila por trade abierto).
 | `opened_at` | TIMESTAMPTZ | NO | |
 | `updated_at` | TIMESTAMPTZ | YES | |
 
-> Implementación actual: `Executor.execute_buy` inserta una `Position` con `status=open`, y `execute_sell` la marca como `closed`. Histórico de positions cerradas permanece para auditoría.
+> Implementación actual: `Executor.execute_open` inserta `Position` con `status=open`; `execute_close` la marca `closed`. PnL no realizado es direccional (`position_manager.refresh_unrealized`).
 
 ### 2.6 `playbook_versions`
 
@@ -334,6 +344,8 @@ Snapshot agregado por fecha (UTC).
 | `btc` | NUMERIC(18,8) |
 | `usdt_locked` | NUMERIC(18,4) | default 0 (migration 010) |
 | `btc_locked` | NUMERIC(18,8) | default 0 (migration 010) |
+| `margin_balance` | NUMERIC(18,4) | NULL en Spot; total margen en futures (016) |
+| `available_margin` | NUMERIC(18,4) | NULL en Spot; margen disponible para sizing (016) |
 | `source` | VARCHAR(20) (default `binance`) |
 
 - Índice `idx_balance_snapshots_ts (ts)`.
@@ -360,6 +372,17 @@ Carpeta: `trading-engine/alembic/versions/`.
 | 012 | `012_add_confluence_registry.py` | Tablas `confluence_candidates`, `confluence_registry`. |
 | 013 | `013_add_postmortem_fallback_providers.py` | Seed idempotente `postmortem_fallback_providers` en `config`. |
 | 015 | `015_add_outcome_attribution_window_hours.py` | Seed idempotente `outcome_attribution_window_hours` en `config`. |
+| 016 | `016_add_futures_fields.py` | `trades`/`positions` direccionales; `balance_snapshots` margen. |
+
+**Claves futures** (seed en `config_store`):
+
+| Key | Tipo | Default | Notas |
+|-----|------|---------|-------|
+| `trading_product` | string | `spot` | `spot` \| `futures` — operator-only |
+| `max_leverage` | int | `1` | operator-only |
+| `margin_mode` | string | `isolated` | operator-only |
+| `funding_rate_max_pct` | float | `0.05` | R15 |
+| `liquidation_buffer_atr` | float | `2.0` | R13 — operator-only |
 
 Comandos:
 

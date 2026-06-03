@@ -1,7 +1,11 @@
 # Contratos de API — Crypto AI Trading
 
 > Audiencia: Frontend / Integraciones.
-> Versión: 1.5 — 2026-05-25.
+> Versión: 1.7 — 2026-06-02.
+>
+> Cambios v1.7: `DecisorAction` incluye `SHORT`. `TradeOut` / `PositionOut` con `position_side`, `leverage`, `liquidation_price`. `GET /api/decisions?action=` filtra por acción. Reglas de SL/TP obligatorias en BUY **y** SHORT.
+>
+> Cambios v1.6: §1.3 `DecisorOutput` — `confidence_base` calculado en servidor; campo `confidence_meta`; reglas de conteo A–H + I–Z activas (peso 1.0); early-exit `critical_null_indicator` → confidence 0.95.
 >
 > Cambios v1.5: Nota en §2.7 — `outcome_attribution_window_hours` en sección Outcome Attribution de `/config` (ventana compartida attribution + post-mortem).
 >
@@ -18,8 +22,13 @@ CORS configurable via `ALLOWED_ORIGINS` (default `http://localhost:3100`).
 ### 1.1 `DecisorAction` (enum)
 
 ```
-"BUY" | "SELL" | "HOLD"
+"BUY" | "SHORT" | "SELL" | "HOLD"
 ```
+
+- `BUY`: abrir long.
+- `SHORT`: abrir short (solo con `trading_product=futures` en el engine).
+- `SELL`: cerrar posición abierta (long o short).
+- `HOLD`: no operar.
 
 ### 1.2 `MarketRegime` (enum)
 
@@ -32,25 +41,58 @@ CORS configurable via `ALLOWED_ORIGINS` (default `http://localhost:3100`).
 ```jsonc
 {
   "regime": "TRENDING_UP",                  // MarketRegime
-  "confluences": ["B","C","G"],              // 0..10 códigos A–H + letras I–Z activas en registry
+  "confluences": ["B","C","I"],               // post-filtro: A–H + I–Z activas en registry (máx. 10)
   "action": "BUY",                            // DecisorAction
-  "confidence_base": 0.85,                    // 0.0..1.0
-  "confidence_adjustment": 0.05,              // -0.10..+0.10
-  "confidence": 0.90,                         // = clip(base+adj, 0, 1) — recomputado server-side
-  "stop_loss": 94820.00,                      // null si action != BUY (requerido si BUY)
-  "take_profit": 96400.00,                    // null si action != BUY (requerido si BUY)
+  "confidence_base": 0.85,                    // 0.0..1.0 — calculado por el servidor (ver confidence_meta)
+  "confidence_adjustment": 0.05,              // -0.10..+0.10 — declarado por el LLM
+  "confidence": 0.90,                         // = clip(base+adj, 0, 1) — Pydantic tras persistir base
+  "stop_loss": 94820.00,                      // obligatorio si action ∈ {BUY, SHORT}
+  "take_profit": 96400.00,                    // obligatorio si action ∈ {BUY, SHORT}
   "position_size_pct": 0.10,                  // 0.0..0.25
   "expected_holding_min": 90,                 // entero ≥ 1
   "reasoning": "…",                           // ≤ 1000 caracteres, español, formato 5 secciones
   "coherence_warnings": [],                   // lista de {rule_id, message, severity, evidence}
-  "two_pass_triggered": false
+  "two_pass_triggered": false,
+  "confidence_meta": {                        // opcional; ciclos desde v1.9
+    "confluence_count": 3,
+    "confluences_counted": ["B","C","I"],
+    "confluences_dropped": [],                // códigos citados por el LLM pero filtrados (I–Z inactivas, inválidos)
+    "extended_confluence_weight": 1.0,        // peso I–Z en el conteo (fijo 1.0 = mismo que A–H)
+    "quality_factor": 1.0,
+    "regime_factor": 1.0,
+    "conf_base_table_value": 0.85,
+    "confidence_base_computed": 0.85,
+    "confidence_adjustment": 0.05,
+    "confidence": 0.90
+  },
+  "position_size_meta": {                     // opcional; BUY con risk_per_trade_pct > 0 (v1.10)
+    "position_size_pct_llm": 0.06,
+    "position_size_pct_computed": 0.10,
+    "risk_per_trade_pct": 0.005,
+    "sl_distance_pct": 0.05,
+    "target_risk_usdt": 50.0,
+    "risk_at_sl_usdt": 40.0,
+    "capped_by_max_position": false
+  },
+  "self_consistency": {                       // opcional; solo si decisor_self_consistency_n > 1
+    "n": 3,
+    "votes": { "BUY": 2, "HOLD": 1 },
+    "agreement": 0.667,
+    "selected_action": "BUY",
+    "consensus_uncertain": false
+  }
 }
 ```
 
 Reglas:
-- Si `action == "BUY"` → `stop_loss` y `take_profit` son **obligatorios**.
-- `confidence` se **recomputa** server-side desde `confidence_base + confidence_adjustment` (no se confía en el LLM).
-- `position_size_pct` con `null` se coerciona a `0.0`. `expected_holding_min` con `null` → `1`.
+- Si `action ∈ {"BUY", "SHORT"}` → `stop_loss` y `take_profit` son **obligatorios** (validación Pydantic; geometría vs precio en Risk Gate R2/R3).
+- Tras `_filter_confluence_codes`, el servidor recalcula `confidence_base` con `shared/confidence.py` (conteo A–H + I–Z activas, peso **1.0**, tabla `conf_base_*`, `quality_factor`, `regime_factor`). El LLM **no** calcula la base en el prompt (v1.10); solo `confidence_adjustment`.
+- `confidence` se **recomputa** en Pydantic desde `confidence_base + confidence_adjustment` (`confidence_base` y `confidence` del JSON del LLM se ignoran).
+- `confidence_meta` se persiste en ciclos normales del Decisor (no en `_hold_decision` por parse/llm/coherence_strict).
+- Early-exit `critical_null_indicator`: `confidence_base=0.95`, `confidence_adjustment=0`, `rejected_reason=critical_null_indicator` (sin LLM).
+- `position_size_pct` con `null` se coerciona a `0.0`. En BUY el valor persistido es el **recalculado por servidor** (riesgo fijo), no necesariamente el del JSON del LLM.
+- `position_size_meta` y `self_consistency` se persisten cuando aplican (ciclos normales del Decisor).
+- `expected_holding_min` con `null` → `1`.
 
 ### 1.4 `DecisionOutcomeOut` (tabla `decision_outcomes`)
 
@@ -191,7 +233,11 @@ Parámetros query:
   "order_id_open": "12345",
   "order_id_close": "67890",
   "order_id_sl": "11111",
-  "order_id_tp": "22222"
+  "order_id_tp": "22222",
+  "position_side": "LONG",
+  "leverage": 1.0,
+  "liquidation_price": null,
+  "margin_mode": "isolated"
 }
 ```
 
@@ -209,11 +255,12 @@ Errores:
 
 ### 2.3 Decisions
 
-#### `GET /api/decisions?agent=&executed=&limit=`
+#### `GET /api/decisions?agent=&executed=&action=&limit=`
 
 Parámetros query:
 - `agent` opcional: `decisor` | `supervisor`.
 - `executed` opcional: `true` | `false`.
+- `action` opcional: `BUY` | `SHORT` | `SELL` | `HOLD` — filtra `decisions.output->>'action'`.
 - `limit`: 1..500 (default 100).
 
 200 OK: `DecisionOut[]`, `ts DESC`.
@@ -243,6 +290,12 @@ Parámetros query:
 Parámetro `window`: horas 1–168 (default 24).
 
 200 OK: breakdown de rechazos Risk Gate por `rule_id`, warnings CoherenceChecker, histogramas de `confidence` y `position_size_pct`, tasa `two_pass_triggered`.
+
+#### `GET /api/decisions/calibration?window=`
+
+Parámetro `window`: horas 24–336 (default 168).
+
+200 OK: buckets de `confidence` vs tasa de éxito (outcomes maduros), `brier_score`, `expected_calibration_error`, `discriminates`, `recommendation`.
 
 #### `GET /api/decisions/outcomes?classification=&limit=&since_hours=&include_lessons=`
 
@@ -310,7 +363,10 @@ Body opcional: `{ "reason": "string" }` (max 500 chars).
   "unrealized_pct": 0.41,
   "status": "open",
   "opened_at": "2026-05-14T12:00:00Z",
-  "updated_at": "2026-05-14T12:05:30Z"
+  "updated_at": "2026-05-14T12:05:30Z",
+  "position_side": "LONG",
+  "leverage": 1.0,
+  "liquidation_price": null
 }
 ```
 
@@ -336,6 +392,7 @@ Body opcional: `{ "reason": "string" }` (max 500 chars).
 
 - `usdt` / `btc_exchange` toman el último `balance_snapshots`.
 - `btc_in_positions` = Σ `quantity_btc` de `positions WHERE status='open'`.
+- **v1.7:** con futures, el engine también persiste `margin_balance` y `available_margin` en `balance_snapshots`; `GET /api/balance` aún no los expone en el JSON (ver D-035 en `07-discrepancies-and-gaps.md`).
 - `realized_pnl_today` actualmente fijo `0.0` (TODO: cómputo real, ver `stats/daily`).
 
 ---

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Decision } from "../types";
+import ConfidenceBreakdown from "../components/ConfidenceBreakdown";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { asDecisorOutput, fmtConfidencePct } from "../types/decisorOutput";
 import { cutoffFromDateInput } from "../lib/liveSince";
 import { useLiveSinceFilter } from "../hooks/useLiveSinceFilter";
 
@@ -46,7 +48,7 @@ function explainRejection(reason: string): string {
 export function Decisions() {
   const [allItems, setAllItems] = useState<Decision[]>([]);
   const [agent, setAgent] = useState("");
-  const [actionFilter, setActionFilter] = useState<"" | "BUY" | "SELL" | "HOLD">("");
+  const [actionFilter, setActionFilter] = useState<"" | "BUY" | "SHORT" | "SELL" | "HOLD">("");
   const [confMin, setConfMin] = useState(0);
   const [confMax, setConfMax] = useState(100);
   const {
@@ -91,14 +93,7 @@ export function Decisions() {
     return list;
   }, [allItems, actionFilter, confMin, confMax, dateFrom, dateTo, liveSinceIso]);
 
-  type LLMErrorAttempt = { provider: string; rate_limited: boolean; too_large: boolean };
-
-  const out = (d: Decision) => d.output as {
-    action?: string; confidence?: number; reasoning?: string;
-    stop_loss?: number; take_profit?: number; position_size_pct?: number; confluences?: string[];
-    mode?: string;
-    llm_error_tried?: LLMErrorAttempt[];
-  };
+  const out = (d: Decision) => asDecisorOutput(d.output);
 
   const isBuyRejected = (d: Decision) =>
     out(d).action === "BUY" && !d.executed;
@@ -142,7 +137,7 @@ export function Decisions() {
             </select>
 
             {/* Acción */}
-            {(["", "BUY", "SELL", "HOLD"] as const).map(a => (
+            {(["", "BUY", "SHORT", "SELL", "HOLD"] as const).map(a => (
               <button key={a} onClick={() => setActionFilter(a)}
                 className={`text-xs px-2.5 py-1 rounded transition-colors ${
                   actionFilter === a
@@ -212,12 +207,34 @@ export function Decisions() {
                     ? out(d).mode === "diagnostic"
                       ? <span className="text-xs bg-amber-900/50 text-amber-300 px-2 py-0.5 rounded font-normal">Diagnóstico</span>
                       : <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded font-normal">Normal</span>
-                    : <span className={out(d).action === "BUY" ? "text-emerald-400" : out(d).action === "SELL" ? "text-red-400" : "text-zinc-400"}>
+                    : <span className={
+                        out(d).action === "BUY" ? "text-emerald-400"
+                        : out(d).action === "SHORT" ? "text-amber-400"
+                        : out(d).action === "SELL" ? "text-red-400"
+                        : "text-zinc-400"
+                      }>
                         {out(d).action ?? "—"}
                       </span>
                   }
                 </td>
-                <td className="text-right pr-3">{((out(d).confidence ?? 0) * 100).toFixed(0)}%</td>
+                <td className="text-right pr-3">
+                  {d.agent === "decisor" ? (
+                    <div className="leading-tight">
+                      <div>{fmtConfidencePct(out(d).confidence)}</div>
+                      {typeof out(d).confidence_base === "number" && (
+                        <div className="text-[10px] text-zinc-500 font-mono">
+                          b {fmtConfidencePct(out(d).confidence_base)}
+                          {(out(d).confidence_adjustment ?? 0) !== 0 && (
+                            <> a {(out(d).confidence_adjustment! > 0 ? "+" : "")}
+                            {fmtConfidencePct(out(d).confidence_adjustment)}</>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-zinc-500">—</span>
+                  )}
+                </td>
                 <td className="py-1">
                   {d.executed
                     ? <span className="text-emerald-400">✅ ejecutado</span>
@@ -269,6 +286,17 @@ export function Decisions() {
               <p>ID: <span className="text-zinc-400">{selected.id}</span></p>
               <p>{new Date(selected.ts).toLocaleString("es-AR", { hour12: false })}</p>
             </div>
+
+            {selected.agent === "decisor" && (
+              <div className="mb-4">
+                <ConfidenceBreakdown
+                  confidence={out(selected).confidence}
+                  confidenceBase={out(selected).confidence_base}
+                  confidenceAdjustment={out(selected).confidence_adjustment}
+                  meta={out(selected).confidence_meta}
+                />
+              </div>
+            )}
 
             {/* Razonamiento del LLM */}
             {out(selected).reasoning && (

@@ -78,3 +78,25 @@ async def test_kill_switch_default_is_false(session: AsyncSession):
     store = ConfigStore(session)
     await store.seed_defaults()
     assert await store.get_typed(ConfigKey.KILL_SWITCH) is False
+
+
+async def test_futures_config_defaults(session: AsyncSession):
+    store = ConfigStore(session)
+    await store.seed_defaults()
+    assert DEFAULTS[ConfigKey.TRADING_PRODUCT].value == "spot"
+    assert await store.get(ConfigKey.TRADING_PRODUCT) == "spot"
+    assert await store.get_typed(ConfigKey.MAX_LEVERAGE) == 1
+    assert await store.get(ConfigKey.MARGIN_MODE) == "isolated"
+    assert ConfigKey.FUNDING_RATE_MAX_PCT in DEFAULTS
+    assert ConfigKey.LIQUIDATION_BUFFER_ATR in DEFAULTS
+
+
+async def test_futures_config_defaults(session: AsyncSession):
+    store = ConfigStore(session)
+    await store.seed_defaults()
+    assert DEFAULTS[ConfigKey.TRADING_PRODUCT].value == "spot"
+    assert await store.get(ConfigKey.TRADING_PRODUCT) == "spot"
+    assert await store.get_typed(ConfigKey.MAX_LEVERAGE) == 1
+    assert await store.get(ConfigKey.MARGIN_MODE) == "isolated"
+    assert ConfigKey.FUNDING_RATE_MAX_PCT in DEFAULTS
+    assert ConfigKey.LIQUIDATION_BUFFER_ATR in DEFAULTS

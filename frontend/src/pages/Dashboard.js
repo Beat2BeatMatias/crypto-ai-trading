@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
+import ConfidenceBreakdown from "../components/ConfidenceBreakdown";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { asDecisorOutput } from "../types/decisorOutput";
 import { PnlRow } from "../components/PnlRow";
 import { computePnlPct, computePnlUsdt } from "../lib/pnl";
 function Card({ title, children }) {
@@ -92,7 +94,7 @@ export function Dashboard() {
         await api.killSwitch(true);
         setKillSwitchOn(true);
     };
-    const out = lastDecision?.output;
+    const out = lastDecision ? asDecisorOutput(lastDecision.output) : undefined;
     const actionColor = out?.action === "BUY" ? "text-emerald-400" : out?.action === "SELL" ? "text-red-400" : "text-zinc-400";
     const pnlTotal = (stats?.pnl_realized ?? 0) + (stats?.pnl_unrealized ?? 0);
     const pnlColor = pnlTotal > 0 ? "text-emerald-400" : pnlTotal < 0 ? "text-red-400" : "text-zinc-400";
@@ -115,7 +117,7 @@ export function Dashboard() {
                                                     : "Precio actual —", p.stop_loss != null && ` · SL $${p.stop_loss.toFixed(2)}`, p.take_profit != null && ` · TP $${p.take_profit.toFixed(2)}`] }), _jsxs("div", { className: "space-y-1.5 pt-2 border-t border-zinc-700", children: [_jsx(PnlRow, { label: "P&L al precio actual", pnlUsdt: currentPnlUsdt, pnlPct: currentPnlPct }), _jsx(PnlRow, { label: "P&L si cierra en SL", pnlUsdt: p.sl_pnl_usdt, pnlPct: p.sl_pnl_pct, labelClass: "text-red-400/70" }), _jsx(PnlRow, { label: "P&L si cierra en TP", pnlUsdt: p.tp_pnl_usdt, pnlPct: p.tp_pnl_pct, labelClass: "text-emerald-400/70" })] })] }, p.id));
                             }) }), _jsx(Card, { title: "\u00DAltima decisi\u00F3n", children: !lastDecision
                             ? _jsx("p", { className: "text-zinc-500 text-sm", children: "Sin decisiones a\u00FAn." })
-                            : (_jsxs("div", { children: [_jsx("div", { className: `text-4xl font-bold mb-2 ${actionColor}`, children: out?.action ?? "—" }), _jsxs("div", { className: "text-sm text-zinc-400 mb-2", children: ["Confianza: ", _jsxs("span", { className: "text-white", children: [((out?.confidence ?? 0) * 100).toFixed(0), "%"] }), out?.regime && _jsx("span", { className: "ml-3 text-zinc-500", children: out.regime })] }), out?.reasoning && _jsx(ReasoningBlock, { reasoning: out.reasoning, compact: true }), _jsx("div", { className: "mt-3 text-xs text-zinc-600", children: new Date(lastDecision.ts).toLocaleString("es-AR") }), countdownSecs != null && (_jsxs("div", { className: "mt-2 flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2", children: [_jsx("span", { className: "text-xs text-zinc-500", children: "Pr\u00F3xima ejecuci\u00F3n" }), _jsx("span", { className: `ml-auto font-mono text-sm font-semibold ${countdownSecs === 0
+                            : (_jsxs("div", { children: [_jsx("div", { className: `text-4xl font-bold mb-2 ${actionColor}`, children: out?.action ?? "—" }), _jsxs("div", { className: "text-sm text-zinc-400 mb-2", children: [_jsx(ConfidenceBreakdown, { compact: true, confidence: out?.confidence, confidenceBase: out?.confidence_base, confidenceAdjustment: out?.confidence_adjustment, meta: out?.confidence_meta }), out?.regime && _jsx("span", { className: "ml-1 text-zinc-500", children: out.regime })] }), out?.reasoning && _jsx(ReasoningBlock, { reasoning: out.reasoning, compact: true }), _jsx("div", { className: "mt-3 text-xs text-zinc-600", children: new Date(lastDecision.ts).toLocaleString("es-AR") }), countdownSecs != null && (_jsxs("div", { className: "mt-2 flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2", children: [_jsx("span", { className: "text-xs text-zinc-500", children: "Pr\u00F3xima ejecuci\u00F3n" }), _jsx("span", { className: `ml-auto font-mono text-sm font-semibold ${countdownSecs === 0
                                                     ? "text-emerald-400 animate-pulse"
                                                     : countdownSecs <= 60
                                                         ? "text-amber-400"

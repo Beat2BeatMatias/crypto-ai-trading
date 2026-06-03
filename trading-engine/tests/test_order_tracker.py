@@ -60,6 +60,11 @@ Table(
     Column("order_id_tp", String(50)),
     Column("fees_usdt", Numeric(18, 4)),
     Column("close_requested", Boolean, default=False),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10), default="isolated"),
+    Column("funding_paid_usdt", Numeric(18, 4)),
 )
 
 Table(
@@ -75,6 +80,9 @@ Table(
     Column("status", String(10), default="open"),
     Column("opened_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True)),
+    Column("position_side", String(5), default="LONG"),
+    Column("leverage", Numeric(5, 2), default=1),
+    Column("liquidation_price", Numeric(18, 8)),
 )
 
 Table(

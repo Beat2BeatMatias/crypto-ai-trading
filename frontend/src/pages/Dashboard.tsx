@@ -3,7 +3,9 @@ import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
 import type { Position, Decision, DailyStats, Balance } from "../types";
+import ConfidenceBreakdown from "../components/ConfidenceBreakdown";
 import ReasoningBlock from "../components/ReasoningBlock";
+import { asDecisorOutput } from "../types/decisorOutput";
 import { PnlRow } from "../components/PnlRow";
 import { computePnlPct, computePnlUsdt } from "../lib/pnl";
 
@@ -125,7 +127,7 @@ export function Dashboard() {
     setKillSwitchOn(true);
   };
 
-  const out = lastDecision?.output as { action?: string; confidence?: number; reasoning?: string; regime?: string } | undefined;
+  const out = lastDecision ? asDecisorOutput(lastDecision.output) : undefined;
   const actionColor = out?.action === "BUY" ? "text-emerald-400" : out?.action === "SELL" ? "text-red-400" : "text-zinc-400";
 
   const pnlTotal = (stats?.pnl_realized ?? 0) + (stats?.pnl_unrealized ?? 0);
@@ -270,8 +272,14 @@ export function Dashboard() {
               <div>
                 <div className={`text-4xl font-bold mb-2 ${actionColor}`}>{out?.action ?? "—"}</div>
                 <div className="text-sm text-zinc-400 mb-2">
-                  Confianza: <span className="text-white">{((out?.confidence ?? 0) * 100).toFixed(0)}%</span>
-                  {out?.regime && <span className="ml-3 text-zinc-500">{out.regime}</span>}
+                  <ConfidenceBreakdown
+                    compact
+                    confidence={out?.confidence}
+                    confidenceBase={out?.confidence_base}
+                    confidenceAdjustment={out?.confidence_adjustment}
+                    meta={out?.confidence_meta}
+                  />
+                  {out?.regime && <span className="ml-1 text-zinc-500">{out.regime}</span>}
                 </div>
                 {out?.reasoning && <ReasoningBlock reasoning={out.reasoning} compact />}
                 <div className="mt-3 text-xs text-zinc-600">

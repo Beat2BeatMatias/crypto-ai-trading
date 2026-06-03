@@ -1,0 +1,17 @@
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { fmtConfidencePct } from "../types/decisorOutput";
+export default function ConfidenceBreakdown({ confidence, confidenceBase, confidenceAdjustment, meta, compact = false, }) {
+    const final = confidence ?? meta?.confidence;
+    const base = confidenceBase ?? meta?.confidence_base_computed;
+    const adj = confidenceAdjustment ?? meta?.confidence_adjustment ?? 0;
+    const hasBase = typeof base === "number";
+    const hasMeta = meta && (meta.confluence_count != null || meta.quality_factor != null);
+    if (final == null && !hasBase && !hasMeta) {
+        return _jsx("span", { className: "text-zinc-500", children: "\u2014" });
+    }
+    const adjLabel = adj > 0 ? `+${fmtConfidencePct(adj)}` : adj < 0 ? fmtConfidencePct(adj) : null;
+    if (compact) {
+        return (_jsxs("span", { className: "text-zinc-300", children: [fmtConfidencePct(final), hasBase && (_jsxs("span", { className: "text-zinc-500 text-xs ml-1", children: ["(base ", fmtConfidencePct(base), adjLabel ? ` ${adjLabel}` : "", ")"] }))] }));
+    }
+    return (_jsxs("div", { className: "rounded-lg bg-zinc-800 p-3 space-y-2", children: [_jsx("p", { className: "text-xs text-zinc-500 uppercase", children: "Confianza" }), _jsxs("div", { className: "flex items-baseline gap-2", children: [_jsx("span", { className: "text-2xl font-semibold text-white", children: fmtConfidencePct(final) }), hasBase && (_jsxs("span", { className: "text-xs text-zinc-400", children: ["= base ", fmtConfidencePct(base), adjLabel ? ` ${adjLabel}` : ""] }))] }), hasMeta && (_jsxs("dl", { className: "grid grid-cols-2 gap-x-3 gap-y-1 text-xs", children: [meta.confluence_count != null && (_jsxs(_Fragment, { children: [_jsx("dt", { className: "text-zinc-500", children: "Confluencias (conteo)" }), _jsx("dd", { className: "text-zinc-300 font-mono", children: meta.confluence_count })] })), meta.quality_factor != null && (_jsxs(_Fragment, { children: [_jsx("dt", { className: "text-zinc-500", children: "Factor calidad (F/G)" }), _jsxs("dd", { className: "text-zinc-300 font-mono", children: ["\u00D7", meta.quality_factor.toFixed(2)] })] })), meta.regime_factor != null && (_jsxs(_Fragment, { children: [_jsx("dt", { className: "text-zinc-500", children: "Factor r\u00E9gimen" }), _jsxs("dd", { className: "text-zinc-300 font-mono", children: ["\u00D7", meta.regime_factor.toFixed(2)] })] })), meta.conf_base_table_value != null && (_jsxs(_Fragment, { children: [_jsx("dt", { className: "text-zinc-500", children: "Tabla conf_base_N" }), _jsx("dd", { className: "text-zinc-300 font-mono", children: meta.conf_base_table_value.toFixed(2) })] }))] })), (meta?.confluences_counted?.length ?? 0) > 0 && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 mb-1", children: "Contadas en la base" }), _jsx("p", { className: "text-xs font-mono text-emerald-400/90", children: meta.confluences_counted.join(", ") })] })), (meta?.confluences_dropped?.length ?? 0) > 0 && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-zinc-500 mb-1", children: "Descartadas (inactivas / inv\u00E1lidas)" }), _jsx("p", { className: "text-xs font-mono text-amber-400/90", children: meta.confluences_dropped.join(", ") })] })), meta?.extended_confluence_weight != null && (_jsxs("p", { className: "text-[10px] text-zinc-600", children: ["Peso I\u2013Z en conteo: ", meta.extended_confluence_weight, "\u00D7 (servidor)"] }))] }));
+}

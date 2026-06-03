@@ -23,6 +23,12 @@ class EngineSettings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
     symbol: str = "BTC/USDT"
+    trading_product: str = Field("spot", alias="TRADING_PRODUCT")
+
+    def engine_symbol(self) -> str:
+        if self.trading_product == "futures":
+            return "BTC/USDT:USDT"
+        return self.symbol
 
 
 _settings: EngineSettings | None = None

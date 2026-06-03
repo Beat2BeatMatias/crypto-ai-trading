@@ -1,4 +1,5 @@
-export type DecisorAction = "BUY" | "SELL" | "HOLD";
+export type DecisorAction = "BUY" | "SHORT" | "SELL" | "HOLD";
+export type PositionSide = "LONG" | "SHORT";
 
 export type MarketRegime =
   | "TRENDING_UP" | "TRENDING_DOWN" | "RANGE" | "HIGH_VOLATILITY";
@@ -23,6 +24,10 @@ export interface Trade {
   sl_pnl_pct?: number | null;
   tp_pnl_usdt?: number | null;
   tp_pnl_pct?: number | null;
+  position_side?: PositionSide;
+  leverage?: number | null;
+  liquidation_price?: number | null;
+  margin_mode?: string | null;
 }
 
 export interface Position {
@@ -37,6 +42,9 @@ export interface Position {
   sl_pnl_pct?: number | null;
   tp_pnl_usdt?: number | null;
   tp_pnl_pct?: number | null;
+  position_side?: PositionSide;
+  leverage?: number | null;
+  liquidation_price?: number | null;
 }
 
 export interface Decision {
@@ -56,6 +64,8 @@ export type OutcomeClassification =
   | "BAD_BUY"
   | "GOOD_SELL"
   | "BAD_SELL"
+  | "GOOD_SHORT"
+  | "BAD_SHORT"
   | "PENDING"
   | "UNKNOWN";
 

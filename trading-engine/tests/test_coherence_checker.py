@@ -336,6 +336,28 @@ class TestC7RRRatioVerification:
         assert len(c7) == 1
         assert "1.5" in c7[0].message
 
+    def test_c7_short_critical_when_rr_below_minimum(self):
+        decision = DecisorOutput(
+            action=DecisorAction.SHORT,
+            regime=MarketRegime.TRENDING_DOWN,
+            confluences=["H"],
+            confidence_base=0.7,
+            confidence_adjustment=0.0,
+            confidence=0.7,
+            stop_loss=68500.0,
+            take_profit=66000.0,
+            position_size_pct=0.05,
+            expected_holding_min=30,
+            reasoning="[DECISION] short test",
+        )
+        ctx = _ctx(price=67000.0, min_rr_ratio=1.3)
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+
+        assert len(c7) == 1
+        assert c7[0].severity == "critical"
+
 
 # ---------------------------------------------------------------------------
 # C8 — verify_spec para confluencias extendidas I–Z

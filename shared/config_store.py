@@ -71,10 +71,16 @@ class ConfigKey(str, Enum):
     # Supervisor — fase de ratificación del playbook (01-functional-spec §F5.bis.5)
     MAX_PLAYBOOK_AGE_DAYS = "max_playbook_age_days"
     PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT = "playbook_force_regen_wr_delta_pct"
+    SUPERVISOR_CONFIG_WINDOW_HOURS = "supervisor_config_window_hours"
+    SUPERVISOR_CONFIG_AUTO_APPLY = "supervisor_config_auto_apply"
+    SUPERVISOR_CONFIG_MIN_EVALUATED = "supervisor_config_min_evaluated_decisions"
     # Decisor LLM-centric (02-technical-spec §2.6)
     MIN_POSITION_SIZE = "min_position_size"
     COHERENCE_STRICT_MODE = "coherence_strict_mode"
     TWO_PASS_ENABLED = "two_pass_enabled"
+    DECISOR_LLM_TEMPERATURE = "decisor_llm_temperature"
+    DECISOR_SELF_CONSISTENCY_N = "decisor_self_consistency_n"
+    RISK_PER_TRADE_PCT = "risk_per_trade_pct"
     # Outcome Attribution job
     OUTCOME_ATTRIBUTION_INTERVAL_MIN = "outcome_attribution_interval_min"
     OUTCOME_ATTRIBUTION_HORIZON_MIN = "outcome_attribution_horizon_min"
@@ -92,6 +98,11 @@ class ConfigKey(str, Enum):
     CONFLUENCE_REGISTRY_MAX_ACTIVE = "confluence_registry_max_active"
     LIVE_SINCE_TS = "live_since_ts"
     MIN_ROUNDTRIP_FEE_PCT = "min_roundtrip_fee_pct"
+    TRADING_PRODUCT = "trading_product"
+    MAX_LEVERAGE = "max_leverage"
+    MARGIN_MODE = "margin_mode"
+    FUNDING_RATE_MAX_PCT = "funding_rate_max_pct"
+    LIQUIDATION_BUFFER_ATR = "liquidation_buffer_atr"
 
 
 @dataclass(frozen=True)
@@ -250,6 +261,20 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "15", "float",
         "Diferencia absoluta de win rate (puntos %) vs. baseline del playbook activo que fuerza regeneración. Rango 1–50.",
     ),
+    ConfigKey.SUPERVISOR_CONFIG_WINDOW_HOURS: _Default(
+        "168", "int",
+        "Ventana (horas) de métricas para sugerencias y auto-apply de parámetros numéricos. "
+        "Playbook sigue usando 24h. Rango 24–336 (1–14 días).",
+    ),
+    ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY: _Default(
+        "false", "bool",
+        "Si true, el Supervisor aplica cambios numéricos dentro de _SAFE_BOUNDS. "
+        "false congela config durante validación paper (solo sugerencias en output).",
+    ),
+    ConfigKey.SUPERVISOR_CONFIG_MIN_EVALUATED: _Default(
+        "30", "int",
+        "Mínimo de decisiones con outcome evaluado en la ventana de config antes de auto-apply. Rango 10–200.",
+    ),
     ConfigKey.MIN_POSITION_SIZE: _Default(
         "0.005", "float",
         "Tamaño mínimo de posición en BTC para ejecutar un trade (piso de sizing). El LLM no puede proponer menos.",
@@ -261,6 +286,19 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.TWO_PASS_ENABLED: _Default(
         "true", "bool",
         "Si true, cuando el CoherenceChecker detecta warnings en C1/C2/C3 se hace una segunda llamada al LLM para auto-revisión.",
+    ),
+    ConfigKey.DECISOR_LLM_TEMPERATURE: _Default(
+        "0.1", "float",
+        "Temperatura del LLM del Decisor (0.0–1.0). Valores bajos reducen variación entre ciclos. Rango 0.0–1.0.",
+    ),
+    ConfigKey.DECISOR_SELF_CONSISTENCY_N: _Default(
+        "0", "int",
+        "Muestras LLM por ciclo del Decisor (votación mayoritaria). 0=desactivado (1 llamada). Rango 0–5.",
+    ),
+    ConfigKey.RISK_PER_TRADE_PCT: _Default(
+        "0.005", "float",
+        "Riesgo objetivo por trade como fracción del capital si el SL se llena. "
+        "position_size_pct = risk_per_trade_pct / sl_distance_pct (cap R1). Rango 0.001–0.02.",
     ),
     ConfigKey.OUTCOME_ATTRIBUTION_INTERVAL_MIN: _Default(
         "60", "int",
@@ -328,6 +366,21 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.LIVE_SINCE_TS: _Default(
         "", "string",
         "ISO UTC timestamp when mode switched to LIVE. Used as default filter cutoff for trades/decisions.",
+    ),
+    ConfigKey.TRADING_PRODUCT: _Default(
+        "spot", "string", "spot | futures (default seguro: spot)",
+    ),
+    ConfigKey.MAX_LEVERAGE: _Default(
+        "1", "int", "Apalancamiento máximo (operator-only)",
+    ),
+    ConfigKey.MARGIN_MODE: _Default(
+        "isolated", "string", "isolated | cross",
+    ),
+    ConfigKey.FUNDING_RATE_MAX_PCT: _Default(
+        "0.05", "float", "Funding rate máximo (abs) para abrir posición",
+    ),
+    ConfigKey.LIQUIDATION_BUFFER_ATR: _Default(
+        "2.0", "float", "Buffer mínimo (×ATR) entre SL y precio de liquidación",
     ),
 }
 

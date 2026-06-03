@@ -8,7 +8,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Position, Decision
-from shared.schemas import DecisorOutput
+from shared.schemas import DecisorOutput, Direction
+from shared.pnl import compute_pnl_pct_directional, compute_pnl_usdt_directional
 
 logger = structlog.get_logger()
 
@@ -27,10 +28,18 @@ _OCO_RETRY_DELAY_SEC = 2.0
 
 
 class Executor:
-    def __init__(self, exchange: Any, session: AsyncSession, *, symbol: str):
+    def __init__(
+        self,
+        exchange: Any,
+        session: AsyncSession,
+        *,
+        symbol: str,
+        adapter: Any | None = None,
+    ):
         self.exchange = exchange
         self.session = session
         self.symbol = symbol
+        self._adapter = adapter
 
     async def execute_buy(self, *, decision: DecisorOutput, decision_id: uuid.UUID,
                            usdt_balance: float) -> Trade:
@@ -278,13 +287,20 @@ class Executor:
         trade.status = "closed"
         trade.close_reason = close_reason
         trade.order_id_close = str(order.get("id"))
-        gross_pnl = float(trade.exit_price - trade.entry_price) * float(trade.quantity_btc)
+        pos_side = getattr(trade, "position_side", "LONG") or "LONG"
+        gross_pnl = compute_pnl_usdt_directional(
+            entry=float(trade.entry_price),
+            quantity=float(trade.quantity_btc),
+            exit_price=avg_price,
+            direction=pos_side,
+        ) or 0.0
         prior_fees = float(trade.fees_usdt or 0)
         trade.fees_usdt = Decimal(str(prior_fees + fee))
         trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - fee))
-        trade.pnl_pct = Decimal(str(
-            (avg_price - float(trade.entry_price)) / float(trade.entry_price) * 100
-        ))
+        pnl_pct = compute_pnl_pct_directional(
+            entry=float(trade.entry_price), exit_price=avg_price, direction=pos_side,
+        )
+        trade.pnl_pct = Decimal(str(pnl_pct)) if pnl_pct is not None else None
         pos = (await self.session.execute(
             select(Position).where(Position.trade_id == trade.id)
         )).scalar_one_or_none()
@@ -343,16 +359,23 @@ class Executor:
         if trade is None or trade.status != "open":
             return
         prior_fees = float(trade.fees_usdt or 0)
-        gross_pnl = (fill_price - float(trade.entry_price)) * float(trade.quantity_btc)
+        pos_side = getattr(trade, "position_side", "LONG") or "LONG"
+        gross_pnl = compute_pnl_usdt_directional(
+            entry=float(trade.entry_price),
+            quantity=float(trade.quantity_btc),
+            exit_price=fill_price,
+            direction=pos_side,
+        ) or 0.0
         trade.exit_price = Decimal(str(fill_price))
         trade.ts_close = datetime.now(tz=timezone.utc)
         trade.status = "closed"
         trade.close_reason = close_reason
         trade.fees_usdt = Decimal(str(prior_fees + fill_fee))
         trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - fill_fee))
-        trade.pnl_pct = Decimal(str(
-            (fill_price - float(trade.entry_price)) / float(trade.entry_price) * 100
-        ))
+        pnl_pct = compute_pnl_pct_directional(
+            entry=float(trade.entry_price), exit_price=fill_price, direction=pos_side,
+        )
+        trade.pnl_pct = Decimal(str(pnl_pct)) if pnl_pct is not None else None
         pos = (await self.session.execute(
             select(Position).where(Position.trade_id == trade.id)
         )).scalar_one_or_none()
@@ -362,3 +385,144 @@ class Executor:
         await self.session.commit()
         logger.info("executor.bracket_fill_recorded", trade_id=str(trade_id),
                     reason=close_reason, price=fill_price, pnl=float(trade.pnl_usdt))
+
+    async def execute_open(
+        self,
+        *,
+        direction: Direction,
+        decision: DecisorOutput,
+        decision_id: uuid.UUID,
+        available_margin: float,
+        price: float,
+    ) -> Trade:
+        if self._adapter is None:
+            if direction != Direction.LONG:
+                raise ValueError("SHORT open requires ExchangeAdapter")
+            return await self.execute_buy(
+                decision=decision, decision_id=decision_id, usdt_balance=available_margin,
+            )
+
+        notional = available_margin * decision.position_size_pct
+        res = await self._adapter.open_position(
+            symbol=self.symbol, direction=direction, notional_usdt=notional, price=price,
+        )
+        if res.avg_price == 0 or res.filled_qty == 0:
+            raise RuntimeError(f"open zero fill: {res}")
+
+        order_side = "BUY" if direction == Direction.LONG else "SELL"
+        trade = Trade(
+            decision_id=decision_id,
+            ts_open=datetime.now(tz=timezone.utc),
+            side=order_side,
+            position_side=direction.value,
+            quantity_btc=Decimal(str(res.filled_qty)),
+            entry_price=Decimal(str(res.avg_price)),
+            status="open",
+            stop_loss=Decimal(str(decision.stop_loss)) if decision.stop_loss else None,
+            take_profit=Decimal(str(decision.take_profit)) if decision.take_profit else None,
+            order_id_open=res.order_id,
+            leverage=Decimal("1"),
+            margin_mode="isolated",
+        )
+        self.session.add(trade)
+        await self.session.flush()
+        self.session.add(Position(
+            trade_id=trade.id,
+            symbol=self.symbol,
+            quantity_btc=trade.quantity_btc,
+            entry_price=trade.entry_price,
+            position_side=direction.value,
+            status="open",
+            opened_at=trade.ts_open,
+        ))
+        d = await self.session.get(Decision, decision_id)
+        if d is not None:
+            d.executed = True
+            d.trade_id = trade.id
+        await self.session.commit()
+
+        brackets = await self._adapter.place_brackets(
+            symbol=self.symbol,
+            direction=direction,
+            qty=res.filled_qty,
+            stop_loss=decision.stop_loss,
+            take_profit=decision.take_profit,
+        )
+        if brackets.order_id_sl or brackets.order_id_tp:
+            await self.session.refresh(trade)
+            trade.order_id_sl = brackets.order_id_sl
+            trade.order_id_tp = brackets.order_id_tp
+            await self.session.commit()
+        await self.session.refresh(trade)
+        logger.info(
+            "executor.open_executed",
+            trade_id=str(trade.id),
+            direction=direction.value,
+            price=res.avg_price,
+        )
+        return trade
+
+    async def execute_close(
+        self,
+        *,
+        trade_id: uuid.UUID,
+        decision_id: uuid.UUID | None,
+        close_reason: str,
+    ) -> Trade:
+        trade = await self.session.get(Trade, trade_id)
+        if trade is None or trade.status != "open":
+            raise RuntimeError(f"Trade {trade_id} not open")
+
+        pos_side = getattr(trade, "position_side", "LONG") or "LONG"
+        direction = Direction(pos_side)
+
+        if self._adapter is not None:
+            res = await self._adapter.close_position(
+                symbol=self.symbol,
+                direction=direction,
+                qty=float(trade.quantity_btc),
+                close_reason=close_reason,
+            )
+            exit_price = res.avg_price
+            order_id = res.order_id
+        else:
+            if direction == Direction.SHORT:
+                raise ValueError("SHORT close requires ExchangeAdapter")
+            return await self.execute_sell(
+                trade_id=trade_id, decision_id=decision_id, close_reason=close_reason,
+            )
+
+        fee = 0.0
+        trade.exit_price = Decimal(str(exit_price))
+        trade.ts_close = datetime.now(tz=timezone.utc)
+        trade.status = "closed"
+        trade.close_reason = close_reason
+        trade.order_id_close = order_id
+        gross_pnl = compute_pnl_usdt_directional(
+            entry=float(trade.entry_price),
+            quantity=float(trade.quantity_btc),
+            exit_price=exit_price,
+            direction=pos_side,
+        ) or 0.0
+        prior_fees = float(trade.fees_usdt or 0)
+        trade.fees_usdt = Decimal(str(prior_fees + fee))
+        trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - fee))
+        pnl_pct = compute_pnl_pct_directional(
+            entry=float(trade.entry_price), exit_price=exit_price, direction=pos_side,
+        )
+        trade.pnl_pct = Decimal(str(pnl_pct)) if pnl_pct is not None else None
+        pos = (await self.session.execute(
+            select(Position).where(Position.trade_id == trade.id)
+        )).scalar_one_or_none()
+        if pos:
+            pos.status = "closed"
+            pos.updated_at = datetime.now(tz=timezone.utc)
+        if decision_id:
+            d = await self.session.get(Decision, decision_id)
+            if d:
+                d.executed = True
+                d.trade_id = trade.id
+        await self.session.commit()
+        await self.session.refresh(trade)
+        logger.info("executor.close_executed", trade_id=str(trade.id), reason=close_reason)
+        return trade

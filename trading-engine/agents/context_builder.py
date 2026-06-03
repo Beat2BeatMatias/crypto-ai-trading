@@ -78,7 +78,12 @@ class ContextBuilder:
                     min_rr_ratio: float = 1.3,
                     sl_atr_multiplier: float = 0.3,
                     calibration: dict | None = None,
-                    current_drawdown_pct: float = 0.0) -> dict[str, Any]:
+                    current_drawdown_pct: float = 0.0,
+                    trading_product: str = "spot",
+                    funding_rate: float = 0.0,
+                    available_margin: float | None = None,
+                    open_position_side: str | None = None,
+                    liquidation_price: float | None = None) -> dict[str, Any]:
 
         cal = calibration or {}
 
@@ -400,6 +405,14 @@ class ContextBuilder:
             "losses_today": losses_today,
             "open_positions_count": len(open_positions),
             "positions_block": self._format_positions(open_positions),
+            "trading_product": trading_product,
+            "funding_rate": funding_rate,
+            "funding_rate_pct": round(funding_rate * 100, 4),
+            "available_margin": available_margin if available_margin is not None else usdt_balance,
+            "open_position_side": open_position_side or (
+                getattr(open_positions[0], "position_side", None) if open_positions else None
+            ),
+            "liquidation_price": liquidation_price,
             "current_drawdown_pct": current_drawdown_pct,
             "daily_margin_pct": daily_stop_pct * 100,
 
