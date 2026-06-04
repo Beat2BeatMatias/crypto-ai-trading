@@ -21,3 +21,25 @@ def test_validate_futures_sizing_feasible():
     )
     assert ok is True
     assert reason == ""
+
+
+def test_validate_futures_sizing_exit_leg_unfeasible():
+    ok, reason = validate_futures_sizing(
+        available_margin=250.0,
+        max_position_pct=0.20,
+        leverage=1,
+        min_notional=50.0,
+    )
+    assert ok is False
+    assert "exit-leg" in reason
+
+
+def test_validate_futures_sizing_feasible_with_leverage_3x():
+    ok, reason = validate_futures_sizing(
+        available_margin=250.0,
+        max_position_pct=0.20,
+        leverage=3,
+        min_notional=50.0,
+    )
+    assert ok is True
+    assert reason == ""

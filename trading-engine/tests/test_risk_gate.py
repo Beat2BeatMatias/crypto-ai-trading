@@ -663,6 +663,140 @@ def test_short_valid_geometry_passes():
     assert verdict.passed
 
 
+def test_r14_short_46be2f0d_passes_initial_margin_with_leverage_3x():
+    gate = RiskGate(
+        max_position_pct=0.34,
+        max_simultaneous_trades=2,
+        daily_stop_pct=-0.05,
+        max_drawdown_pct=-0.20,
+        max_slippage_pct=0.005,
+        taker_fee_pct=0.001,
+        min_notional_usdt=50.0,
+        max_leverage=3.0,
+    )
+    price = 63110.1
+    decision_data = _short_decision(
+        stop_loss=64048.0,
+        take_profit=61112.5,
+        position_size_pct=0.10,
+    ).model_dump()
+    decision_data["position_size_pct"] = 0.34
+    decision = DecisorOutput.model_construct(**decision_data)
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="futures",
+        current_price=price,
+        atr_ref=630.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=0.0,
+        kill_switch=False,
+        available_margin=250.0,
+        leverage=3.0,
+    )
+    assert verdict.passed
+
+
+def test_r14_rejects_when_initial_margin_exceeds_available():
+    gate = RiskGate(
+        max_position_pct=1.1,
+        max_simultaneous_trades=2,
+        daily_stop_pct=-0.05,
+        max_drawdown_pct=-0.20,
+        max_slippage_pct=0.005,
+        taker_fee_pct=0.001,
+        min_notional_usdt=5.0,
+        max_leverage=3.0,
+    )
+    price = 67000.0
+    decision_data = _short_decision(
+        stop_loss=price + 500.0,
+        take_profit=price - 1500.0,
+        position_size_pct=0.10,
+    ).model_dump()
+    decision_data["position_size_pct"] = 1.01
+    decision = DecisorOutput.model_construct(**decision_data)
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="futures",
+        current_price=price,
+        atr_ref=500.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=0.0,
+        kill_switch=False,
+        available_margin=100.0,
+        leverage=3.0,
+    )
+    assert not verdict.passed
+    assert verdict.rule_id == "R14"
+
+
+def test_r11_short_fd91182d_passes_with_leverage_3x():
+    gate = RiskGate(
+        max_position_pct=0.20,
+        max_simultaneous_trades=2,
+        daily_stop_pct=-0.05,
+        max_drawdown_pct=-0.20,
+        max_slippage_pct=0.005,
+        taker_fee_pct=0.001,
+        min_notional_usdt=50.0,
+        max_leverage=3.0,
+    )
+    price = 63204.9
+    decision = _short_decision(
+        stop_loss=price + 500.0,
+        take_profit=61314.7,
+        position_size_pct=0.20,
+    )
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="futures",
+        current_price=price,
+        atr_ref=443.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=0.0,
+        kill_switch=False,
+        available_margin=250.0,
+        leverage=3.0,
+    )
+    assert verdict.passed
+
+
+def test_r11_short_infeasible_without_leverage_reports_clear_reason():
+    gate = RiskGate(
+        max_position_pct=0.20,
+        max_simultaneous_trades=2,
+        daily_stop_pct=-0.05,
+        max_drawdown_pct=-0.20,
+        max_slippage_pct=0.005,
+        taker_fee_pct=0.001,
+        min_notional_usdt=50.0,
+    )
+    price = 63204.9
+    decision = _short_decision(
+        stop_loss=price + 500.0,
+        take_profit=61314.7,
+        position_size_pct=0.20,
+    )
+    verdict = gate.validate(
+        decision=decision,
+        trading_product="futures",
+        current_price=price,
+        atr_ref=443.0,
+        open_positions_count=0,
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=0.0,
+        kill_switch=False,
+        available_margin=250.0,
+        leverage=1.0,
+    )
+    assert not verdict.passed
+    assert verdict.rule_id == "R11"
+    assert "min position_size_pct" in verdict.reason
+
+
 def test_short_sl_below_price_rejected():
     gate = _make_gate()
     price = 67000.0

@@ -104,7 +104,7 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   max_position_pct: {
     label: "Tamaño máximo de posición",
     description: "Tope de notional por trade (% del capital en spot o del margen disponible en futuros). Usado por R1 y el guard de min_notional.",
-    type: "slider", min: 0.01, max: 0.20, step: 0.01, unit: "%",
+    type: "slider", min: 0.01, max: 0.50, step: 0.01, unit: "%",
     format: v => `${(v * 100).toFixed(0)}%`, parse: parseFloat,
   },
   max_simultaneous_trades: {
@@ -314,6 +314,24 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   conf_threshold_high_vol: {
     label: "Confianza mínima sugerida — HIGH_VOLATILITY",
     description: "Guía para el LLM: confidence mínima recomendada para BUY en alta volatilidad. El LLM tiene autonomía para desviarse con justificación.",
+    type: "slider", min: 0.60, max: 0.95, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_threshold_short_trending_down: {
+    label: "Confianza mínima SHORT — TRENDING_DOWN",
+    description: "Guía LLM para SHORT en futuros con tendencia bajista. Solo aplica si trading_product=futures.",
+    type: "slider", min: 0.40, max: 0.85, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_threshold_short_range: {
+    label: "Confianza mínima SHORT — RANGE",
+    description: "Guía LLM para SHORT en mercado lateral (futuros).",
+    type: "slider", min: 0.50, max: 0.90, step: 0.05, unit: "",
+    format: fmt2, parse: parseFloat,
+  },
+  conf_threshold_short_high_vol: {
+    label: "Confianza mínima SHORT — HIGH_VOLATILITY",
+    description: "Guía LLM para SHORT en alta volatilidad (futuros). También referencia para SHORT contra TRENDING_UP.",
     type: "slider", min: 0.60, max: 0.95, step: 0.05, unit: "",
     format: fmt2, parse: parseFloat,
   },
@@ -552,8 +570,12 @@ const MARKET_GROUPS: ConfigGroup[] = [
   {
     title: "Guías LLM — Umbrales de confianza",
     color: "violet",
-    keys: ["conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol", "rsi_overbought_1h"],
-    note: "Guías en el prompt; no bloquean ejecución. rsi_overbought_1h relevante para shorts (confluencia I).",
+    keys: [
+      "conf_threshold_trending_up", "conf_threshold_range", "conf_threshold_high_vol",
+      "conf_threshold_short_trending_down", "conf_threshold_short_range", "conf_threshold_short_high_vol",
+      "rsi_overbought_1h",
+    ],
+    note: "Guías en el prompt (Bloque I); no bloquean ejecución. Umbrales SHORT solo en futuros.",
   },
   {
     title: "Guías LLM — Calibración de confidence",

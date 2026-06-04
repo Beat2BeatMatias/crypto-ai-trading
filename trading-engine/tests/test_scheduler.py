@@ -26,6 +26,38 @@ def test_order_tracker_registered_at_10s():
         )
 
 
+def test_update_decisor_interval_reschedules_job():
+    sched = EngineScheduler()
+    fn = lambda: None
+
+    with patch.object(sched._scheduler, "add_job") as mock_add_job, \
+         patch.object(sched._scheduler, "reschedule_job") as mock_reschedule:
+        sched.add_decisor(fn, interval_min=5)
+        assert sched._decisor_interval_min == 5
+
+        changed = sched.update_decisor_interval(15)
+
+        assert changed is True
+        assert sched._decisor_interval_min == 15
+        mock_reschedule.assert_called_once()
+        assert mock_reschedule.call_args.args[0] == "decisor"
+        trigger = mock_reschedule.call_args.kwargs["trigger"]
+        assert trigger.interval.total_seconds() == 15 * 60
+
+
+def test_update_decisor_interval_noop_when_unchanged():
+    sched = EngineScheduler()
+
+    with patch.object(sched._scheduler, "add_job"), \
+         patch.object(sched._scheduler, "reschedule_job") as mock_reschedule:
+        sched.add_decisor(lambda: None, interval_min=15)
+
+        changed = sched.update_decisor_interval(15)
+
+        assert changed is False
+        mock_reschedule.assert_not_called()
+
+
 def test_main_uses_10s_for_order_tracker():
     import pathlib
     main_text = (pathlib.Path(__file__).parent.parent / "main.py").read_text()

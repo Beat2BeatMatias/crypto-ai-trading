@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.notional_sizing import min_position_size_pct_for_decision
 from shared.schemas import DecisorAction, DecisorOutput, Direction, direction_for_action
 
 
@@ -16,6 +17,9 @@ def apply_risk_based_sizing(
     max_position_pct: float,
     min_position_size: float,
     min_position_size_pct_notional: float,
+    min_notional_usdt: float = 5.0,
+    leverage: float = 1.0,
+    trading_product: str = "spot",
 ) -> tuple[DecisorOutput, dict[str, Any] | None]:
     """Derive position_size_pct from risk budget and SL distance.
 
@@ -39,7 +43,15 @@ def apply_risk_based_sizing(
 
     llm_pct = decision.position_size_pct
     raw_pct = risk_per_trade_pct / sl_distance_pct
-    floor_pct = max(min_position_size, min_position_size_pct_notional)
+    exit_floor_pct = min_position_size_pct_for_decision(
+        decision,
+        margin=usdt_available,
+        price=price,
+        min_notional_usdt=min_notional_usdt,
+        leverage=leverage,
+        trading_product=trading_product,
+    )
+    floor_pct = max(min_position_size, min_position_size_pct_notional, exit_floor_pct)
     capped_pct = min(raw_pct, max_position_pct)
     final_pct = max(capped_pct, floor_pct) if capped_pct >= floor_pct else capped_pct
 
@@ -56,6 +68,8 @@ def apply_risk_based_sizing(
         "target_risk_usdt": round(target_risk_usdt, 4),
         "risk_at_sl_usdt": round(risk_at_sl_usdt, 4),
         "capped_by_max_position": raw_pct > max_position_pct,
+        "min_position_size_pct_exit_floor": round(exit_floor_pct, 6),
+        "notional_leverage": leverage if trading_product == "futures" else 1.0,
     }
 
     updated = decision.model_copy(update={"position_size_pct": final_pct})

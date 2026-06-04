@@ -101,6 +101,28 @@ def test_sizing_short_uses_directional_sl_distance():
     assert abs(updated.position_size_pct - 0.10) < 1e-9
 
 
+def test_short_sizing_raises_floor_for_tp_notional_futures_3x():
+    decision = _short(stop_loss=64_150.0, take_profit=61_314.7, llm_pct=0.02)
+    updated, meta = apply_risk_based_sizing(
+        decision,
+        price=63_204.9,
+        capital_total=250.0,
+        usdt_available=250.0,
+        risk_per_trade_pct=0.005,
+        max_position_pct=0.20,
+        min_position_size=0.0,
+        min_position_size_pct_notional=50.0 / (250.0 * 3),
+        min_notional_usdt=50.0,
+        leverage=3.0,
+        trading_product="futures",
+    )
+    assert meta is not None
+    assert updated.position_size_pct >= 0.02
+    notional = 250.0 * updated.position_size_pct * 3.0
+    qty = notional / 63_204.9
+    assert qty * 61_314.7 >= 50.0
+
+
 def test_capped_by_max_position():
     decision = _buy(sl=99_500.0)
     updated, meta = apply_risk_based_sizing(

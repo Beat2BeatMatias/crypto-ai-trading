@@ -42,6 +42,9 @@ class ConfigKey(str, Enum):
     CONF_THRESHOLD_TRENDING_UP = "conf_threshold_trending_up"
     CONF_THRESHOLD_RANGE = "conf_threshold_range"
     CONF_THRESHOLD_HIGH_VOL = "conf_threshold_high_vol"
+    CONF_THRESHOLD_SHORT_TRENDING_DOWN = "conf_threshold_short_trending_down"
+    CONF_THRESHOLD_SHORT_RANGE = "conf_threshold_short_range"
+    CONF_THRESHOLD_SHORT_HIGH_VOL = "conf_threshold_short_high_vol"
     # RSI overbought filter
     RSI_OVERBOUGHT_1H = "rsi_overbought_1h"
     # Confidence formula — base confluencias table
@@ -163,6 +166,18 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "0.80", "float",
         "Guía LLM: confidence mínima recomendada para BUY en HIGH_VOLATILITY. No es enforcement; el LLM decide autónomamente.",
     ),
+    ConfigKey.CONF_THRESHOLD_SHORT_TRENDING_DOWN: _Default(
+        "0.60", "float",
+        "Guía LLM: confidence mínima recomendada para SHORT en TRENDING_DOWN (futuros). No es enforcement.",
+    ),
+    ConfigKey.CONF_THRESHOLD_SHORT_RANGE: _Default(
+        "0.70", "float",
+        "Guía LLM: confidence mínima recomendada para SHORT en RANGE (futuros). No es enforcement.",
+    ),
+    ConfigKey.CONF_THRESHOLD_SHORT_HIGH_VOL: _Default(
+        "0.80", "float",
+        "Guía LLM: confidence mínima recomendada para SHORT en HIGH_VOLATILITY (futuros). No es enforcement.",
+    ),
     ConfigKey.RSI_OVERBOUGHT_1H: _Default(
         "70", "int",
         "Guía LLM/Supervisor: RSI 1h considerado sobrecomprado. El Supervisor puede sugerirlo; el Decisor lo usa como referencia contextual, no como bloqueo.",
@@ -233,7 +248,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.COOLDOWN_AFTER_SELL_MIN: _Default(
         "15", "int",
-        "Guía LLM: minutos de cooldown recomendados tras un SELL antes de una nueva entrada BUY. Inyectado en el system prompt; el LLM lo respeta como norma de calidad. Rango 0–120.",
+        "Guía LLM: minutos de cooldown tras SELL o cierre de posición antes de BUY o SHORT (futuros). Rango 0–120.",
     ),
     ConfigKey.SUBJECTIVE_ADJ_MAX: _Default(
         "0.10", "float",

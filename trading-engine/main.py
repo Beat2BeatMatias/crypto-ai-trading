@@ -2,8 +2,11 @@
 from __future__ import annotations
 import asyncio
 import signal
+from datetime import datetime, timezone
 import structlog
+from sqlalchemy import select
 from shared.db.base import create_engine_from_url, create_session_factory
+from shared.db.models import Decision
 from shared.config_store import ConfigKey, ConfigStore
 from config import get_settings
 from exchange import build_binance_client
@@ -29,6 +32,20 @@ logger = structlog.get_logger()
 FUTURES_SYMBOL = "BTC/USDT:USDT"
 
 
+async def _decisor_interval_elapsed(session, interval_min: int) -> bool:
+    result = await session.execute(
+        select(Decision.ts)
+        .where(Decision.agent == "decisor")
+        .order_by(Decision.ts.desc())
+        .limit(1)
+    )
+    last_ts = result.scalar_one_or_none()
+    if last_ts is None:
+        return True
+    age_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60.0
+    return age_min >= interval_min
+
+
 def resolve_engine_symbol(product: str, spot_symbol: str) -> str:
     return FUTURES_SYMBOL if product == "futures" else spot_symbol
 
@@ -39,12 +56,26 @@ def validate_futures_sizing(
     max_position_pct: float,
     leverage: int,
     min_notional: float,
+    min_exit_leg_price_ratio: float | None = None,
 ) -> tuple[bool, str]:
+    from shared.notional_sizing import DEFAULT_MIN_EXIT_LEG_PRICE_RATIO
+
+    exit_ratio = (
+        min_exit_leg_price_ratio
+        if min_exit_leg_price_ratio is not None
+        else DEFAULT_MIN_EXIT_LEG_PRICE_RATIO
+    )
     max_trade_notional = available_margin * max_position_pct * leverage
     if max_trade_notional < min_notional:
         return False, (
             f"futures.sizing_unfeasible: max trade notional {max_trade_notional:.2f} "
             f"< min_notional {min_notional:.2f}"
+        )
+    max_exit_notional = max_trade_notional * exit_ratio
+    if max_exit_notional < min_notional:
+        return False, (
+            f"futures.sizing_unfeasible: max exit-leg notional ~{max_exit_notional:.2f} "
+            f"(entrada×{exit_ratio:.2f}) < min_notional {min_notional:.2f}"
         )
     return True, ""
 
@@ -328,7 +359,12 @@ async def run() -> None:
             max_pos = await store.get_typed(ConfigKey.MAX_POSITION_PCT)
             max_sim = await store.get_typed(ConfigKey.MAX_SIMULTANEOUS_TRADES)
             daily_stop = await store.get_typed(ConfigKey.DAILY_STOP_PCT)
-            interval_min = await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN)
+            interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
+            if sched.update_decisor_interval(interval_min):
+                logger.info("decisor.scheduler_interval_synced", interval_min=interval_min)
+            if not await _decisor_interval_elapsed(s, interval_min):
+                logger.info("decisor.skipped_interval_not_elapsed", interval_min=interval_min)
+                return
             decisor_provider = LLMProvider(await store.get(ConfigKey.DECISOR_PROVIDER))
             fallbacks = _parse_providers(await store.get(ConfigKey.FALLBACK_PROVIDERS))
             atr_timeframe = await store.get(ConfigKey.ATR_TIMEFRAME)
@@ -345,6 +381,13 @@ async def run() -> None:
                 "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
                 "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
                 "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
+                "conf_threshold_short_trending_down": await store.get_typed(
+                    ConfigKey.CONF_THRESHOLD_SHORT_TRENDING_DOWN,
+                ),
+                "conf_threshold_short_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_SHORT_RANGE),
+                "conf_threshold_short_high_vol": await store.get_typed(
+                    ConfigKey.CONF_THRESHOLD_SHORT_HIGH_VOL,
+                ),
                 "rsi_overbought_1h": await store.get_typed(ConfigKey.RSI_OVERBOUGHT_1H),
                 "conf_base_0": await store.get_typed(ConfigKey.CONF_BASE_0),
                 "conf_base_1": await store.get_typed(ConfigKey.CONF_BASE_1),
@@ -509,6 +552,8 @@ async def run() -> None:
                     available_margin=usdt,
                     open_position_side=open_position_side,
                     liquidation_price=liquidation_price,
+                    min_notional_usdt=min_notional,
+                    max_leverage=float(leverage),
                 )
                 cb.record_llm_success()
             except Exception as e:
@@ -617,6 +662,8 @@ async def run() -> None:
                             decision_id=latest_d.id,
                             available_margin=usdt,
                             price=current_price,
+                            leverage=float(leverage),
+                            trading_product=trading_product,
                         )
                     else:
                         await executor.execute_buy(
@@ -629,6 +676,8 @@ async def run() -> None:
                         decision_id=latest_d.id,
                         available_margin=usdt,
                         price=current_price,
+                        leverage=float(leverage),
+                        trading_product=trading_product,
                     )
                 elif decision.action == DecisorAction.SELL:
                     if open_positions:
@@ -690,6 +739,14 @@ async def run() -> None:
                 "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
                 "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
                 "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
+                "conf_threshold_short_trending_down": await store.get_typed(
+                    ConfigKey.CONF_THRESHOLD_SHORT_TRENDING_DOWN,
+                ),
+                "conf_threshold_short_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_SHORT_RANGE),
+                "conf_threshold_short_high_vol": await store.get_typed(
+                    ConfigKey.CONF_THRESHOLD_SHORT_HIGH_VOL,
+                ),
+                "min_confluences_short": await store.get_typed(ConfigKey.MIN_CONFLUENCES_SHORT),
                 # TOGGLES LLM-centric v1.3
                 "coherence_strict_mode": await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE),
                 "two_pass_enabled": await store.get_typed(ConfigKey.TWO_PASS_ENABLED),

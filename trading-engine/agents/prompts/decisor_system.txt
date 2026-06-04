@@ -94,11 +94,17 @@ El CoherenceChecker C9 detecta mezclas alcista+bajista; el servidor no las suma 
 ═══════════════════════════════════════════════════════════════════
 RÉGIMEN DE MERCADO → ACCIÓN ESPERADA
 ═══════════════════════════════════════════════════════════════════
-TRENDING_UP     → BUY con ≥{min_confluences_buy} confluencias. structure=uptrend en 15m/1h.
-RANGE           → BUY solo cerca de soporte claro (H o C); structure=consolidation.
+TRENDING_UP     → BUY con ≥{min_confluences_buy} confluencias; confidence ≥{conf_threshold_trending_up} sugerida.
+                  structure=uptrend en 15m/1h. SHORT desincentivado (futuros); si SHORT contra tendencia
+                  → [CONTRA_REGIMEN] y barra ≥{conf_threshold_short_high_vol}.
+RANGE           → BUY solo cerca de soporte (H o C); confidence ≥{conf_threshold_range} sugerida.
+                  SHORT solo cerca de resistencia clara (I/J/F); confidence ≥{conf_threshold_short_range}.
+                  structure=consolidation.
 HIGH_VOLATILITY → SL amplio (cerca de {sl_atr_max_multiplier}×ATR). ADX >25 pero volátil.
+                  BUY: confidence ≥{conf_threshold_high_vol}. SHORT (futuros): ≥{conf_threshold_short_high_vol}.
 TRENDING_DOWN   → BUY desincentivado. SHORT incentivado si trading_product=futures
-                  (≥{min_confluences_short} confluencias bajistas I/J/F + structure=downtrend).
+                  (≥{min_confluences_short} confluencias bajistas I/J/F + structure=downtrend;
+                  confidence ≥{conf_threshold_short_trending_down} sugerida).
                   BUY solo con reversión fuerte (≥3 confluencias A/D/H + bid_pressure).
                   Si decidís BUY contra la tendencia: agregá [CONTRA_REGIMEN] en reasoning.
 
@@ -298,9 +304,9 @@ BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (K–Z):
 - Cuentan para min_confluences_buy o min_confluences_short igual que A–H; el servidor
   valida verify_spec (C8) y coherencia direccional (C9) si hay etiqueta.
 
-COOLDOWN POST-SELL:
-Si la última operación fue SELL hace menos de {cooldown_after_sell_min} min,
-requerir 1 confluencia adicional sobre el mínimo antes de BUY.
+COOLDOWN POST-CIERRE:
+Si la última operación fue SELL o cierre de posición (LONG o SHORT) hace menos de {cooldown_after_sell_min} min,
+requerir 1 confluencia adicional sobre el mínimo (min_confluences_buy o min_confluences_short) antes de BUY o SHORT.
 
 USO DEL ORDER BOOK PARA SL/TP (solo si Bloque E tiene datos):
 - SL: colócalo justo por encima del bid_wall más fuerte dentro del rango R4.
@@ -327,8 +333,8 @@ Guía para confidence_adjustment (no compensar una base baja inventando +0.10):
     precio <0.5% bajo resistencia mayor, ATR expanding sin declarar HIGH_VOL.
   Default 0.0 si la evidencia coincide con el catálogo.
 
-Umbrales conf_threshold_* del Bloque I son guía para BUY prudente, no enforcement.
-Coherence Checker C4: confidence final ≥0.85 con <2 confluencias → warning.
+Umbrales conf_threshold_* (BUY) y conf_threshold_short_* (SHORT, futuros) del Bloque I son guía, no enforcement.
+Coherence Checker C4/C5P: confidence final ≥0.85 con <2 confluencias en BUY/SHORT → warning.
 
 ═══════════════════════════════════════════════════════════════════
 DATOS FALTANTES

@@ -32,7 +32,7 @@ _SAFE_BOUNDS: dict[str, tuple] = {
     "sl_atr_multiplier":           (0.1, 2.0),
     "sl_atr_max_multiplier":       (0.5, 20.0),
     "min_rr_ratio":                (1.0, 3.0),
-    "max_position_pct":            (0.01, 0.20),
+    "max_position_pct":            (0.01, 0.50),
     "min_fees_to_tp_ratio":        (1.5, 6.0),
     # GUÍAS LLM con impacto medible (CoherenceChecker o anclaje fuerte del prompt)
     "expected_holding_max_min":    (30, 1440),  # auditado por C6
@@ -40,6 +40,10 @@ _SAFE_BOUNDS: dict[str, tuple] = {
     "conf_threshold_trending_up":  (0.40, 0.85),
     "conf_threshold_range":        (0.50, 0.90),
     "conf_threshold_high_vol":     (0.60, 0.95),
+    "conf_threshold_short_trending_down": (0.40, 0.85),
+    "conf_threshold_short_range":        (0.50, 0.90),
+    "conf_threshold_short_high_vol":     (0.60, 0.95),
+    "min_confluences_short":       (1, 4),
 }
 
 # Boolean toggles que el Supervisor puede activar/desactivar.
@@ -60,6 +64,16 @@ _INVARIANTS: list[tuple[str, str, str]] = [
     ("min_rr_ratio",               "default_rr_ratio",        "min_rr_ratio <= default_rr_ratio"),
     ("conf_threshold_trending_up", "conf_threshold_range",    "conf_threshold_trending_up <= conf_threshold_range"),
     ("conf_threshold_range",       "conf_threshold_high_vol", "conf_threshold_range <= conf_threshold_high_vol"),
+    (
+        "conf_threshold_short_trending_down",
+        "conf_threshold_short_range",
+        "conf_threshold_short_trending_down <= conf_threshold_short_range",
+    ),
+    (
+        "conf_threshold_short_range",
+        "conf_threshold_short_high_vol",
+        "conf_threshold_short_range <= conf_threshold_short_high_vol",
+    ),
 ]
 
 _REVERT_WR_DELTA     = 10.0   # pp: si WR bajó > 10 puntos → revertir
@@ -126,8 +140,9 @@ CONTEXTO ARQUITECTÓNICO (v1.3 LLM-Centric):
 El Decisor es un LLM autónomo. Los parámetros sugeridos abajo tienen DOS roles distintos:
   • ENFORCEMENT (Risk Gate los aplica): sl_atr_multiplier, sl_atr_max_multiplier, min_rr_ratio,
     max_position_pct, min_fees_to_tp_ratio. Cambiarlos restringe o relaja qué trades pueden ejecutarse.
-  • GUÍAS AL LLM (referencias inyectadas en el prompt): conf_threshold_*, rsi_overbought_1h,
-    min_confluences_buy, cooldown_after_sell_min. Cambiarlos modifica cómo el LLM razona, pero
+  • GUÍAS AL LLM (referencias inyectadas en el prompt): conf_threshold_*, conf_threshold_short_*,
+    rsi_overbought_1h, min_confluences_buy, min_confluences_short, cooldown_after_sell_min.
+    Cambiarlos modifica cómo el LLM razona, pero
     el LLM tiene autonomía para desviarse con justificación.
 Ajustá los ENFORCEMENT cuando haya pérdidas concretas (SL/TP desbalanceados, trades zombie).
 Ajustá las GUÍAS cuando el LLM esté tomando decisiones sistemáticamente sub-óptimas.
@@ -147,7 +162,7 @@ MÉTRICAS DEL PERÍODO:
 
 AUDITORÍA LLM-CENTRIC:
 - Sizing promedio BUYs: {avg_position_size_pct:.4f} (vs max_position_pct={max_position_pct})
-- Confidence promedio BUYs: {avg_buy_confidence:.3f}
+- Confidence promedio BUYs: {avg_buy_confidence:.3f} | SHORTs: {avg_short_confidence:.3f}
 - Coherence warnings totales: {coherence_warnings_total} en {decisions_with_warnings}/{total_decisions} decisiones
 - Two-pass auto-correcciones: {two_pass_triggered_count}
 
@@ -177,6 +192,10 @@ CONFIGURACIÓN ACTUAL:
 - conf_threshold_trending_up: {conf_threshold_trending_up}
 - conf_threshold_range: {conf_threshold_range}
 - conf_threshold_high_vol: {conf_threshold_high_vol}
+- conf_threshold_short_trending_down: {conf_threshold_short_trending_down}
+- conf_threshold_short_range: {conf_threshold_short_range}
+- conf_threshold_short_high_vol: {conf_threshold_short_high_vol}
+- min_confluences_short: {min_confluences_short}
 - coherence_strict_mode: {coherence_strict_mode}
 - two_pass_enabled: {two_pass_enabled}
 
@@ -187,7 +206,7 @@ ENFORCEMENT — Risk Gate los aplica con dureza:
   Criterio: bajar si los SL llegan tarde y dejan grandes pérdidas; subir si te sacan con ruido.
 - sl_atr_max_multiplier: 0.5 a 20.0 — techo del SL. Si rechaza muchos BUYs por R4, subir levemente.
 - min_rr_ratio: 1.0 a 3.0 — subir si avg_loss > avg_win con persistencia.
-- max_position_pct: 0.01 a 0.20 — subir SOLO si WR>60% y PF>1.5 sostenidos. Bajar ante drawdown.
+- max_position_pct: 0.01 a 0.50 — subir SOLO si WR>60% y PF>1.5 sostenidos. Bajar ante drawdown.
 - min_fees_to_tp_ratio: 1.5 a 6.0 — subir si los TPs apenas pasan fees (rentabilidad marginal).
 
 PARÁMETROS DE SOLO LECTURA (informativo, NO sugerir cambios):
@@ -204,9 +223,10 @@ GUÍAS LLM (sólo recalibrar si hay desalineación medible):
 - conf_threshold_trending_up: 0.40 a 0.85 — debe ser <= conf_threshold_range.
 - conf_threshold_range: 0.50 a 0.90 — debe ser <= conf_threshold_high_vol.
 - conf_threshold_high_vol: 0.60 a 0.95.
-  Criterio para los conf_threshold_*: ajustar SÓLO si avg_buy_confidence está sistemáticamente
-  desalineado con el outcome (ej: avg_buy_confidence=0.75 pero WR=35% → subir thresholds).
-  Si avg_buy_confidence es razonablemente predictivo de WR, no tocar.
+- conf_threshold_short_trending_down / short_range / short_high_vol: mismos rangos que BUY (espejo).
+- min_confluences_short: 1 a 4 — subir si bad_short_rate alto con pocas confluencias I/J.
+  Criterio conf_threshold_* (BUY): ajustar si avg_buy_confidence desalineado con WR de BUYs.
+  Criterio conf_threshold_short_*: ajustar si avg_short_confidence desalineado con bad_short_rate.
 
 TOGGLES BOOLEANOS (decisión binaria con criterio claro):
 - coherence_strict_mode: true | false.
@@ -224,6 +244,7 @@ INVARIANTES OBLIGATORIAS (el sistema rechazará sugerencias que las violen):
 - sl_atr_multiplier DEBE ser <= sl_atr_max_multiplier
 - min_rr_ratio DEBE ser <= default_rr_ratio (actualmente {default_rr_ratio})
 - conf_threshold_trending_up <= conf_threshold_range <= conf_threshold_high_vol
+- conf_threshold_short_trending_down <= conf_threshold_short_range <= conf_threshold_short_high_vol
 
 REGLA GENERAL: si una key no requiere ajuste, omitila del array `suggestions`. NO incluyas
 sugerencias que repiten el valor actual ni "ajustes" sin razón concreta basada en métricas.
@@ -1149,6 +1170,13 @@ class Supervisor:
             conf_threshold_trending_up=current_config.get("conf_threshold_trending_up", 0.60),
             conf_threshold_range=current_config.get("conf_threshold_range", 0.70),
             conf_threshold_high_vol=current_config.get("conf_threshold_high_vol", 0.80),
+            conf_threshold_short_trending_down=current_config.get(
+                "conf_threshold_short_trending_down", 0.60,
+            ),
+            conf_threshold_short_range=current_config.get("conf_threshold_short_range", 0.70),
+            conf_threshold_short_high_vol=current_config.get("conf_threshold_short_high_vol", 0.80),
+            min_confluences_short=current_config.get("min_confluences_short", 2),
+            avg_short_confidence=metrics.get("avg_short_confidence", 0.0),
             coherence_strict_mode=current_config.get("coherence_strict_mode", False),
             two_pass_enabled=current_config.get("two_pass_enabled", True),
             missed_rate=metrics.get("missed_rate", 0.0),

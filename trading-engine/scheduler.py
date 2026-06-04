@@ -10,10 +10,23 @@ logger = structlog.get_logger()
 class EngineScheduler:
     def __init__(self):
         self._scheduler = AsyncIOScheduler(timezone="UTC")
+        self._decisor_interval_min: int | None = None
 
     def add_decisor(self, fn: Callable[[], Awaitable[None]], *, interval_min: int) -> None:
+        self._decisor_interval_min = interval_min
         self._scheduler.add_job(fn, IntervalTrigger(minutes=interval_min),
                                 id="decisor", replace_existing=True)
+
+    def update_decisor_interval(self, interval_min: int) -> bool:
+        if self._decisor_interval_min == interval_min:
+            return False
+        self._decisor_interval_min = interval_min
+        self._scheduler.reschedule_job(
+            "decisor",
+            trigger=IntervalTrigger(minutes=interval_min),
+        )
+        logger.info("scheduler.decisor_interval_updated", interval_min=interval_min)
+        return True
 
     def add_supervisor(self, fn: Callable[[], Awaitable[None]], *, cron: str) -> None:
         self._scheduler.add_job(fn, CronTrigger.from_crontab(cron, timezone="UTC"),

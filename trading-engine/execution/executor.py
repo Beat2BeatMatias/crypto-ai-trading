@@ -8,6 +8,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Position, Decision
+from shared.notional_sizing import entry_notional_usdt
 from shared.schemas import DecisorOutput, Direction
 from shared.pnl import compute_pnl_pct_directional, compute_pnl_usdt_directional
 
@@ -394,6 +395,8 @@ class Executor:
         decision_id: uuid.UUID,
         available_margin: float,
         price: float,
+        leverage: float = 1.0,
+        trading_product: str = "futures",
     ) -> Trade:
         if self._adapter is None:
             if direction != Direction.LONG:
@@ -402,7 +405,12 @@ class Executor:
                 decision=decision, decision_id=decision_id, usdt_balance=available_margin,
             )
 
-        notional = available_margin * decision.position_size_pct
+        notional = entry_notional_usdt(
+            margin=available_margin,
+            position_size_pct=decision.position_size_pct,
+            leverage=leverage,
+            trading_product=trading_product,
+        )
         res = await self._adapter.open_position(
             symbol=self.symbol, direction=direction, notional_usdt=notional, price=price,
         )
@@ -421,7 +429,7 @@ class Executor:
             stop_loss=Decimal(str(decision.stop_loss)) if decision.stop_loss else None,
             take_profit=Decimal(str(decision.take_profit)) if decision.take_profit else None,
             order_id_open=res.order_id,
-            leverage=Decimal("1"),
+            leverage=Decimal(str(leverage)),
             margin_mode="isolated",
         )
         self.session.add(trade)

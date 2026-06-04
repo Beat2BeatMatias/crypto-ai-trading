@@ -1095,3 +1095,23 @@ def test_fmt_when_value_is_numeric_without_spec_should_return_str():
 
     # THEN returns string representation
     assert result == "55.0"
+
+
+def test_format_atr_sl_range_line_futures_shows_long_and_short():
+    line = ContextBuilder._format_atr_sl_range_line({
+        "atr_ref_min": 200,
+        "atr_ref_max": 1000,
+        "trading_product": "futures",
+    })
+    assert "LONG" in line and "SHORT" in line
+    assert "arriba del precio" in line
+
+
+def test_format_atr_sl_range_line_spot_shows_long_only():
+    line = ContextBuilder._format_atr_sl_range_line({
+        "atr_ref_min": 200,
+        "atr_ref_max": 1000,
+        "trading_product": "spot",
+    })
+    assert "bajo el precio" in line
+    assert "SHORT" not in line

@@ -167,7 +167,7 @@ Verificadas en `trading-engine/risk/risk_gate.py:RiskGate.validate`. `HOLD` siem
 | **R11** | Notional de entrada, SL y TP ≥ `min_notional_usdt` (del símbolo) | Reject `notional … < min_notional`. |
 | **R12** | `leverage ≤ max_leverage` | Reject `leverage X > max Y`. |
 | **R13** | Precio de liquidación más allá del SL por ≥ `liquidation_buffer_atr × ATR` | Reject `liquidation too close to SL`. Si `liquidation_price` es null, no evalúa. |
-| **R14** | `notional ≤ available_margin` | Reject `insufficient available margin`. |
+| **R14** | `notional / leverage ≤ available_margin` (margen inicial; en spot `leverage=1`) | Reject `insufficient available margin`. |
 | **R15** | `\|funding_rate\| ≤ funding_rate_max_pct` | Reject `funding rate exceeds max`. |
 
 > ✅ `main.py` calcula `daily_pnl_pct` y `total_drawdown_pct` reales en cada tick mediante `_compute_risk_metrics()` (portfolio USDT + BTC×precio, anclado a `drawdown_reset_ts`).

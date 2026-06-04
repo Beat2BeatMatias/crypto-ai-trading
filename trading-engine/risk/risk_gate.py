@@ -1,6 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import structlog
+from shared.notional_sizing import (
+    entry_notional_usdt,
+    estimate_qty_btc,
+    r11_infeasible_reason,
+    sl_exit_notional_usdt,
+    tp_exit_notional_usdt,
+)
 from shared.schemas import DecisorOutput, DecisorAction, Direction, direction_for_action
 
 logger = structlog.get_logger()
@@ -121,27 +128,54 @@ class RiskGate:
                 "R15", f"funding rate {funding_rate} exceeds max {funding_rate_max_pct}",
             )
 
-        notional_usdt = margin * decision.position_size_pct
+        infeasible = r11_infeasible_reason(
+            margin=margin,
+            max_position_pct=self.max_position_pct,
+            min_notional_usdt=self.min_notional_usdt,
+            leverage=leverage,
+            trading_product=trading_product,
+            price=current_price,
+            direction=direction,
+            stop_loss=decision.stop_loss,
+            take_profit=decision.take_profit,
+        )
+        if infeasible:
+            return self._reject("R11", infeasible)
+
+        notional_usdt = entry_notional_usdt(
+            margin=margin,
+            position_size_pct=decision.position_size_pct,
+            leverage=leverage,
+            trading_product=trading_product,
+        )
         if notional_usdt < self.min_notional_usdt:
             return self._reject(
                 "R11",
                 f"notional {notional_usdt:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT",
             )
 
-        qty_btc_est = notional_usdt / current_price if current_price > 0 else 0.0
-        _SL_LIMIT_SLIPPAGE = 0.9985
+        qty_btc_est = estimate_qty_btc(
+            margin=margin,
+            position_size_pct=decision.position_size_pct,
+            price=current_price,
+            leverage=leverage,
+            trading_product=trading_product,
+        )
         if qty_btc_est > 0 and decision.stop_loss is not None:
-            if direction == Direction.LONG:
-                sl_notional = qty_btc_est * decision.stop_loss * _SL_LIMIT_SLIPPAGE
-            else:
-                sl_notional = qty_btc_est * decision.stop_loss
+            sl_notional = sl_exit_notional_usdt(
+                qty_btc=qty_btc_est,
+                stop_loss=decision.stop_loss,
+                direction=direction,
+            )
             if sl_notional < self.min_notional_usdt:
                 return self._reject(
                     "R11",
                     f"notional SL {sl_notional:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT",
                 )
         if qty_btc_est > 0 and decision.take_profit is not None:
-            tp_notional = qty_btc_est * decision.take_profit
+            tp_notional = tp_exit_notional_usdt(
+                qty_btc=qty_btc_est, take_profit=decision.take_profit,
+            )
             if tp_notional < self.min_notional_usdt:
                 return self._reject(
                     "R11",
@@ -206,7 +240,8 @@ class RiskGate:
             if direction == Direction.SHORT and liquidation_price < decision.stop_loss + buffer:
                 return self._reject("R13", "liquidation too close to SL (SHORT)")
 
-        required_margin = notional_usdt
+        lev = max(leverage, 1.0)
+        required_margin = notional_usdt / lev
         if required_margin > margin + 1e-9:
             return self._reject("R14", "insufficient available margin")
 

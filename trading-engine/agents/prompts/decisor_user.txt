@@ -71,7 +71,7 @@ BLOQUE I — CONFIG RIESGO (fuente de verdad de parámetros numéricos)
 ════════════════════════════════════════════
 max_position_pct:         {max_position_pct}     (cap R1)
 min_position_size:        {min_position_size}   (piso de sizing)
-min_notional_usdt:        {binance_min_notional_usdt:.2f} USDT  → position_size_pct mínimo operativo: {min_position_size_pct_notional:.4f}  (R11 — con {usdt_available:.2f} USDT disponibles; elegir menos provoca rechazo por filtro NOTIONAL de Binance)
+min_notional_usdt:        {binance_min_notional_usdt:.2f} USDT  → position_size_pct mínimo entrada: {min_position_size_pct_notional:.4f}  (R11 — margen {usdt_available:.2f} USDT × leverage {notional_leverage:.0f}x en futuros; patas SL/TP exigen más % si TP/SL están lejos)
 max_simultaneous_trades:  {max_simultaneous_trades}       (R8)
 daily_stop_pct:           {daily_stop_pct:.1f}%  (R9 — llevamos {pnl_today_pct:+.2f}% hoy)
 min_rr_ratio:             {min_rr_ratio}      (R5)
@@ -80,7 +80,9 @@ fees round-trip:          {roundtrip_fee_pct:.4f}%  (R10 — 0%=testnet)
 min_fees_to_tp_ratio:     {min_fees_to_tp_ratio}×
 min_confluences_buy:      {min_confluences_buy}
 min_confluences_short:    {min_confluences_short}
-cooldown_after_sell_min:  {cooldown_after_sell_min}
+conf_threshold BUY:       TRENDING_UP {conf_threshold_trending_up} | RANGE {conf_threshold_range} | HIGH_VOL {conf_threshold_high_vol}
+conf_threshold SHORT:     TRENDING_DOWN {conf_threshold_short_trending_down} | RANGE {conf_threshold_short_range} | HIGH_VOL {conf_threshold_short_high_vol}
+cooldown_after_sell_min:  {cooldown_after_sell_min}  (tras SELL o cierre, antes de BUY/SHORT)
 
 ════════════════════════════════════════════
 BLOQUE J — PLAYBOOK ACTIVO

@@ -151,7 +151,9 @@ class Decisor:
                      funding_rate: float = 0.0,
                      available_margin: float | None = None,
                      open_position_side: str | None = None,
-                     liquidation_price: float | None = None) -> DecisorOutput:
+                     liquidation_price: float | None = None,
+                     min_notional_usdt: float = 5.0,
+                     max_leverage: float = 1.0) -> DecisorOutput:
 
         playbook = await self.prompt_manager.get_active_playbook()
         playbook_content = playbook.content if playbook else "# No playbook."
@@ -170,6 +172,8 @@ class Decisor:
             available_margin=available_margin,
             open_position_side=open_position_side,
             liquidation_price=liquidation_price,
+            min_notional_usdt=min_notional_usdt,
+            max_leverage=max_leverage,
         )
 
         if ctx.get("playbook"):
@@ -529,6 +533,9 @@ def _apply_sizing_from_ctx(
         max_position_pct=max_position_pct,
         min_position_size=float(calibration.get("min_position_size", 0.005)),
         min_position_size_pct_notional=float(ctx.get("min_position_size_pct_notional", 0)),
+        min_notional_usdt=float(ctx.get("binance_min_notional_usdt", 5.0)),
+        leverage=float(ctx.get("max_leverage", 1.0)),
+        trading_product=str(ctx.get("trading_product", "spot")),
     )
 
 

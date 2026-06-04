@@ -38,6 +38,7 @@ from agents.confluence_registry import (
     render_registry_block,
 )
 from agents.lesson_normalizer import format_block_k_lessons
+from shared.notional_sizing import effective_notional_leverage, min_position_size_pct_for_entry
 
 
 _ALL_TIMEFRAMES = list(CANONICAL_TIMEFRAMES)
@@ -79,7 +80,9 @@ class ContextBuilder:
                     funding_rate: float = 0.0,
                     available_margin: float | None = None,
                     open_position_side: str | None = None,
-                    liquidation_price: float | None = None) -> dict[str, Any]:
+                    liquidation_price: float | None = None,
+                    min_notional_usdt: float = 5.0,
+                    max_leverage: float = 1.0) -> dict[str, Any]:
 
         cal = calibration or {}
 
@@ -280,11 +283,16 @@ class ContextBuilder:
         expected_holding_max = cal.get("expected_holding_max_min", 240)
         min_position_size = cal.get("min_position_size", 0.005)
 
-        # R11: piso de position_size_pct para que el notional >= min_notional_usdt.
-        # El LLM no conoce este filtro de Binance; exponerlo evita rechazos silenciosos.
-        _binance_min_notional = 5.0
-        min_position_size_pct_notional = (
-            _binance_min_notional / usdt_balance if usdt_balance > 0 else max_position_pct
+        # R11: piso de position_size_pct para notional de entrada (incl. leverage en futuros).
+        margin_base = available_margin if available_margin is not None else usdt_balance
+        _lev = effective_notional_leverage(
+            trading_product=trading_product, leverage=max_leverage,
+        )
+        min_position_size_pct_notional = min_position_size_pct_for_entry(
+            min_notional_usdt=min_notional_usdt,
+            margin=margin_base,
+            leverage=max_leverage,
+            trading_product=trading_product,
         )
 
         # ------------------------------------------------------------------ #
@@ -474,12 +482,29 @@ class ContextBuilder:
             "min_fees_to_tp_ratio": min_fees_to_tp,
             "min_confluences_buy": min_confluences,
             "min_confluences_short": min_confluences_short,
+            "conf_threshold_trending_up": cal.get("conf_threshold_trending_up", 0.60),
+            "conf_threshold_range": cal.get("conf_threshold_range", 0.70),
+            "conf_threshold_high_vol": cal.get("conf_threshold_high_vol", 0.80),
+            "conf_threshold_short_trending_down": cal.get(
+                "conf_threshold_short_trending_down",
+                cal.get("conf_threshold_trending_up", 0.60),
+            ),
+            "conf_threshold_short_range": cal.get(
+                "conf_threshold_short_range",
+                cal.get("conf_threshold_range", 0.70),
+            ),
+            "conf_threshold_short_high_vol": cal.get(
+                "conf_threshold_short_high_vol",
+                cal.get("conf_threshold_high_vol", 0.80),
+            ),
             "cooldown_after_sell_min": cooldown_min,
             "adj_spread_threshold_pct": adj_spread_threshold,
             "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
             "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
-            "binance_min_notional_usdt": _binance_min_notional,
+            "binance_min_notional_usdt": min_notional_usdt,
             "min_position_size_pct_notional": min_position_size_pct_notional,
+            "max_leverage": max_leverage,
+            "notional_leverage": _lev,
             # slippage_cushion_pct: expuesto para que R10 en el prompt del Decisor
             # incluya el mismo término que aplica el Risk Gate (2×max_slippage_pct×100).
             "slippage_cushion_pct": float(cal.get("max_slippage_pct", 0.003)) * 2 * 100,
@@ -734,9 +759,19 @@ class ContextBuilder:
             f"  Low  24h: ${ctx['block_d_low_24h']:,.0f}  {dist(ctx['block_d_low_24h'])}",
             f"  Bid wall: ${ctx['bid_wall_price']:,.0f} ({ctx['bid_wall_size']:.1f} BTC)  {dist(ctx['bid_wall_price'])}",
             f"  Ask wall: ${ctx['ask_wall_price']:,.0f} ({ctx['ask_wall_size']:.1f} BTC)  {dist(ctx['ask_wall_price'])}",
-            f"  ATR SL válido: ${ctx['atr_ref_min']:.0f}–${ctx['atr_ref_max']:.0f} bajo el precio",
+            self._format_atr_sl_range_line(ctx),
         ]
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_atr_sl_range_line(ctx: dict) -> str:
+        lo, hi = ctx["atr_ref_min"], ctx["atr_ref_max"]
+        if str(ctx.get("trading_product", "spot")).lower() == "futures":
+            return (
+                f"  ATR SL válido (R4): LONG ${lo:.0f}–${hi:.0f} bajo precio"
+                f" | SHORT ${lo:.0f}–${hi:.0f} arriba del precio"
+            )
+        return f"  ATR SL válido: ${lo:.0f}–${hi:.0f} bajo el precio"
 
     def _render_orderbook_text(self, ob: OrderBookSnapshot | None,
                                ctx: dict) -> str:
