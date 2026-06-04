@@ -168,6 +168,24 @@ const FIELD_DEFS = {
         type: "slider", min: 24, max: 168, step: 24, unit: "h",
         format: v => `${v}h`, parse: parseInt,
     },
+    confluence_promotion_min_occurrences: {
+        label: "Promoción confluencias — ocurrencias mín.",
+        description: "Ocurrencias del mismo pattern_tag para que el Supervisor promueva automáticamente a catálogo K–Z (regla P1). La promoción manual en /confluence no exige este umbral.",
+        type: "slider", min: 2, max: 10, step: 1, unit: "veces",
+        format: v => String(v), parse: parseInt,
+    },
+    confluence_promotion_window_days: {
+        label: "Promoción confluencias — ventana (días)",
+        description: "Días hacia atrás en los que se cuentan ocurrencias para promoción automática (regla P1).",
+        type: "slider", min: 3, max: 30, step: 1, unit: "días",
+        format: v => String(v), parse: parseInt,
+    },
+    confluence_registry_max_active: {
+        label: "Confluencias promovidas — máximo activas",
+        description: "Tope de letras K–Z activas en el catálogo. Si está lleno, /confluence devuelve max_active_reached al promover; desactivá una entrada o subí este valor.",
+        type: "slider", min: 1, max: 18, step: 1, unit: "letras",
+        format: v => String(v), parse: parseInt,
+    },
     llm_timeout_sec: {
         label: "Timeout LLM",
         description: "Segundos máximos de espera por respuesta del LLM antes de pasar al fallback.",
@@ -499,8 +517,11 @@ const GLOBAL_GROUPS = [
             "postmortem_max_per_tick",
             "block_k_max_lines",
             "block_k_window_hours",
+            "confluence_promotion_min_occurrences",
+            "confluence_promotion_window_days",
+            "confluence_registry_max_active",
         ],
-        note: "Encadenado a Outcome Attribution. Ventana compartida con `outcome_attribution_window_hours`.",
+        note: "Encadenado a Outcome Attribution. Promoción K–Z: umbrales automáticos (Supervisor) y tope de activas (también aplica a promoción manual en /confluence).",
     },
     {
         title: "Scheduler",
@@ -572,8 +593,7 @@ const FUTURES_GROUP = {
 const INTERNAL_KEYS = new Set([
     "drawdown_reset_ts", "live_since_ts", "supervisor_run_now",
     "engine_paused", "engine_pause_reason", "pending_execute", "fallback_provider",
-    "postmortem_interval_min", "confluence_promotion_min_occurrences",
-    "confluence_promotion_window_days", "confluence_registry_max_active",
+    "postmortem_interval_min",
     "peso_timeframe_partial", "peso_timeframe_minimal",
     "adj_antipattern_penalty", "adj_orderbook_penalty", "adj_orderbook_ratio",
     "factor_conf_60", "factor_conf_70", "factor_conf_80", "factor_conf_90",
