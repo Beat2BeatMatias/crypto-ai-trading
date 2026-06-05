@@ -371,6 +371,9 @@ async def run() -> None:
             min_rr_ratio = await store.get_typed(ConfigKey.MIN_RR_RATIO)
             sl_atr_multiplier = await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER)
             max_drawdown_pct = await store.get_typed(ConfigKey.MAX_DRAWDOWN_PCT)
+            drawdown_protection_enabled = await store.get_typed(
+                ConfigKey.DRAWDOWN_PROTECTION_ENABLED,
+            )
             max_slippage_pct = await store.get_typed(ConfigKey.MAX_SLIPPAGE_PCT)
             cb.update_thresholds(daily_stop_pct=daily_stop, max_drawdown_pct=max_drawdown_pct)
             calibration = {
@@ -479,7 +482,11 @@ async def run() -> None:
                     s, usdt, btc_balance=btc
                 )
                 prev_paused = cb.engine_paused
-                state = cb.evaluate(daily_pnl_pct=daily_pnl_frac, total_drawdown_pct=total_drawdown_frac)
+                state = cb.evaluate(
+                    daily_pnl_pct=daily_pnl_frac,
+                    total_drawdown_pct=total_drawdown_frac,
+                    drawdown_protection_enabled=drawdown_protection_enabled,
+                )
                 if state.daily_stop_triggered and not prev_paused:
                     await notify(TelegramEvent.DAILY_STOP, {
                         "daily_pnl": f"{daily_pnl_frac:.2%}",
@@ -608,6 +615,7 @@ async def run() -> None:
                 sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
                 min_notional_usdt=min_notional,
                 max_leverage=leverage,
+                drawdown_protection_enabled=drawdown_protection_enabled,
             )
             verdict = gate.validate(
                 decision=decision, current_price=current_price, atr_ref=atr,

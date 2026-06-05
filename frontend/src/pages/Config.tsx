@@ -131,9 +131,14 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: -0.10, max: -0.01, step: 0.01, unit: "%",
     format: v => `${(v * 100).toFixed(0)}%`, parse: parseFloat,
   },
+  drawdown_protection_enabled: {
+    label: "Protección por drawdown",
+    description: "Si está desactivada, no se rechazan entradas por drawdown (Risk Gate R0) ni se pausa el engine por drawdown en el circuit breaker. El stop diario y el kill switch manual siguen activos.",
+    type: "toggle",
+  },
   max_drawdown_pct: {
-    label: "Drawdown máximo (circuit breaker)",
-    description: "Si el drawdown total desde el pico supera este valor, activa el kill switch automáticamente.",
+    label: "Drawdown máximo",
+    description: "Límite de drawdown desde el pico (solo aplica con «Protección por drawdown» activa). Tras 2 ticks consecutivos en breach, el circuit breaker pausa el engine.",
     type: "slider", min: -0.30, max: -0.05, step: 0.01, unit: "%",
     format: v => `${(v * 100).toFixed(0)}%`, parse: parseFloat,
   },
@@ -574,7 +579,8 @@ const MARKET_GROUPS: ConfigGroup[] = [
     keys: [
       "sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
       "max_position_pct", "min_position_size", "risk_per_trade_pct", "max_simultaneous_trades",
-      "daily_stop_pct", "max_drawdown_pct", "max_slippage_pct", "atr_timeframe",
+      "drawdown_protection_enabled", "daily_stop_pct", "max_drawdown_pct",
+      "max_slippage_pct", "atr_timeframe",
       "min_roundtrip_fee_pct",
     ],
     note: "Enforcement Risk Gate R1–R11 (spot) y R12–R15 (futuros). En perp, max_position_pct y risk aplican sobre margen disponible.",

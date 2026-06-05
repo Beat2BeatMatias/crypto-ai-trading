@@ -20,6 +20,7 @@ class ConfigKey(str, Enum):
     MAX_SIMULTANEOUS_TRADES = "max_simultaneous_trades"
     DAILY_STOP_PCT = "daily_stop_pct"
     MAX_DRAWDOWN_PCT = "max_drawdown_pct"
+    DRAWDOWN_PROTECTION_ENABLED = "drawdown_protection_enabled"
     MAX_SLIPPAGE_PCT = "max_slippage_pct"
     DEFAULT_RR_RATIO = "default_rr_ratio"
     DECISOR_INTERVAL_MIN = "decisor_interval_min"
@@ -123,6 +124,10 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.MAX_SIMULTANEOUS_TRADES: _Default("2", "int", "Max concurrent open positions"),
     ConfigKey.DAILY_STOP_PCT: _Default("-0.03", "float", "Daily P&L stop"),
     ConfigKey.MAX_DRAWDOWN_PCT: _Default("-0.10", "float", "Total drawdown limit"),
+    ConfigKey.DRAWDOWN_PROTECTION_ENABLED: _Default(
+        "true", "bool",
+        "Enforce max drawdown via Risk Gate (R0) and CircuitBreaker pause",
+    ),
     ConfigKey.MAX_SLIPPAGE_PCT: _Default("0.003", "float", "Max acceptable slippage"),
     ConfigKey.DEFAULT_RR_RATIO: _Default("2.0", "float", "Default take-profit ratio"),
     ConfigKey.DECISOR_INTERVAL_MIN: _Default("5", "int", "Decisor frequency in minutes"),

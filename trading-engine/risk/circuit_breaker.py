@@ -64,16 +64,25 @@ class CircuitBreaker:
 
     # ── Public interface ─────────────────────────────────────────────────────
 
-    def evaluate(self, *, daily_pnl_pct: float, total_drawdown_pct: float) -> CircuitState:
+    def evaluate(
+        self,
+        *,
+        daily_pnl_pct: float,
+        total_drawdown_pct: float,
+        drawdown_protection_enabled: bool = True,
+    ) -> CircuitState:
         """Evalúa métricas financieras y pausa el engine si se superan los límites."""
         daily = daily_pnl_pct <= self.daily_stop_pct
-        kill = total_drawdown_pct <= self.max_drawdown_pct
+        kill = (
+            drawdown_protection_enabled
+            and total_drawdown_pct <= self.max_drawdown_pct
+        )
 
         if daily and not self.engine_paused:
             logger.warning("circuit.daily_stop_triggered", pnl_pct=daily_pnl_pct)
             self._pause(PauseReason.DAILY_STOP)
 
-        if kill:
+        if drawdown_protection_enabled and total_drawdown_pct <= self.max_drawdown_pct:
             self._drawdown_consecutive_breaches += 1
             logger.warning(
                 "circuit.drawdown_breach",

@@ -34,6 +34,23 @@ def test_drawdown_pauses_engine_after_consecutive_threshold():
     assert cb.engine_paused is True
 
 
+def test_drawdown_protection_disabled_skips_pause_and_kill_state():
+    cb = CircuitBreaker(
+        daily_stop_pct=-0.03,
+        max_drawdown_pct=-0.10,
+        drawdown_consecutive_threshold=1,
+    )
+    state = cb.evaluate(
+        daily_pnl_pct=0.0,
+        total_drawdown_pct=-0.50,
+        drawdown_protection_enabled=False,
+    )
+
+    assert state.kill_switch_triggered is False
+    assert cb.engine_paused is False
+    assert cb._drawdown_consecutive_breaches == 0
+
+
 def test_drawdown_counter_resets_when_drawdown_recovers():
     cb = CircuitBreaker(daily_stop_pct=-0.03, max_drawdown_pct=-0.10, drawdown_consecutive_threshold=2)
     # GIVEN: una breach, luego recovery

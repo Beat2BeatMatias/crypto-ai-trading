@@ -18,6 +18,7 @@ def _make_gate(
     max_drawdown_pct: float = -0.20,
     max_slippage_pct: float = 0.005,
     taker_fee_pct: float = 0.001,
+    drawdown_protection_enabled: bool = True,
 ) -> RiskGate:
     return RiskGate(
         max_position_pct=max_position_pct,
@@ -26,6 +27,7 @@ def _make_gate(
         max_drawdown_pct=max_drawdown_pct,
         max_slippage_pct=max_slippage_pct,
         taker_fee_pct=taker_fee_pct,
+        drawdown_protection_enabled=drawdown_protection_enabled,
     )
 
 
@@ -239,6 +241,17 @@ def test_total_drawdown_breach_rejects_buy():
     # THEN it is rejected
     assert verdict.passed is False
     assert "max_drawdown" in verdict.reason
+
+
+def test_total_drawdown_breach_ignored_when_protection_disabled():
+    gate = _make_gate(max_drawdown_pct=-0.20, drawdown_protection_enabled=False)
+    decision = _buy_decision(stop_loss=66500.0, take_profit=69500.0)
+    kwargs = {**_COMMON_KWARGS, "total_drawdown_pct": -0.50}
+
+    verdict = gate.validate(decision=decision, **kwargs)
+
+    assert verdict.passed is True
+    assert verdict.rule_id != "R0_drawdown"
 
 
 def test_hold_always_passes_even_with_kill_switch_and_daily_breach():

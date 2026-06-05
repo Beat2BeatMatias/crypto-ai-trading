@@ -26,11 +26,13 @@ class RiskGate:
                  max_slippage_pct: float, taker_fee_pct: float,
                  min_rr_ratio: float = 1.3, sl_atr_multiplier: float = 0.3,
                  sl_atr_max_multiplier: float = 1.5,
-                 min_notional_usdt: float = 5.0, max_leverage: float = 1.0):
+                 min_notional_usdt: float = 5.0, max_leverage: float = 1.0,
+                 drawdown_protection_enabled: bool = True):
         self.max_position_pct = max_position_pct
         self.max_simultaneous_trades = max_simultaneous_trades
         self.daily_stop_pct = daily_stop_pct
         self.max_drawdown_pct = max_drawdown_pct
+        self.drawdown_protection_enabled = drawdown_protection_enabled
         self.max_slippage_pct = max_slippage_pct
         self.taker_fee_pct = taker_fee_pct
         self.min_rr_ratio = min_rr_ratio
@@ -71,7 +73,10 @@ class RiskGate:
         if decision.action == DecisorAction.HOLD:
             return RiskVerdict(passed=True)
 
-        if total_drawdown_pct <= self.max_drawdown_pct:
+        if (
+            self.drawdown_protection_enabled
+            and total_drawdown_pct <= self.max_drawdown_pct
+        ):
             return self._reject(
                 "R0_drawdown",
                 f"max_drawdown breached: {total_drawdown_pct:.4f} <= {self.max_drawdown_pct}",
