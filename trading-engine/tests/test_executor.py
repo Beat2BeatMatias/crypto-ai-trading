@@ -564,6 +564,35 @@ async def test_execute_buy_exchange_error_can_be_persisted_as_rejected_reason(se
     assert d.executed is False
 
 
+async def test_execute_open_short_keeps_trade_when_brackets_fail(session):
+    decision_id = uuid.uuid4()
+    await _insert_decision(session, decision_id)
+
+    class _FailingBracketAdapter(_FakeFuturesAdapter):
+        async def place_brackets(self, **kwargs):
+            raise RuntimeError('binance {"code":-4120,"msg":"use Algo Order API"}')
+
+    adapter = _FailingBracketAdapter(entry_price=100000.0)
+    executor = Executor(MagicMock(), session, symbol="BTC/USDT:USDT", adapter=adapter)
+
+    trade = await executor.execute_open(
+        direction=Direction.SHORT,
+        decision=_make_short_decision(),
+        decision_id=decision_id,
+        available_margin=1000.0,
+        price=100000.0,
+    )
+
+    assert trade.status == "open"
+    assert trade.order_id_open == "FUT-OPEN-1"
+    assert trade.order_id_sl is None
+    d = await session.get(Decision, decision_id)
+    assert d is not None
+    assert d.executed is True
+    assert d.rejected_reason is not None
+    assert d.rejected_reason.startswith("brackets_failed:")
+
+
 async def test_execute_open_short_persists_short_trade(session):
     decision_id = uuid.uuid4()
     await _insert_decision(session, decision_id)

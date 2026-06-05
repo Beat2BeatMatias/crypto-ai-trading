@@ -698,10 +698,13 @@ async def run() -> None:
                             )
             except Exception as e:
                 logger.error("execution.error", error=str(e))
-                # Persistir el error de ejecución en la decisión para que sea visible en el dashboard.
                 try:
                     error_msg = str(e)
-                    rejected_label = f"execution_error: {error_msg[:160]}"
+                    await s.refresh(latest_d)
+                    if latest_d.trade_id is not None:
+                        rejected_label = f"brackets_failed: {error_msg[:160]}"
+                    else:
+                        rejected_label = f"execution_error: {error_msg[:160]}"
                     latest_d.rejected_reason = rejected_label
                     await s.commit()
                 except Exception as persist_err:

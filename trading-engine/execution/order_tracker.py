@@ -3,6 +3,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 import structlog
+from execution.futures_algo_orders import cancel_conditional_algo_order
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Trade, Ohlcv
@@ -367,9 +368,20 @@ class OrderTracker:
         for order_id in (trade.order_id_sl, trade.order_id_tp):
             if not order_id:
                 continue
+            cancelled = False
             try:
-                await self.exchange.cancel_order(order_id, self.symbol)
+                await self.exchange.cancel_order(
+                    order_id, self.symbol, params={"trigger": True},
+                )
+                cancelled = True
+            except Exception:
+                try:
+                    await cancel_conditional_algo_order(
+                        self.exchange, symbol=self.symbol, algo_id=order_id,
+                    )
+                    cancelled = True
+                except Exception:
+                    pass
+            if cancelled:
                 logger.info("order_tracker.bracket_order_cancelled",
                             trade_id=str(trade.id), order_id=order_id)
-            except Exception:
-                pass

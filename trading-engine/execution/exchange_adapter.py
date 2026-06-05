@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from execution.futures_algo_orders import cancel_conditional_algo_order, place_conditional_algo_order
 from shared.schemas import Direction
 
 
@@ -248,20 +249,28 @@ class FuturesAdapter:
         close_side = "sell" if direction == Direction.LONG else "buy"
         qty_prec = float(client.amount_to_precision(symbol, qty))
         sl_id = tp_id = None
-        bracket_params = {"reduceOnly": True, "workingType": "MARK_PRICE"}
         if stop_loss is not None:
-            o = await client.create_order(
-                symbol, "STOP_MARKET", close_side, qty_prec, None,
-                {**bracket_params, "stopPrice": stop_loss},
+            sl_id = await place_conditional_algo_order(
+                client,
+                symbol=symbol,
+                side=close_side,
+                order_type="STOP_MARKET",
+                quantity=qty_prec,
+                trigger_price=stop_loss,
             )
-            sl_id = str(o["id"])
         if take_profit is not None:
-            o = await client.create_order(
-                symbol, "TAKE_PROFIT_MARKET", close_side, qty_prec, None,
-                {**bracket_params, "stopPrice": take_profit},
+            tp_id = await place_conditional_algo_order(
+                client,
+                symbol=symbol,
+                side=close_side,
+                order_type="TAKE_PROFIT_MARKET",
+                quantity=qty_prec,
+                trigger_price=take_profit,
             )
-            tp_id = str(o["id"])
         return BracketResult(order_id_sl=sl_id, order_id_tp=tp_id)
+
+    async def cancel_bracket_order(self, symbol: str, order_id: str) -> None:
+        await cancel_conditional_algo_order(self.build_client(), symbol=symbol, algo_id=order_id)
 
     async def fetch_balance(self) -> BalanceView:
         client = self.build_client()

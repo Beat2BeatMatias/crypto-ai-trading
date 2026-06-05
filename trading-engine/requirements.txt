@@ -11,7 +11,7 @@ pydantic-settings==2.7.0
 uvloop==0.21.0
 
 # Exchange & indicators
-ccxt==4.4.40
+ccxt>=4.5.26,<5
 pandas==2.2.3
 numpy==1.26.4
 

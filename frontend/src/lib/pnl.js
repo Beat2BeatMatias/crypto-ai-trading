@@ -41,6 +41,13 @@ export function tradeDirection(trade) {
         return "SHORT";
     return "LONG";
 }
+export function positionDirection(p) {
+    if (p.position_side === "SHORT")
+        return "SHORT";
+    if (p.position_side === "LONG")
+        return "LONG";
+    return "LONG";
+}
 export function computePnlUsdtDirectional(entry, quantity, exitPrice, direction) {
     return computePnlUsdt(entry, quantity, exitPrice, direction === "SHORT" ? "SELL" : "BUY");
 }

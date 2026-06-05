@@ -54,16 +54,27 @@ async def test_spot_min_notional_from_markets():
 
 class _FakeFut:
     options = {"defaultType": "future"}
-    markets = {"BTC/USDT:USDT": {"limits": {"cost": {"min": 100.0}}}}
+    markets = {"BTC/USDT:USDT": {"id": "BTCUSDT", "limits": {"cost": {"min": 100.0}}}}
     calls: list[tuple]
 
     def __init__(self):
         self.calls = []
         self.last: dict = {}
         self.orders: list[dict] = []
+        self.algo_orders: list[dict] = []
+        self._algo_seq = 0
 
     def amount_to_precision(self, symbol, amount):
         return round(amount, 3)
+
+    def price_to_precision(self, symbol, price):
+        return round(price, 2)
+
+    async def load_markets(self):
+        return self.markets
+
+    def market(self, symbol):
+        return self.markets[symbol]
 
     async def create_order(self, symbol, type_, side, amount, price=None, params=None):
         entry = dict(symbol=symbol, type=type_, side=side, amount=amount, params=params or {})
@@ -71,6 +82,12 @@ class _FakeFut:
         self.orders.append(entry)
         self.calls.append(("create_order", type_, side))
         return {"id": f"id{len(self.calls)}", "filled": amount, "average": 100000.0}
+
+    async def fapiPrivatePostAlgoOrder(self, request):
+        self._algo_seq += 1
+        self.algo_orders.append(request)
+        self.calls.append(("algo", request.get("type"), request.get("side")))
+        return {"algoId": 900000 + self._algo_seq, "algoType": "CONDITIONAL", **request}
 
     async def set_leverage(self, lev, symbol):
         self.calls.append(("lev", lev, symbol))
@@ -133,18 +150,21 @@ async def test_futures_close_short_is_reduceonly_buy():
 
 
 @pytest.mark.asyncio
-async def test_futures_brackets_for_short_are_buy_reduceonly():
+async def test_futures_brackets_for_short_use_algo_api():
     fake = _FakeFut()
     a = FuturesAdapter(client=fake)
     res = await a.place_brackets(
         symbol="BTC/USDT:USDT", direction=Direction.SHORT,
         qty=0.002, stop_loss=102000.0, take_profit=96000.0,
     )
-    types = {o["type"] for o in fake.orders}
+    assert len(fake.algo_orders) == 2
+    types = {o["type"] for o in fake.algo_orders}
     assert types == {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
-    assert all(o["side"] == "buy" for o in fake.orders)
-    assert all(o["params"].get("reduceOnly") is True for o in fake.orders)
-    assert res.order_id_sl and res.order_id_tp
+    assert all(o["side"] == "BUY" for o in fake.algo_orders)
+    assert all(o["reduceOnly"] == "true" for o in fake.algo_orders)
+    assert all(o["algoType"] == "CONDITIONAL" for o in fake.algo_orders)
+    assert res.order_id_sl == "900001"
+    assert res.order_id_tp == "900002"
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import Position, Trade
+from position_payload import (
+    build_position_payload,
+    resolve_leverage,
+    resolve_liquidation_price,
+    resolve_position_direction,
+)
 from shared.pnl import compute_pnl_usdt_directional, compute_pnl_pct_directional
 
 router = APIRouter()
@@ -31,6 +37,8 @@ class PositionOut(BaseModel):
     position_side: str | None = "LONG"
     leverage: float | None = None
     liquidation_price: float | None = None
+    order_id_sl: str | None = None
+    order_id_tp: str | None = None
 
 async def _session(request: Request) -> AsyncSession:
     async with request.app.state.session_factory() as s:
@@ -39,11 +47,7 @@ async def _session(request: Request) -> AsyncSession:
 def _to_out(r: Position, trade: Trade | None) -> PositionOut:
     entry = float(r.entry_price)
     qty = float(r.quantity_btc)
-    direction = (
-        getattr(r, "position_side", None)
-        or (getattr(trade, "position_side", None) if trade else None)
-        or "LONG"
-    )
+    direction = resolve_position_direction(r, trade)
     sl = float(trade.stop_loss) if trade and trade.stop_loss else None
     tp = float(trade.take_profit) if trade and trade.take_profit else None
 
@@ -70,8 +74,10 @@ def _to_out(r: Position, trade: Trade | None) -> PositionOut:
         ),
         tp_pnl_pct=compute_pnl_pct_directional(entry=entry, exit_price=tp, direction=direction),
         position_side=direction,
-        leverage=float(r.leverage) if getattr(r, "leverage", None) else None,
-        liquidation_price=float(r.liquidation_price) if getattr(r, "liquidation_price", None) else None,
+        leverage=resolve_leverage(r, trade),
+        liquidation_price=resolve_liquidation_price(r, trade),
+        order_id_sl=trade.order_id_sl if trade else None,
+        order_id_tp=trade.order_id_tp if trade else None,
     )
 
 @router.get("/positions", response_model=list[PositionOut])

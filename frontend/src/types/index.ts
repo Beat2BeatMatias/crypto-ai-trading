@@ -66,6 +66,8 @@ export interface Position {
   position_side?: PositionSide;
   leverage?: number | null;
   liquidation_price?: number | null;
+  order_id_sl?: string | null;
+  order_id_tp?: string | null;
 }
 
 export interface Decision {

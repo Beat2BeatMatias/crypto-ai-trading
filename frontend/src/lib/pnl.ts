@@ -50,6 +50,12 @@ export function tradeDirection(trade: { position_side?: string; side?: string })
   return "LONG";
 }
 
+export function positionDirection(p: { position_side?: string | null }): PositionSide {
+  if (p.position_side === "SHORT") return "SHORT";
+  if (p.position_side === "LONG") return "LONG";
+  return "LONG";
+}
+
 export function computePnlUsdtDirectional(
   entry: number,
   quantity: number,

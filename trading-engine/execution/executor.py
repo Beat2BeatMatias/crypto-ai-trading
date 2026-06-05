@@ -440,6 +440,7 @@ class Executor:
             quantity_btc=trade.quantity_btc,
             entry_price=trade.entry_price,
             position_side=direction.value,
+            leverage=trade.leverage,
             status="open",
             opened_at=trade.ts_open,
         ))
@@ -449,18 +450,30 @@ class Executor:
             d.trade_id = trade.id
         await self.session.commit()
 
-        brackets = await self._adapter.place_brackets(
-            symbol=self.symbol,
-            direction=direction,
-            qty=res.filled_qty,
-            stop_loss=decision.stop_loss,
-            take_profit=decision.take_profit,
-        )
-        if brackets.order_id_sl or brackets.order_id_tp:
-            await self.session.refresh(trade)
-            trade.order_id_sl = brackets.order_id_sl
-            trade.order_id_tp = brackets.order_id_tp
-            await self.session.commit()
+        try:
+            brackets = await self._adapter.place_brackets(
+                symbol=self.symbol,
+                direction=direction,
+                qty=res.filled_qty,
+                stop_loss=decision.stop_loss,
+                take_profit=decision.take_profit,
+            )
+            if brackets.order_id_sl or brackets.order_id_tp:
+                await self.session.refresh(trade)
+                trade.order_id_sl = brackets.order_id_sl
+                trade.order_id_tp = brackets.order_id_tp
+                await self.session.commit()
+        except Exception as e:
+            logger.error(
+                "executor.brackets_failed",
+                trade_id=str(trade.id),
+                direction=direction.value,
+                error=str(e),
+            )
+            d = await self.session.get(Decision, decision_id)
+            if d is not None:
+                d.rejected_reason = f"brackets_failed: {str(e)[:160]}"
+                await self.session.commit()
         await self.session.refresh(trade)
         logger.info(
             "executor.open_executed",

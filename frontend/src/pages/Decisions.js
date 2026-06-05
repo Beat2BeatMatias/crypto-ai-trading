@@ -31,6 +31,11 @@ function explainRejection(reason) {
         return "El LLM devolvió una respuesta que no pudo parsearse como JSON válido.";
     if (reason.startsWith("llm_error"))
         return "Todos los providers LLM fallaron (rate limit o error) y no se obtuvo decisión.";
+    if (reason.startsWith("brackets_failed")) {
+        if (reason.includes("-4120") || reason.toLowerCase().includes("algo order"))
+            return "La posición se abrió en Binance, pero falló colocar SL/TP en el exchange. Revisá órdenes condicionales en Binance; el guardian software sigue activo.";
+        return "La posición se abrió, pero no se pudieron colocar las órdenes SL/TP en Binance. Ver detalle técnico abajo.";
+    }
     if (reason.startsWith("execution_error")) {
         if (reason.includes("NOTIONAL"))
             return "Binance rechazó la orden porque el monto a operar es menor al mínimo permitido (filtro NOTIONAL). Verificá el balance USDT disponible o el porcentaje de posición configurado.";
@@ -98,6 +103,8 @@ export function Decisions() {
             return "Error LLM";
         if (reason.startsWith("parse_error"))
             return "Error parsing LLM";
+        if (reason.startsWith("brackets_failed"))
+            return "SL/TP no en exchange";
         if (reason.startsWith("execution_error")) {
             if (reason.includes("NOTIONAL"))
                 return "Error NOTIONAL (monto < mínimo Binance)";

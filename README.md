@@ -61,7 +61,9 @@ Solo necesario la primera vez o después de un `git pull` que incluya nuevas mig
 docker-compose run --rm trading-engine alembic upgrade head
 ```
 
-### 4. Levantar todos los servicios
+### 4. Servicios en ejecución
+
+Si en el paso 2 ya corriste `docker-compose up -d`, los contenedores ya están arriba. Para reiniciar sin rebuild:
 
 ```bash
 docker-compose up -d
@@ -157,6 +159,28 @@ RUN echo "X.X.X.X registry.npmjs.org" >> /etc/hosts && \
 ```
 
 **Cuándo volver a hacer esto:** si en el futuro `npm install` vuelve a colgarse, la IP de Cloudflare rotó. Repetir el paso 1 para obtener la nueva IP y actualizar ambos lugares.
+
+---
+
+### Frontend no buildea — error TypeScript en `npm run build`
+
+**Síntoma:** `docker-compose build` falla en el paso `RUN npm run build` del servicio `frontend`, con líneas como `error TSxxxx` en `src/...`.
+
+**Causa:** El build de producción ejecuta `tsc -b` antes de Vite; cualquier error de tipos o import sin usar rompe la imagen.
+
+**Solución:**
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Corregí los errores que reporte `tsc`, luego volvé a construir:
+
+```bash
+docker-compose build frontend && docker-compose up -d frontend
+```
 
 ---
 

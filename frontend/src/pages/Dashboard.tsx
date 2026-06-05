@@ -11,9 +11,10 @@ import {
   actionBadgeClass,
   computePnlPctDirectional,
   computePnlUsdtDirectional,
+  positionDirection,
   sideBadgeClass,
 } from "../lib/pnl";
-import type { PositionSide, TradingContext } from "../types";
+import type { TradingContext } from "../types";
 import { RuntimeMismatchBanner } from "../components/RuntimeMismatchBanner";
 import { TradingContextBadges } from "../components/TradingContextBadges";
 import { FuturesBalanceCard } from "../components/FuturesBalanceCard";
@@ -245,7 +246,7 @@ export function Dashboard() {
           {positions.length === 0
             ? <p className="text-zinc-500 text-sm">Ninguna posición abierta.</p>
             : positions.map(p => {
-                const dir: PositionSide = p.position_side ?? "LONG";
+                const dir = positionDirection(p);
                 const liveCurrentPrice = ticker?.price ?? p.current_price;
                 const currentPnlUsdt = liveCurrentPrice != null
                   ? computePnlUsdtDirectional(p.entry_price, p.quantity_btc, liveCurrentPrice, dir)
@@ -274,8 +275,26 @@ export function Dashboard() {
                       {liveCurrentPrice != null
                         ? `Precio actual $${liveCurrentPrice.toFixed(2)}`
                         : "Precio actual —"}
-                      {p.stop_loss != null && ` · SL $${p.stop_loss.toFixed(2)}`}
-                      {p.take_profit != null && ` · TP $${p.take_profit.toFixed(2)}`}
+                      {p.stop_loss != null && (
+                        <>
+                          {` · SL $${p.stop_loss.toFixed(2)}`}
+                          {!p.order_id_sl && (
+                            <span className="text-amber-400/90" title="SL no está en Binance; solo guardian software">
+                              {" "}(guardian)
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {p.take_profit != null && (
+                        <>
+                          {` · TP $${p.take_profit.toFixed(2)}`}
+                          {!p.order_id_tp && (
+                            <span className="text-amber-400/90" title="TP no está en Binance; solo guardian software">
+                              {" "}(guardian)
+                            </span>
+                          )}
+                        </>
+                      )}
                       {p.liquidation_price != null && (
                         <span className="text-orange-400/90"> · Liq ${p.liquidation_price.toFixed(2)}</span>
                       )}
