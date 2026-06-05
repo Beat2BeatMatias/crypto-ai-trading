@@ -38,7 +38,8 @@ class DecisorOutput(BaseModel):
     action: DecisorAction
     confidence_base: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
     confidence_adjustment: Annotated[float, Field(ge=-0.10, le=0.10)] = 0.0
-    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    # Opcional en JSON del LLM: el prompt pide no calcular confidence; _recompute_confidence lo deriva.
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
     stop_loss: float | None
     take_profit: float | None
     position_size_pct: Annotated[float, Field(ge=0.0, le=0.25)]

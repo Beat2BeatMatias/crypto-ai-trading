@@ -185,6 +185,23 @@ def test_hold_with_expected_holding_min_zero_coerced_to_one():
     assert output.action == DecisorAction.HOLD
 
 
+def test_llm_payload_without_confidence_field_parses_and_recomputes():
+    payload = {
+        "regime": "TRENDING_DOWN",
+        "confluences": ["A", "H"],
+        "action": "HOLD",
+        "confidence_adjustment": 0.05,
+        "stop_loss": None,
+        "take_profit": None,
+        "position_size_pct": 0.0,
+        "reasoning": "HOLD | R:R=1.45.",
+    }
+
+    output = DecisorOutput(**payload)
+
+    assert output.confidence == pytest.approx(0.05)
+
+
 def test_hold_with_expected_holding_min_none_coerced_to_one():
     # GIVEN un payload HOLD donde el LLM retorna expected_holding_min=null
     payload = {
