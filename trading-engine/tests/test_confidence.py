@@ -3,6 +3,7 @@ import pytest
 
 from shared.confidence import (
     apply_server_confidence,
+    clamp_subjective_adjustment,
     compute_confidence_base,
     effective_confluence_count,
     quality_factor,
@@ -83,8 +84,42 @@ def test_apply_server_confidence_overrides_llm_base_and_recomputes_confidence():
     updated, meta = apply_server_confidence(decision, calibration={})
     assert updated.confidence_base == pytest.approx(0.70 * 0.85 * 0.85)
     assert updated.confidence_adjustment == pytest.approx(0.05)
-    assert updated.confidence == pytest.approx(updated.confidence_base + 0.05)
+    assert updated.confidence == pytest.approx(
+        updated.confidence_base * updated.confidence_llm_factor + 0.05,
+    )
     assert "confluences_dropped" not in meta
+
+
+def test_clamp_subjective_adjustment_respects_config_max():
+    assert clamp_subjective_adjustment(0.08, 0.05) == pytest.approx(0.05)
+    assert clamp_subjective_adjustment(-0.12, 0.05) == pytest.approx(-0.05)
+    assert clamp_subjective_adjustment(0.03, 0.10) == pytest.approx(0.03)
+
+
+def test_apply_server_confidence_clamps_adjustment_to_subjective_adj_max():
+    decision = _hold_output(
+        confluences=["B", "C"],
+        confidence_adjustment=0.08,
+    )
+    updated, meta = apply_server_confidence(
+        decision, calibration={"subjective_adj_max": 0.05},
+    )
+    assert updated.confidence_adjustment == pytest.approx(0.05)
+    assert meta["subjective_adj_max"] == pytest.approx(0.05)
+
+
+def test_apply_server_confidence_applies_llm_factor_multiplicatively():
+    decision = _hold_output(
+        confluences=["B", "C"],
+        confidence_llm_factor=0.75,
+        confidence_adjustment=0.02,
+    )
+    updated, meta = apply_server_confidence(decision, calibration={})
+    base = 0.70 * 0.85 * 0.85
+    assert updated.confidence_base == pytest.approx(base)
+    assert updated.confidence_llm_factor == pytest.approx(0.75)
+    assert updated.confidence == pytest.approx(base * 0.75 + 0.02)
+    assert meta["confidence_llm_factor"] == pytest.approx(0.75)
 
 
 def test_hold_trending_down_futures_uses_short_regime_factor():

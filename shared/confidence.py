@@ -13,6 +13,19 @@ from shared.schemas import (
 )
 
 _QUALITY_STRONG_CODES = frozenset({"F", "G"})
+_ABSOLUTE_ADJ_MAX = 0.20
+
+
+def clamp_subjective_adjustment(value: Any, max_adj: float) -> float:
+    """Clamp LLM confidence_adjustment to ±max_adj (config subjective_adj_max)."""
+    if value is None:
+        return 0.0
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    limit = max(0.0, min(_ABSOLUTE_ADJ_MAX, float(max_adj)))
+    return max(-limit, min(limit, v))
 
 _DEFAULT_CALIBRATION: dict[str, float] = {
     "conf_base_0": 0.40,
@@ -165,9 +178,14 @@ def apply_server_confidence(
         )
         meta["confidence_base_inflated"] = inflated_base
     payload = decision.model_dump()
+    max_adj = float((calibration or {}).get("subjective_adj_max", 0.10))
+    adj = clamp_subjective_adjustment(decision.confidence_adjustment, max_adj)
     payload["confidence_base"] = base
-    payload["confidence_adjustment"] = decision.confidence_adjustment
+    payload["confidence_llm_factor"] = decision.confidence_llm_factor
+    payload["confidence_adjustment"] = adj
     updated = DecisorOutput.model_validate(payload)
+    meta["confidence_llm_factor"] = updated.confidence_llm_factor
     meta["confidence_adjustment"] = updated.confidence_adjustment
+    meta["subjective_adj_max"] = max_adj
     meta["confidence"] = updated.confidence
     return updated, meta

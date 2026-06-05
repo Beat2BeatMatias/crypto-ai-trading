@@ -43,6 +43,7 @@ def aggregate_decisor_outputs(outputs: list[DecisorOutput]) -> tuple[DecisorOutp
     regime = MarketRegime(regime_counts.most_common(1)[0][0])
 
     conf_adj = statistics.median([o.confidence_adjustment for o in winners])
+    llm_factor = statistics.median([o.confidence_llm_factor for o in winners])
     base = statistics.median([o.confidence_base for o in winners])
 
     if winner_action in (DecisorAction.BUY, DecisorAction.SHORT):
@@ -58,6 +59,7 @@ def aggregate_decisor_outputs(outputs: list[DecisorOutput]) -> tuple[DecisorOutp
             confluences=confluences,
             action=winner_action,
             confidence_base=base,
+            confidence_llm_factor=llm_factor,
             confidence_adjustment=conf_adj,
             confidence=0.0,
             stop_loss=stop_loss,
@@ -73,6 +75,7 @@ def aggregate_decisor_outputs(outputs: list[DecisorOutput]) -> tuple[DecisorOutp
             confluences=_union_confluences(winners),
             action=DecisorAction.SELL,
             confidence_base=base,
+            confidence_llm_factor=llm_factor,
             confidence_adjustment=conf_adj,
             confidence=0.0,
             stop_loss=None,
@@ -88,6 +91,7 @@ def aggregate_decisor_outputs(outputs: list[DecisorOutput]) -> tuple[DecisorOutp
             confluences=[],
             action=DecisorAction.HOLD,
             confidence_base=base,
+            confidence_llm_factor=llm_factor,
             confidence_adjustment=conf_adj,
             confidence=0.0,
             stop_loss=None,
@@ -114,6 +118,7 @@ def _consensus_hold(action_counts: Counter) -> DecisorOutput:
         confluences=[],
         action=DecisorAction.HOLD,
         confidence_base=0.0,
+        confidence_llm_factor=1.0,
         confidence_adjustment=0.0,
         confidence=0.0,
         stop_loss=None,

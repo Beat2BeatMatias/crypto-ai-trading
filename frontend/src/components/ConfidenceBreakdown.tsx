@@ -18,6 +18,7 @@ export default function ConfidenceBreakdown({
 }: Props) {
   const final = confidence ?? meta?.confidence;
   const base = confidenceBase ?? meta?.confidence_base_computed;
+  const llmFactor = meta?.confidence_llm_factor ?? 1;
   const adj = confidenceAdjustment ?? meta?.confidence_adjustment ?? 0;
   const hasBase = typeof base === "number";
   const hasMeta = meta && (meta.confluence_count != null || meta.quality_factor != null);
@@ -36,6 +37,7 @@ export default function ConfidenceBreakdown({
         {hasBase && (
           <span className="text-zinc-500 text-xs ml-1">
             (base {fmtConfidencePct(base)}
+            {llmFactor !== 1 ? ` ×${llmFactor.toFixed(2)}` : ""}
             {adjLabel ? ` ${adjLabel}` : ""})
           </span>
         )}
@@ -51,6 +53,7 @@ export default function ConfidenceBreakdown({
         {hasBase && (
           <span className="text-xs text-zinc-400">
             = base {fmtConfidencePct(base)}
+            {" × "}{llmFactor.toFixed(2)} certeza LLM
             {adjLabel ? ` ${adjLabel}` : ""}
           </span>
         )}
@@ -80,6 +83,26 @@ export default function ConfidenceBreakdown({
             <>
               <dt className="text-zinc-500">Tabla conf_base_N</dt>
               <dd className="text-zinc-300 font-mono">{meta.conf_base_table_value.toFixed(2)}</dd>
+            </>
+          )}
+          {meta.confidence_llm_factor != null && (
+            <>
+              <dt className="text-zinc-500">Certeza LLM (win)</dt>
+              <dd className="text-zinc-300 font-mono">×{meta.confidence_llm_factor.toFixed(2)}</dd>
+            </>
+          )}
+          {meta.confidence_adjustment != null && (
+            <>
+              <dt className="text-zinc-500">Ajuste fino LLM</dt>
+              <dd className="text-zinc-300 font-mono">
+                {meta.confidence_adjustment > 0 ? "+" : ""}
+                {fmtConfidencePct(meta.confidence_adjustment)}
+                {meta.subjective_adj_max != null && (
+                  <span className="text-zinc-500">
+                    {" "}(±{fmtConfidencePct(meta.subjective_adj_max)})
+                  </span>
+                )}
+              </dd>
             </>
           )}
         </dl>

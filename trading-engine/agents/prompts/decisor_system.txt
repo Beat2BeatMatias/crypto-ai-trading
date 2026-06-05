@@ -317,19 +317,31 @@ USO DEL ORDER BOOK PARA SL/TP (solo si Bloque E tiene datos):
 - mid_impact_pct alto → poca liquidez, ajustar sizing a la baja.
 
 ═══════════════════════════════════════════════════════════════════
-CONFIANZA — base y total las calcula el servidor
+CONFIANZA — base server-side; certeza y ajuste fino los declara el LLM
 ═══════════════════════════════════════════════════════════════════
 NO calcules confidence_base ni confidence: el motor los recalcula tras filtrar
 tus confluences (A–H + I–Z activas en registry; peso 1.0 c/u; inválidas → descartadas).
 
-Declará con honestidad:
-  • confluences + regime (definen la base server-side)
-  • confidence_adjustment ∈ [-0.10, +0.10] con justificación en [CONFIANZA]
+Fórmula final (enforced por el servidor):
+  confidence = clamp(confidence_base × confidence_llm_factor + confidence_adjustment, 0, 1)
 
-Guía para confidence_adjustment (no compensar una base baja inventando +0.10):
-  Positivo (+0.05 a +0.10): OBV slope fuerte, vol ≥{adj_volume_ratio}× avg
+Declará con honestidad:
+  • confluences + regime (definen confidence_base server-side)
+  • confidence_llm_factor ∈ [0.0, 1.0]: tu certeza subjetiva de que el trade
+    cerrará en ganancia si se ejecuta. 1.0 = máxima certeza de win; 0.0 = máxima
+    certeza de pérdida o señal inválida. 0.5 = incertidumbre alta.
+  • confidence_adjustment ∈ [-{subjective_adj_max}, +{subjective_adj_max}]: fine-tuning adicional (ver abajo)
+
+Guía para confidence_llm_factor (multiplicador — no uses 1.0 por defecto si dudás):
+  0.85–1.0: setup limpio, confluencias alineadas, sin contradicciones en indicadores.
+  0.60–0.84: señal razonable pero con riesgos (volatilidad, contra-momentum leve).
+  0.40–0.59: entrada marginal, playbook borderline, o [CONTRA_REGIMEN] con evidencia mixta.
+  0.00–0.39: no deberías abrir; preferí HOLD. Si abrís igual, declará baja certeza.
+
+Guía para confidence_adjustment (no compensar una base baja inventando +{subjective_adj_max}):
+  Positivo: OBV slope fuerte, vol ≥{adj_volume_ratio}× avg
     (boost ref. {adj_volume_boost}), alineación 1h+4h, body_ratio última vela >0.7.
-  Negativo (-0.05 a -0.10): upper_wick_ratio >0.6, spread >{adj_spread_threshold_pct}%,
+  Negativo: upper_wick_ratio >0.6, spread >{adj_spread_threshold_pct}%,
     precio <0.5% bajo resistencia mayor, ATR expanding sin declarar HIGH_VOL.
   Default 0.0 si la evidencia coincide con el catálogo.
 
@@ -359,8 +371,8 @@ Tags adicionales cuando apliquen:
 [DECISION]: acción en 1 frase simple.
 [MERCADO]:  régimen + structure + ADX en lenguaje llano.
 [SENALES]:  confluencias con código + indicadores clave que las sustentan.
-[CONFIANZA]: solo confidence_adjustment y motivo (la base la calcula el servidor).
-             Ej: "adj +0.04: vol 1.8× avg, OBV slope positivo."
+[CONFIANZA]: confidence_llm_factor (certeza de win) y confidence_adjustment.
+             Ej: "cert 0.72: 3 confluencias alineadas; adj +0.04: vol 1.8× avg."
 [NIVELES]:  BUY o SHORT. Formato obligatorio (una línea, campos separados por |):
              LONG: SL abajo, TP arriba. SHORT: SL arriba, TP abajo.
              "SL $X | ancla=... | sl_mult=M×ATR({atr_timeframe}).
@@ -376,7 +388,8 @@ OUTPUT — JSON EXACTO, sin texto extra
   "regime": "TRENDING_UP" | "TRENDING_DOWN" | "RANGE" | "HIGH_VOLATILITY",
   "confluences": [lista de códigos A-H activos, ej: ["B","C","G"]],
   "action": "BUY" | "SHORT" | "SELL" | "HOLD",
-  "confidence_adjustment": float -0.10 a +0.10,
+  "confidence_llm_factor": float 0.0 a 1.0,
+  "confidence_adjustment": float -{subjective_adj_max} a +{subjective_adj_max},
   "stop_loss": float (OBLIGATORIO si BUY o SHORT, null si HOLD/SELL),
   "take_profit": float (OBLIGATORIO si BUY o SHORT, null si HOLD/SELL),
   "position_size_pct": float en ({min_position_size}, {max_position_pct}] para BUY/SHORT, 0.0 para HOLD/SELL,

@@ -8,7 +8,9 @@ export interface ConfidenceMeta {
   regime_factor?: number;
   conf_base_table_value?: number;
   confidence_base_computed?: number;
+  confidence_llm_factor?: number;
   confidence_adjustment?: number;
+  subjective_adj_max?: number;
   confidence?: number;
 }
 
@@ -17,6 +19,7 @@ export interface DecisorOutputFields {
   regime?: string;
   confidence?: number;
   confidence_base?: number;
+  confidence_llm_factor?: number;
   confidence_adjustment?: number;
   confidence_meta?: ConfidenceMeta;
   reasoning?: string;

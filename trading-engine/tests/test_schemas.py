@@ -185,6 +185,17 @@ def test_hold_with_expected_holding_min_zero_coerced_to_one():
     assert output.action == DecisorAction.HOLD
 
 
+def test_confidence_llm_factor_multiplies_base_before_adjustment():
+    payload = _valid_buy_payload()
+    payload["confidence_base"] = 0.80
+    payload["confidence_llm_factor"] = 0.50
+    payload["confidence_adjustment"] = 0.05
+
+    output = DecisorOutput(**payload)
+
+    assert output.confidence == pytest.approx(0.80 * 0.50 + 0.05)
+
+
 def test_llm_payload_without_confidence_field_parses_and_recomputes():
     payload = {
         "regime": "TRENDING_DOWN",
@@ -239,18 +250,25 @@ def test_reasoning_above_1000_chars_truncated():
 
 # ─────────────── P1-T2: coerciones ───────────────
 
-def test_confidence_adjustment_when_slightly_above_max_should_clamp_to_010():
+def test_confidence_adjustment_within_absolute_max_passes_through():
     payload = _valid_buy_payload()
     payload["confidence_adjustment"] = 0.101
     output = DecisorOutput(**payload)
-    assert output.confidence_adjustment == pytest.approx(0.10)
+    assert output.confidence_adjustment == pytest.approx(0.101)
 
 
-def test_confidence_adjustment_when_below_min_should_clamp_to_minus_010():
+def test_confidence_adjustment_when_above_absolute_max_should_clamp_to_020():
     payload = _valid_buy_payload()
-    payload["confidence_adjustment"] = -0.15
+    payload["confidence_adjustment"] = 0.25
     output = DecisorOutput(**payload)
-    assert output.confidence_adjustment == pytest.approx(-0.10)
+    assert output.confidence_adjustment == pytest.approx(0.20)
+
+
+def test_confidence_adjustment_when_below_absolute_min_should_clamp_to_minus_020():
+    payload = _valid_buy_payload()
+    payload["confidence_adjustment"] = -0.25
+    output = DecisorOutput(**payload)
+    assert output.confidence_adjustment == pytest.approx(-0.20)
 
 
 def test_confidence_adjustment_when_none_should_default_to_zero():

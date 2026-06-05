@@ -37,7 +37,8 @@ class DecisorOutput(BaseModel):
     confluences: list[str] = Field(default_factory=list, max_length=10)
     action: DecisorAction
     confidence_base: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
-    confidence_adjustment: Annotated[float, Field(ge=-0.10, le=0.10)] = 0.0
+    confidence_llm_factor: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+    confidence_adjustment: Annotated[float, Field(ge=-0.20, le=0.20)] = 0.0
     # Opcional en JSON del LLM: el prompt pide no calcular confidence; _recompute_confidence lo deriva.
     confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
     stop_loss: float | None
@@ -57,6 +58,17 @@ class DecisorOutput(BaseModel):
     def _coerce_null_holding(cls, v: Any) -> int:
         return 1 if (v is None or v == 0) else v
 
+    @field_validator("confidence_llm_factor", mode="before")
+    @classmethod
+    def _clamp_confidence_llm_factor(cls, v: Any) -> float:
+        if v is None:
+            return 1.0
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 1.0
+        return max(0.0, min(1.0, v))
+
     @field_validator("confidence_adjustment", mode="before")
     @classmethod
     def _clamp_confidence_adjustment(cls, v: Any) -> float:
@@ -66,7 +78,7 @@ class DecisorOutput(BaseModel):
             v = float(v)
         except (TypeError, ValueError):
             return 0.0
-        return max(-0.10, min(0.10, v))
+        return max(-0.20, min(0.20, v))
 
     @field_validator("reasoning", mode="before")
     @classmethod
@@ -90,7 +102,10 @@ class DecisorOutput(BaseModel):
         # Recompute confidence deterministically from its components.
         # The LLM is instructed to set all three consistently, but we enforce
         # the invariant here so runtime behavior cannot diverge.
-        computed = self.confidence_base + self.confidence_adjustment
+        computed = (
+            self.confidence_base * self.confidence_llm_factor
+            + self.confidence_adjustment
+        )
         self.confidence = max(0.0, min(1.0, computed))
         return self
 

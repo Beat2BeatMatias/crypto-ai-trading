@@ -404,6 +404,7 @@ async def run() -> None:
                 "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
                 "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
                 "confluence_weak_factor": await store.get_typed(ConfigKey.CONFLUENCE_WEAK_FACTOR),
+                "subjective_adj_max": await store.get_typed(ConfigKey.SUBJECTIVE_ADJ_MAX),
                 "block_k_max_lines": await store.get_typed(ConfigKey.BLOCK_K_MAX_LINES),
                 "block_k_window_hours": await store.get_typed(ConfigKey.BLOCK_K_WINDOW_HOURS),
                 "min_roundtrip_fee_pct": await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT),
