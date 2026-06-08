@@ -68,6 +68,7 @@ class ConfigKey(str, Enum):
     MIN_CONFLUENCES_SHORT = "min_confluences_short"
     COOLDOWN_AFTER_SELL_MIN = "cooldown_after_sell_min"
     SUBJECTIVE_ADJ_MAX = "subjective_adj_max"
+    RANGE_EXTREME_PCT = "range_extreme_pct"
     EXPECTED_HOLDING_MAX_MIN = "expected_holding_max_min"
     CONFLUENCE_WEAK_FACTOR = "confluence_weak_factor"
     DRAWDOWN_RESET_TS = "drawdown_reset_ts"
@@ -258,6 +259,10 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.SUBJECTIVE_ADJ_MAX: _Default(
         "0.10", "float",
         "Límite del confidence_adjustment subjetivo que el LLM puede declarar (±). Enforced por Pydantic. Rango 0.00–0.20.",
+    ),
+    ConfigKey.RANGE_EXTREME_PCT: _Default(
+        "1.0", "float",
+        "Distancia % al High/Low 24h para marcar at_range_high/at_range_low en el contexto del decisor",
     ),
     ConfigKey.EXPECTED_HOLDING_MAX_MIN: _Default(
         "240", "int",

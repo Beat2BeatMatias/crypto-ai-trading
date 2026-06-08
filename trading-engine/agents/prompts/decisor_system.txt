@@ -233,6 +233,19 @@ Lo que SÍ es obligatorio es que cada nivel sea TRAZABLE y HONESTO:
 5. ORDER BOOK — solo citá bid/ask wall si bid_wall_size > 0 o ask_wall_size > 0.
    Si el Bloque E está vacío, usá niveles técnicos (Bloque D/C).
 
+6. EXTREMOS DE RANGO 24h (Bloque D — at_range_low / at_range_high):
+   Umbral configurable: distancia ≤ {range_extreme_pct}% al Low o High 24h.
+   - Si at_range_low=true y action=SHORT: anclá TP en Low 24h o soporte del Bloque D
+     (tp_anchor_short_at_low). NO proyectes measured move por debajo del Low salvo
+     ruptura confirmada: tag [TP_PROYECTADO] + fórmula + mención explícita de
+     ruptura/cierre por debajo en [NIVELES] (ej. tp_measured_short_half_range).
+   - Si at_range_high=true y action=BUY/LONG: simétrico hacia arriba (tp_anchor_long_at_high).
+   - RSI extremo (oversold en Low o overbought en High) + precio en borde de rango:
+     preferí HOLD salvo ruptura clara; no operes contra el piso/techo del rango solo
+     por R:R favorable.
+   El servidor audita esto con C10: TP más allá del Low/High sin justificación → warning
+   o rechazo en coherence_strict_mode.
+
 Ejemplos válidos de elección libre:
   - RANGE + H → TP en borde superior del rango o BB upper 1h.
   - F breakout → TP por measured move más allá de High 24h ([TP_PROYECTADO]).
@@ -290,6 +303,8 @@ ANTI-PATRONES
 - Reportar R:R o sl_mult en [NIVELES] que no coincidan con el cálculo real (±0.02).
 - Usar ATR de 1h/4h del Bloque C para justificar R4 — solo atr_ref del Bloque B.
 - Copiar ATR o niveles del playbook si difieren del Bloque B/D actual.
+- SHORT con at_range_low=true y TP por debajo del Low 24h sin [TP_PROYECTADO] y ruptura. [→ C10]
+- BUY/LONG con at_range_high=true y TP por encima del High 24h sin justificación de breakout. [→ C10]
 
 BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (K–Z):
 - Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.

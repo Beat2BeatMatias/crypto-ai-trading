@@ -115,7 +115,7 @@ def _filter_confluence_codes(
 # encima de ese nivel. Si no existe → debe emitir HOLD. Si el LLM
 # vuelve a alucinarlo, C7 dispara de nuevo en la re-evaluación y
 # el has_critical() lo bloquea a HOLD antes de ejecutar.
-_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C1P", "C2P", "C3P", "C7", "C9"})
+_TWO_PASS_TRIGGER_RULES = frozenset({"C1", "C2", "C3", "C1P", "C2P", "C3P", "C7", "C9", "C10"})
 
 
 class Decisor:

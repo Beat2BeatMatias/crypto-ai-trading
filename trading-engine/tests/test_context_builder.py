@@ -678,6 +678,24 @@ async def test_high_low_24h_fallback_to_price_when_no_ohlcv(session: AsyncSessio
     assert ctx["low_24h"]  == pytest.approx(95000.0)
 
 
+@pytest.mark.asyncio
+async def test_range_extreme_flags_and_tp_anchors(session: AsyncSession):
+    ctx = await _build(session, calibration={"range_extreme_pct": 1.0})
+
+    assert ctx["range_24h"] == pytest.approx(ctx["high_24h"] - ctx["low_24h"])
+    assert ctx["dist_to_low_24h_pct"] == pytest.approx(
+        (ctx["price"] - ctx["low_24h"]) / ctx["price"] * 100, rel=1e-3,
+    )
+    assert ctx["tp_anchor_short_at_low"] == pytest.approx(ctx["low_24h"])
+    assert ctx["tp_measured_short_half_range"] == pytest.approx(
+        ctx["low_24h"] - 0.5 * ctx["range_24h"],
+    )
+    assert "at_range_low" in ctx
+    assert "at_range_high" in ctx
+    assert "Rango 24h:" in ctx["block_d_text"]
+    assert "TP conservador SHORT en Low" in ctx["block_d_text"]
+
+
 # ---------------------------------------------------------------------------
 # dist_support_pct / dist_resistance_pct — distancias reales
 # ---------------------------------------------------------------------------

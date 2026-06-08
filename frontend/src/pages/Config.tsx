@@ -432,6 +432,12 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 0.00, max: 0.20, step: 0.01, unit: "±",
     format: v => `±${(v * 100).toFixed(0)}%`, parse: parseFloat,
   },
+  range_extreme_pct: {
+    label: "Umbral extremo de rango 24h",
+    description: "Distancia % al High/Low 24h para marcar at_range_high/at_range_low en el Bloque D del decisor. Usado por C10 y guías de TP en extremos.",
+    type: "slider", min: 0.25, max: 3.0, step: 0.25, unit: "%",
+    format: v => `${v.toFixed(2)}%`, parse: parseFloat,
+  },
   confluence_weak_factor: {
     label: "Factor confluencia débil (guía LLM)",
     description: "Guía LLM: peso relativo de una confluencia débil vs una sólida al calibrar confidence. 1.0 = igual peso. Referencia en el contexto.",
@@ -580,7 +586,7 @@ const MARKET_GROUPS: ConfigGroup[] = [
       "sl_atr_multiplier", "sl_atr_max_multiplier", "min_rr_ratio", "default_rr_ratio",
       "max_position_pct", "min_position_size", "risk_per_trade_pct", "max_simultaneous_trades",
       "drawdown_protection_enabled", "daily_stop_pct", "max_drawdown_pct",
-      "subjective_adj_max", "max_slippage_pct", "atr_timeframe",
+      "subjective_adj_max", "range_extreme_pct", "max_slippage_pct", "atr_timeframe",
       "min_roundtrip_fee_pct",
     ],
     note: "Enforcement Risk Gate R1–R11 (spot) y R12–R15 (futuros). En perp, max_position_pct y risk aplican sobre margen disponible.",

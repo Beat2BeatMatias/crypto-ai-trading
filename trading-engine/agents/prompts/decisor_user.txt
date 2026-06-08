@@ -25,6 +25,9 @@ Usá estos niveles como anclas según tu tesis; podés combinarlos, ajustarlos
 (breakout F, extensión de rango, etc.) lo justifica. Siempre citá el nivel o
 fórmula en [NIVELES] y verificá R4/R5 antes de emitir BUY o SHORT.
 
+Si at_range_low o at_range_high (líneas de rango 24h abajo): en extremos del rango
+preferí TP conservador en Low/High; measured move solo con ruptura confirmada.
+
 {block_d_text}
 
 ════════════════════════════════════════════

@@ -258,6 +258,25 @@ class ContextBuilder:
             high_24h = price
             low_24h  = price
 
+        range_24h = max(high_24h - low_24h, 0.0)
+        range_extreme_pct = float(cal.get("range_extreme_pct", 1.0))
+        dist_to_low_24h_pct = (
+            round((price - low_24h) / price * 100, 4) if price > 0 else 0.0
+        )
+        dist_to_high_24h_pct = (
+            round((high_24h - price) / price * 100, 4) if price > 0 else 0.0
+        )
+        at_range_low = dist_to_low_24h_pct <= range_extreme_pct
+        at_range_high = dist_to_high_24h_pct <= range_extreme_pct
+        tp_anchor_short_at_low = round(low_24h, 2)
+        tp_anchor_long_at_high = round(high_24h, 2)
+        tp_measured_short_half_range = (
+            round(low_24h - 0.5 * range_24h, 2) if range_24h else low_24h
+        )
+        tp_measured_long_half_range = (
+            round(high_24h + 0.5 * range_24h, 2) if range_24h else high_24h
+        )
+
         # ------------------------------------------------------------------ #
         # Portfolio state
         # ------------------------------------------------------------------ #
@@ -393,6 +412,16 @@ class ContextBuilder:
             "block_d_vwap_15m": vwap_15m,
             "block_d_high_24h": high_24h,
             "block_d_low_24h": low_24h,
+            "range_24h": range_24h,
+            "range_extreme_pct": range_extreme_pct,
+            "dist_to_low_24h_pct": dist_to_low_24h_pct,
+            "dist_to_high_24h_pct": dist_to_high_24h_pct,
+            "at_range_low": at_range_low,
+            "at_range_high": at_range_high,
+            "tp_anchor_short_at_low": tp_anchor_short_at_low,
+            "tp_anchor_long_at_high": tp_anchor_long_at_high,
+            "tp_measured_short_half_range": tp_measured_short_half_range,
+            "tp_measured_long_half_range": tp_measured_long_half_range,
             "support_1h": ema50_1h if ema50_1h else 0,
             "resistance_1h": ema200_1h if ema200_1h else 0,
             "dist_support_pct": round((ema50_1h - price) / price * 100, 4) if (ema50_1h and price) else 0,
@@ -757,6 +786,23 @@ class ContextBuilder:
             f"  VWAP(15m): ${ctx['block_d_vwap_15m']:,.0f}  {dist(ctx['block_d_vwap_15m'])}",
             f"  High 24h: ${ctx['block_d_high_24h']:,.0f}  {dist(ctx['block_d_high_24h'])}",
             f"  Low  24h: ${ctx['block_d_low_24h']:,.0f}  {dist(ctx['block_d_low_24h'])}",
+            (
+                f"  Rango 24h: ${ctx.get('range_24h', 0):,.0f} | "
+                f"dist Low {ctx.get('dist_to_low_24h_pct', 0):.2f}% "
+                f"(at_range_low={ctx.get('at_range_low', False)}) | "
+                f"dist High {ctx.get('dist_to_high_24h_pct', 0):.2f}% "
+                f"(at_range_high={ctx.get('at_range_high', False)})"
+            ),
+            (
+                f"  TP conservador SHORT en Low: ${ctx.get('tp_anchor_short_at_low', 0):,.0f} | "
+                f"TP medido ½-rango (solo con ruptura): "
+                f"${ctx.get('tp_measured_short_half_range', 0):,.0f}"
+            ),
+            (
+                f"  TP conservador LONG en High: ${ctx.get('tp_anchor_long_at_high', 0):,.0f} | "
+                f"TP medido ½-rango (solo con ruptura): "
+                f"${ctx.get('tp_measured_long_half_range', 0):,.0f}"
+            ),
             f"  Bid wall: ${ctx['bid_wall_price']:,.0f} ({ctx['bid_wall_size']:.1f} BTC)  {dist(ctx['bid_wall_price'])}",
             f"  Ask wall: ${ctx['ask_wall_price']:,.0f} ({ctx['ask_wall_size']:.1f} BTC)  {dist(ctx['ask_wall_price'])}",
             self._format_atr_sl_range_line(ctx),

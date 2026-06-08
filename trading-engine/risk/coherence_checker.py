@@ -1,12 +1,15 @@
 """
 CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Decisor.
 
-Reglas C1–C9 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
-En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7 se convierten en rechazos duros.
+Reglas C1–C10 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
+En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7/C10 se convierten en rechazos duros.
 C9 (mezcla alcista+bajista): en strict_mode filtra confluencias desalineadas y recalcula confianza.
 
 C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
 el R:R porque el código lo recalcula con el precio real del contexto.
+
+C10 (TP en extremo de rango 24h): warning por defecto; critical en strict_mode o cuando
+el TP proyecta más allá del Low/High sin [TP_PROYECTADO] + justificación de ruptura.
 
 No reemplazan al Risk Gate; se ejecutan ANTES del Risk Gate para que las advertencias
 queden registradas en decisions.output.coherence_warnings incluso cuando el Risk Gate
@@ -53,7 +56,7 @@ def _ctx_tf_float(ctx: dict[str, Any], key_prefix: str, tf: str) -> float:
 
 @dataclass
 class CoherenceWarning:
-    rule_id: str          # "C1" … "C9", "C1P" … "C3P"
+    rule_id: str          # "C1" … "C10", "C1P" … "C3P"
     message: str
     severity: str = "warning"   # "warning" | "critical" (cuando strict_mode)
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -98,6 +101,7 @@ class CoherenceChecker:
         warnings.extend(self._c5p_short_low_confidence_no_tag(decision, ctx))
         warnings.extend(self._c6_holding_vs_profile(decision, ctx))
         warnings.extend(self._c7_rr_ratio_verification(decision, ctx))
+        warnings.extend(self._c10_tp_range_extreme_anchoring(decision, ctx))
         warnings.extend(self._c8_extended_confluence_verify(decision, ctx))
         warnings.extend(self._c9_opposing_confluence_mix(decision, ctx))
         warnings.extend(self._c9_promoted_direction_vs_action(decision, ctx))
@@ -519,6 +523,88 @@ class CoherenceChecker:
                 "take_profit": decision.take_profit,
                 "reward": round(reward, 2),
                 "risk": round(sl_distance, 2),
+            },
+        )]
+
+    @staticmethod
+    def _reasoning_has_tag(reasoning: str | None, tag: str) -> bool:
+        return tag.upper() in (reasoning or "").upper()
+
+    @staticmethod
+    def _reasoning_has_rupture(reasoning: str | None) -> bool:
+        r = (reasoning or "").lower()
+        keywords = (
+            "ruptura", "breakout", "cierre por debajo", "cierre bajo",
+            "close below", "break abajo", "perforación", "perforacion",
+            "invalidación", "invalidacion", "cierre por encima", "break arriba",
+        )
+        return any(k in r for k in keywords)
+
+    def _c10_tp_range_extreme_anchoring(
+        self,
+        decision: DecisorOutput,
+        ctx: dict[str, Any],
+    ) -> list[CoherenceWarning]:
+        """
+        C10: TP proyectado más allá del Low/High 24h estando el precio en el extremo
+        del rango, sin [TP_PROYECTADO] y justificación de ruptura en el reasoning.
+
+        Complementa C7: el R:R puede ser válido pero el TP queda "flotante" lejos
+        de niveles del Bloque D sin tesis de breakout.
+        """
+        direction = direction_for_action(decision.action)
+        if direction is None or decision.take_profit is None:
+            return []
+
+        low_24h = float(ctx.get("block_d_low_24h") or ctx.get("low_24h") or 0)
+        high_24h = float(ctx.get("block_d_high_24h") or ctx.get("high_24h") or 0)
+        if low_24h <= 0 or high_24h <= 0:
+            return []
+
+        at_range_low = bool(ctx.get("at_range_low"))
+        at_range_high = bool(ctx.get("at_range_high"))
+        has_tp_proj = self._reasoning_has_tag(decision.reasoning, "[TP_PROYECTADO]")
+        has_rupture = self._reasoning_has_rupture(decision.reasoning)
+        justified = has_tp_proj and has_rupture
+
+        tp = float(decision.take_profit)
+        violations: list[tuple[str, float, float]] = []
+
+        if direction == Direction.SHORT and at_range_low and tp < low_24h:
+            violations.append(("below_low_24h", low_24h, tp))
+        if direction == Direction.LONG and at_range_high and tp > high_24h:
+            violations.append(("above_high_24h", high_24h, tp))
+
+        if not violations or justified:
+            return []
+
+        kind, anchor, projected_tp = violations[0]
+        if not has_tp_proj:
+            severity = "critical"
+        elif self.strict_mode:
+            severity = "critical"
+        else:
+            severity = "warning"
+
+        anchor_label = "Low 24h" if kind == "below_low_24h" else "High 24h"
+        return [CoherenceWarning(
+            rule_id="C10",
+            severity=severity,
+            message=(
+                f"TP=${projected_tp:,.2f} proyectado más allá de {anchor_label} "
+                f"(${anchor:,.2f}) con precio en extremo de rango "
+                f"(at_range_low={at_range_low}, at_range_high={at_range_high}). "
+                f"Requiere [TP_PROYECTADO] y ruptura/breakout explícitos, "
+                f"o anclar TP en nivel del Bloque D."
+            ),
+            evidence={
+                "kind": kind,
+                "anchor_level": anchor,
+                "take_profit": projected_tp,
+                "at_range_low": at_range_low,
+                "at_range_high": at_range_high,
+                "has_tp_proyectado": has_tp_proj,
+                "has_rupture_justification": has_rupture,
             },
         )]
 

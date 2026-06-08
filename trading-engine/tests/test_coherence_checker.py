@@ -494,6 +494,125 @@ class TestC7RRRatioVerification:
 
 
 # ---------------------------------------------------------------------------
+# C10 — TP en extremo de rango 24h
+# ---------------------------------------------------------------------------
+
+class TestC10TpRangeExtremeAnchoring:
+
+    def test_c10_critical_short_at_low_with_tp_below_low_no_tag(self):
+        decision = _short(
+            stop_loss=60500.0,
+            take_profit=56680.0,
+            reasoning="[DECISION] short [NIVELES] TP measured sin tag",
+        )
+        ctx = _ctx(
+            price=59251.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_low=True,
+            at_range_high=False,
+        )
+
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c10 = [w for w in warnings if w.rule_id == "C10"]
+
+        assert len(c10) == 1
+        assert c10[0].severity == "critical"
+        assert c10[0].evidence["kind"] == "below_low_24h"
+
+    def test_c10_no_warning_when_tp_at_low_anchor(self):
+        decision = _short(
+            stop_loss=60500.0,
+            take_profit=59105.0,
+        )
+        ctx = _ctx(
+            price=59251.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_low=True,
+        )
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        assert [w for w in warnings if w.rule_id == "C10"] == []
+
+    def test_c10_passes_with_tp_proyectado_and_rupture(self):
+        decision = _short(
+            stop_loss=60500.0,
+            take_profit=56680.0,
+            reasoning=(
+                "[DECISION] short [NIVELES] [TP_PROYECTADO] "
+                "TP = low - 0.5*rango tras ruptura confirmada y cierre por debajo"
+            ),
+        )
+        ctx = _ctx(
+            price=59251.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_low=True,
+        )
+
+        warnings = CoherenceChecker().evaluate(decision, ctx)
+        assert [w for w in warnings if w.rule_id == "C10"] == []
+
+    def test_c10_warning_with_tp_proyectado_without_rupture_non_strict(self):
+        decision = _short(
+            stop_loss=60500.0,
+            take_profit=56680.0,
+            reasoning="[DECISION] short [NIVELES] [TP_PROYECTADO] TP = low - 0.5*rango",
+        )
+        ctx = _ctx(
+            price=59251.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_low=True,
+        )
+
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c10 = [w for w in warnings if w.rule_id == "C10"]
+
+        assert len(c10) == 1
+        assert c10[0].severity == "warning"
+
+    def test_c10_critical_in_strict_mode_with_tp_proyectado_without_rupture(self):
+        decision = _short(
+            stop_loss=60500.0,
+            take_profit=56680.0,
+            reasoning="[DECISION] short [NIVELES] [TP_PROYECTADO] TP = low - 0.5*rango",
+        )
+        ctx = _ctx(
+            price=59251.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_low=True,
+        )
+
+        warnings = CoherenceChecker(strict_mode=True).evaluate(decision, ctx)
+        c10 = [w for w in warnings if w.rule_id == "C10"]
+
+        assert len(c10) == 1
+        assert c10[0].severity == "critical"
+
+    def test_c10_long_at_high_with_tp_above_high(self):
+        decision = _buy(
+            stop_loss=61000.0,
+            take_profit=63500.0,
+        )
+        ctx = _ctx(
+            price=61900.0,
+            block_d_low_24h=59105.0,
+            block_d_high_24h=62000.0,
+            at_range_high=True,
+            at_range_low=False,
+        )
+
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c10 = [w for w in warnings if w.rule_id == "C10"]
+
+        assert len(c10) == 1
+        assert c10[0].evidence["kind"] == "above_high_24h"
+
+
+# ---------------------------------------------------------------------------
 # C8 — verify_spec para confluencias extendidas I–Z
 # ---------------------------------------------------------------------------
 
