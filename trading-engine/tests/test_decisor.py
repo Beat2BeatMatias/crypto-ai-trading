@@ -411,7 +411,7 @@ async def test_server_confidence_recomputes_base_with_promoted_i(session: AsyncS
 
     result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
 
-    expected_base = 0.70 * 0.85 * 0.85
+    expected_base = 0.75 * 1.0 * 1.0
     assert result.confidence_base == pytest.approx(expected_base)
     assert result.confidence == pytest.approx(expected_base)
     row = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalar_one()
@@ -458,7 +458,7 @@ async def test_server_confidence_drops_deactivated_registry_code(session: AsyncS
     result = await decisor.decide(**_DEFAULT_DECIDE_KWARGS)
 
     assert result.confluences == ["B"]
-    expected_base = 0.55 * 0.85 * 0.85
+    expected_base = 0.55 * 1.0 * 1.0
     assert result.confidence_base == pytest.approx(expected_base)
     row = (await session.execute(select(Decision).where(Decision.agent == "decisor"))).scalar_one()
     assert row.output["confidence_meta"]["confluences_dropped"] == ["J"]

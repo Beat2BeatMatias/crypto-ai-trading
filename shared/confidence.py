@@ -12,7 +12,6 @@ from shared.schemas import (
     direction_for_action,
 )
 
-_QUALITY_STRONG_CODES = frozenset({"F", "G"})
 _ABSOLUTE_ADJ_MAX = 0.20
 
 
@@ -28,12 +27,12 @@ def clamp_subjective_adjustment(value: Any, max_adj: float) -> float:
     return max(-limit, min(limit, v))
 
 _DEFAULT_CALIBRATION: dict[str, float] = {
-    "conf_base_0": 0.40,
+    "conf_base_0": 0.35,
     "conf_base_1": 0.55,
-    "conf_base_2": 0.70,
-    "conf_base_3": 0.85,
+    "conf_base_2": 0.75,
+    "conf_base_3": 0.88,
     "conf_base_4plus": 1.00,
-    "peso_regime_range": 0.85,
+    "peso_regime_range": 1.0,
     "peso_regime_high_vol": 0.75,
 }
 
@@ -44,8 +43,7 @@ def effective_confluence_count(confluences: list[str]) -> int:
 
 
 def quality_factor(confluences: list[str]) -> float:
-    codes = set(confluences)
-    return 1.0 if codes & _QUALITY_STRONG_CODES else 0.85
+    return 1.0
 
 
 def hold_signal_direction(

@@ -456,6 +456,9 @@ Lista consolidada de trabajo pendiente (detalle en [`docs/specs/07-discrepancies
 ## Operaciones
 
 ```bash
+# Build y levantar
+docker-compose build && docker-compose up -d
+
 # Levantar
 docker-compose up -d
 

@@ -192,7 +192,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     # Aparecen en el system prompt del Decisor como calibración sugerida.
     # El LLM declara su propia confidence; el sistema no la recalcula ni la fuerza.
     ConfigKey.CONF_BASE_0: _Default(
-        "0.40", "float",
+        "0.35", "float",
         "Guía LLM: confidence_base de referencia con 0 confluencias activas. El LLM calibra su propia confidence usando esta escala como guía.",
     ),
     ConfigKey.CONF_BASE_1: _Default(
@@ -200,11 +200,11 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Guía LLM: confidence_base de referencia con 1 confluencia activa.",
     ),
     ConfigKey.CONF_BASE_2: _Default(
-        "0.70", "float",
+        "0.75", "float",
         "Guía LLM: confidence_base de referencia con 2 confluencias activas.",
     ),
     ConfigKey.CONF_BASE_3: _Default(
-        "0.85", "float",
+        "0.88", "float",
         "Guía LLM: confidence_base de referencia con 3 confluencias activas.",
     ),
     ConfigKey.CONF_BASE_4PLUS: _Default(
@@ -212,7 +212,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Guía LLM: confidence_base de referencia con 4+ confluencias activas (cap).",
     ),
     ConfigKey.PESO_REGIME_RANGE: _Default(
-        "0.85", "float",
+        "1.0", "float",
         "Guía LLM: factor de confianza base en régimen RANGE (0=conservador, 1=full). El LLM lo usa como referencia en su cálculo de confidence.",
     ),
     ConfigKey.PESO_REGIME_HIGH_VOL: _Default(
