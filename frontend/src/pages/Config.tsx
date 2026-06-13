@@ -209,6 +209,18 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 1, max: 18, step: 1, unit: "letras",
     format: v => String(v), parse: parseInt,
   },
+  confluence_eval_min_samples: {
+    label: "Evaluación confluencias — muestras mín.",
+    description: "Mínimo de veces que una confluencia K–Z debe aparecer en decisiones evaluadas antes de considerar su desactivación por underperformance.",
+    type: "slider", min: 3, max: 20, step: 1, unit: "muestras",
+    format: v => String(v), parse: parseInt,
+  },
+  confluence_eval_min_win_rate: {
+    label: "Evaluación confluencias — win rate mínimo",
+    description: "Win rate mínimo para mantener una confluencia K–Z activa. Si el win rate real está por debajo, el Supervisor evalúa desactivarla.",
+    type: "slider", min: 0.0, max: 0.5, step: 0.05,
+    format: fmt2, parse: parseFloat,
+  },
   llm_timeout_sec: {
     label: "Timeout LLM",
     description: "Segundos máximos de espera por respuesta del LLM antes de pasar al fallback.",
@@ -557,8 +569,10 @@ const GLOBAL_GROUPS: ConfigGroup[] = [
       "confluence_promotion_min_occurrences",
       "confluence_promotion_window_days",
       "confluence_registry_max_active",
+      "confluence_eval_min_samples",
+      "confluence_eval_min_win_rate",
     ],
-    note: "Encadenado a Outcome Attribution. Promoción K–Z: umbrales automáticos (Supervisor) y tope de activas (también aplica a promoción manual en /confluence).",
+    note: "Encadenado a Outcome Attribution. Promoción K–Z: umbrales automáticos (Supervisor) y tope de activas (también aplica a promoción manual en /confluence). Evaluación de underperformance: muestras y win rate mínimos para desactivación automática.",
   },
   {
     title: "Scheduler",

@@ -133,6 +133,30 @@ def _parse_json_strict(text: str) -> dict:
                 return json.loads(stripped[start : i + 1])
     return json.loads(stripped)
 
+_CONFLUENCE_EVAL_PROMPT = """Eres un analista de patrones de trading. Revisá las siguientes confluencias promovidas (K-Z)
+que muestran bajo rendimiento y decidí si deben desactivarse.
+
+Para cada código recibís su nombre, definición, y cuántas veces apareció en
+decisiones ganadoras vs perdedoras (datos de las últimas 24h).
+
+Reglas de decisión:
+- "deactivate" → el patrón aparece consistentemente en trades perdedores, no es confiable
+- "keep" → el win rate es bajo pero el patrón tiene sentido lógico, mantener para más observación
+- "insufficient_data" → hay muy pocos datos como para concluir, skip
+
+Respondé ÚNICAMENTE con JSON válido, sin texto extra:
+{
+  "evaluations": [
+    {"code": "K", "action": "keep", "reason": "explicación breve en español"},
+    {"code": "M", "action": "deactivate", "reason": "explicación breve en español"},
+    {"code": "N", "action": "insufficient_data", "reason": "explicación breve en español"}
+  ]
+}
+
+CANDIDATOS A EVALUAR:
+{candidates_block}
+"""
+
 _CONFIG_SUGGESTION_PROMPT = """Eres un analista cuantitativo de risk management. Basándote en las métricas
 de trading del período, sugiere los valores óptimos para los parámetros de configuración del sistema.
 
@@ -409,6 +433,18 @@ class Supervisor:
                 output["confluence_promotions"] = promotions
             except Exception as e:
                 logger.warning("supervisor.confluence_promotion_failed", error=str(e))
+
+            try:
+                eval_result = await self._evaluate_confluence_registry(
+                    metrics=metrics,
+                    current_config=current_config or {},
+                )
+                output["confluence_evaluation"] = eval_result
+                if eval_result.get("deactivated"):
+                    logger.info("supervisor.confluence_deactivated",
+                                codes=[d["code"] for d in eval_result["deactivated"]])
+            except Exception as e:
+                logger.warning("supervisor.confluence_evaluation_failed", error=str(e))
 
         except Exception as e:
             logger.error("supervisor.error", error=str(e))
@@ -1616,3 +1652,126 @@ class Supervisor:
             max_active=max_active,
             playbook_content=playbook_content,
         )
+
+    async def _evaluate_confluence_registry(
+        self,
+        *,
+        metrics: dict,
+        current_config: dict,
+    ) -> dict:
+        """Evaluate active K-Z confluences for underperformance and ask LLM if any should be deactivated.
+
+        Returns dict with:
+          - evaluated (list[codes]): codes sent to LLM for review
+          - deactivated (list[dict]): codes LLM decided to deactivate
+          - kept (list[dict]): codes LLM decided to keep
+          - insufficient (list[dict]): codes LLM said insufficient data
+          - skipped (int): codes with sample below min_samples
+          - adequate (int): codes with enough samples and win rate >= threshold
+        """
+        min_samples = int(current_config.get("confluence_eval_min_samples", 5))
+        min_win_rate = float(current_config.get("confluence_eval_min_win_rate", 0.35))
+
+        active_registry_rows = (await self.session.execute(
+            select(ConfluenceRegistry).where(ConfluenceRegistry.active.is_(True))
+        )).scalars().all()
+        if not active_registry_rows:
+            return {"evaluated": [], "deactivated": [], "kept": [],
+                    "insufficient": [], "skipped": 0, "adequate": 0}
+
+        active_codes = frozenset(r.code for r in active_registry_rows)
+        code_info = {r.code: r for r in active_registry_rows}
+
+        winners = metrics.get("winners_confluences") or {}
+        losers = metrics.get("losers_confluences") or {}
+        winners_short = metrics.get("winners_short_confluences") or {}
+        losers_short = metrics.get("losers_short_confluences") or {}
+
+        candidates: list[dict] = []
+        skipped = 0
+        adequate = 0
+        for code in sorted(active_codes):
+            w = winners.get(code, 0) + winners_short.get(code, 0)
+            l = losers.get(code, 0) + losers_short.get(code, 0)
+            total = w + l
+            if total < min_samples:
+                skipped += 1
+                continue
+            wr = w / total
+            if wr >= min_win_rate:
+                adequate += 1
+                continue
+            info = code_info[code]
+            candidates.append({
+                "code": code,
+                "title": info.title,
+                "definition_md": (info.definition_md or "")[:200],
+                "wins": w,
+                "losses": l,
+                "total": total,
+                "win_rate": round(wr, 2),
+            })
+
+        if not candidates:
+            return {
+                "evaluated": [],
+                "deactivated": [], "kept": [], "insufficient": [],
+                "skipped": skipped, "adequate": adequate,
+            }
+
+        prompt = _CONFLUENCE_EVAL_PROMPT.format(
+            candidates_block="\n\n".join(
+                f"Código: {c['code']}\n"
+                f"Nombre: {c['title']}\n"
+                f"Definición: {c['definition_md']}\n"
+                f"Wins: {c['wins']} | Losses: {c['losses']} | Total: {c['total']}\n"
+                f"Win rate: {c['win_rate']:.0%}"
+                for c in candidates
+            ),
+        )
+        resp = await self.llm.call(
+            provider=self.provider, system_prompt="",
+            user_prompt=prompt, fallbacks=self.fallbacks,
+        )
+        parsed = _parse_json_strict(resp.text)
+        evaluations = parsed.get("evaluations", [])
+
+        candidate_codes = frozenset(c["code"] for c in candidates)
+        deactivated: list[dict] = []
+        kept: list[dict] = []
+        insufficient: list[dict] = []
+
+        from shared.confluence_registry_ops import deactivate_registry_code
+
+        for ev in evaluations:
+            code = ev.get("code", "")
+            if code not in candidate_codes:
+                logger.warning("supervisor.confluence_eval_unknown_code", code=code)
+                continue
+            action = ev.get("action", "keep")
+            reason = (ev.get("reason") or "")[:240]
+            entry = {"code": code, "reason": reason}
+            if action == "deactivate":
+                try:
+                    await deactivate_registry_code(self.session, code, now=datetime.now(tz=timezone.utc))
+                    deactivated.append(entry)
+                    logger.warning("supervisor.confluence_deactivated_by_llm",
+                                   code=code, reason=reason)
+                except Exception as ex:
+                    logger.error("supervisor.confluence_deactivation_failed",
+                                 code=code, error=str(ex))
+            elif action == "insufficient_data":
+                insufficient.append(entry)
+            else:
+                kept.append(entry)
+
+        await self.session.flush()
+
+        return {
+            "evaluated": [c["code"] for c in candidates],
+            "deactivated": deactivated,
+            "kept": kept,
+            "insufficient": insufficient,
+            "skipped": skipped,
+            "adequate": adequate,
+        }
