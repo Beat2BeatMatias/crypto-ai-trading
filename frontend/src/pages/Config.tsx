@@ -460,8 +460,8 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   // ── Decisor — controles operacionales ────────────────────────────────────
   min_fees_to_tp_ratio: {
     label: "Ratio mínimo TP / fees",
-    description: "El movimiento al TP debe ser al menos este múltiplo del costo de fees ida y vuelta. Filtra trades con TP demasiado pequeño.",
-    type: "slider", min: 1.5, max: 6.0, step: 0.1, unit: "× fees",
+    description: "El movimiento al TP debe ser al menos este múltiplo del costo de fees ida y vuelta. 0 = deshabilita el filtro.",
+    type: "slider", min: 0.0, max: 6.0, step: 0.1, unit: "× fees",
     format: fmt1, parse: parseFloat,
   },
   min_confluences_buy: {

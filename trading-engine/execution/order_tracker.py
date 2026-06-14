@@ -70,6 +70,18 @@ class OrderTracker:
                         except Exception as fe:
                             logger.error("order_tracker.force_close_failed",
                                          trade_id=str(trade.id), error=str(fe))
+                    elif "-2022" in error_str:
+                        logger.warning(
+                            "order_tracker.manual_close_position_gone_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        price = await self._fetch_current_price()
+                        if price:
+                            await self.executor.force_close_trade(
+                                trade_id=trade.id, market_price=price,
+                                close_reason="force_closed_position_gone",
+                            )
                     else:
                         logger.error("order_tracker.manual_close_failed",
                                      trade_id=str(trade.id), error=error_str)
@@ -219,6 +231,18 @@ class OrderTracker:
                         except Exception as fe:
                             logger.error("order_tracker.sl_guardian_force_close_failed",
                                          trade_id=str(trade.id), error=str(fe))
+                    elif "-2022" in error_str:
+                        logger.warning(
+                            "order_tracker.sl_guardian_position_gone_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        price = current_price or await self._fetch_current_price()
+                        if price:
+                            await self.executor.force_close_trade(
+                                trade_id=trade.id, market_price=price,
+                                close_reason="force_closed_position_gone",
+                            )
                     else:
                         logger.error("order_tracker.sl_guardian_failed",
                                      trade_id=str(trade.id), error=error_str)
@@ -278,9 +302,19 @@ class OrderTracker:
                         except Exception as fe:
                             logger.error("order_tracker.tp_guardian_force_close_failed",
                                          trade_id=str(trade.id), error=str(fe))
-                    else:
-                        logger.error("order_tracker.tp_guardian_failed",
-                                     trade_id=str(trade.id), error=error_str)
+                    elif "-2022" in error_str:
+                        logger.warning(
+                            "order_tracker.tp_guardian_position_gone_fallback",
+                            trade_id=str(trade.id),
+                            error=error_str,
+                        )
+                        price = current_price or await self._fetch_current_price()
+                        if price:
+                            await self.executor.force_close_trade(
+                                trade_id=trade.id, market_price=price,
+                                close_reason="force_closed_position_gone",
+                            )
+
 
     @staticmethod
     def _aggregate_fills_by_order(fills: list[dict]) -> dict[str, dict]:
@@ -309,15 +343,9 @@ class OrderTracker:
         decision_id: uuid.UUID | None,
         close_reason: str,
     ) -> None:
-        pos_side = getattr(trade, "position_side", "LONG") or "LONG"
-        if pos_side == "SHORT":
-            await self.executor.execute_close(
-                trade_id=trade.id, decision_id=decision_id, close_reason=close_reason,
-            )
-        else:
-            await self.executor.execute_sell(
-                trade_id=trade.id, decision_id=decision_id, close_reason=close_reason,
-            )
+        await self.executor.execute_close(
+            trade_id=trade.id, decision_id=decision_id, close_reason=close_reason,
+        )
 
     async def _fetch_current_price(self) -> float | None:
         """Obtiene el precio actual del mercado para el guardian de SL."""

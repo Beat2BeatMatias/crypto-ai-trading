@@ -239,7 +239,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.MIN_FEES_TO_TP_RATIO: _Default(
         "3.0", "float",
-        "Min TP movement as multiple of round-trip fees for BUY approval (R10). Range 1.5–6.0.",
+        "Min TP movement as multiple of round-trip fees for BUY approval (R10). Range 0.0–6.0.",
     ),
     ConfigKey.MIN_ROUNDTRIP_FEE_PCT: _Default(
         "0.20", "float",

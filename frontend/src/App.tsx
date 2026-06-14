@@ -7,6 +7,7 @@ import { PlaybookPage } from "./pages/Playbook";
 import { Config } from "./pages/Config";
 import { Health } from "./pages/Health";
 import { ConfluencePage } from "./pages/Confluence";
+import { Help } from "./pages/Help";
 import { TradingContextBadges } from "./components/TradingContextBadges";
 import type { TradingContext } from "./types";
 
@@ -36,7 +37,7 @@ function NavBar() {
         {[
           ["/", "Dashboard"], ["/trades", "Trades"],
           ["/decisions", "Decisiones"], ["/confluence", "Confluencias"], ["/playbook", "Playbook"],
-          ["/config", "Config"], ["/health", "Health"],
+          ["/config", "Config"], ["/health", "Health"], ["/help", "Ayuda"],
         ].map(([to, label]) => (
           <NavLink key={to} to={to} end={to === "/"} className={({ isActive }) => `${base} ${isActive ? active : ""}`}>
             {label}
@@ -60,6 +61,7 @@ export function App() {
           <Route path="/playbook" element={<PlaybookPage />} />
           <Route path="/config" element={<Config />} />
           <Route path="/health" element={<Health />} />
+          <Route path="/help" element={<Help />} />
         </Routes>
       </main>
     </BrowserRouter>
