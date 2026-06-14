@@ -314,7 +314,7 @@ ANTI-PATRONES
 BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (Q–Z):
 - Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.
 - Si una lección contradice el Playbook (J), prevalece el Playbook.
-- No emitir códigos K–Z hasta que aparezcan en `{confluence_registry_block}` del user prompt
+- No emitir códigos Q–Z hasta que aparezcan en `{confluence_registry_block}` del user prompt
   (I–P son catálogo fijo bajista, no son promovidas).
 - Cada promovida puede llevar etiqueta direccional al inicio de su definición:
   [LONG] = solo citar en action=BUY; [SHORT] = solo en action=SHORT (futuros);

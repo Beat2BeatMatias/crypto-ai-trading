@@ -68,7 +68,7 @@ export function ConfluencePage() {
   );
 
   async function handlePromote(id: string) {
-    if (!confirm("¿Promover este patrón al catálogo extendido (I–Z)?")) return;
+    if (!confirm("¿Promover este patrón al catálogo extendido (Q–Z)?")) return;
     setBusyId(id);
     setError(null);
     try {
@@ -120,7 +120,7 @@ export function ConfluencePage() {
       <header>
         <h1 className="text-xl font-semibold text-white">Aprendizaje — Confluencias</h1>
         <p className="text-sm text-zinc-500 mt-1">
-          Patrones detectados por post-mortem. Promové candidatos al catálogo I–Z o rechazalos manualmente.
+          Patrones detectados por post-mortem. Promové candidatos al catálogo Q–Z o rechazalos manualmente.
         </p>
       </header>
 
@@ -134,7 +134,7 @@ export function ConfluencePage() {
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
-            Catálogo promovido (I–Z)
+            Catálogo promovido (Q–Z)
           </h2>
           <span className="text-xs text-zinc-500">{registry.length} activas</span>
         </div>

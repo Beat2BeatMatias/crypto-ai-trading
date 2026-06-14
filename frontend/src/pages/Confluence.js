@@ -53,7 +53,7 @@ export function ConfluencePage() {
     useEffect(() => { load(); }, [load]);
     const openCount = useMemo(() => candidates.filter(c => c.status === "open").length, [candidates]);
     async function handlePromote(id) {
-        if (!confirm("¿Promover este patrón al catálogo extendido (I–Z)?"))
+        if (!confirm("¿Promover este patrón al catálogo extendido (Q–Z)?"))
             return;
         setBusyId(id);
         setError(null);

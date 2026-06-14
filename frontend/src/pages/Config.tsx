@@ -193,7 +193,7 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   },
   confluence_promotion_min_occurrences: {
     label: "Promoción confluencias — ocurrencias mín.",
-    description: "Ocurrencias del mismo pattern_tag para que el Supervisor promueva automáticamente a catálogo K–Z (regla P1). La promoción manual en /confluence no exige este umbral.",
+    description: "Ocurrencias del mismo pattern_tag para que el Supervisor promueva automáticamente a catálogo Q–Z (regla P1). La promoción manual en /confluence no exige este umbral.",
     type: "slider", min: 2, max: 10, step: 1, unit: "veces",
     format: v => String(v), parse: parseInt,
   },
@@ -205,19 +205,19 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   },
   confluence_registry_max_active: {
     label: "Confluencias promovidas — máximo activas",
-    description: "Tope de letras K–Z activas en el catálogo. Si está lleno, /confluence devuelve max_active_reached al promover; desactivá una entrada o subí este valor.",
+    description: "Tope de letras Q–Z activas en el catálogo. Si está lleno, /confluence devuelve max_active_reached al promover; desactivá una entrada o subí este valor.",
     type: "slider", min: 1, max: 18, step: 1, unit: "letras",
     format: v => String(v), parse: parseInt,
   },
   confluence_eval_min_samples: {
     label: "Evaluación confluencias — muestras mín.",
-    description: "Mínimo de veces que una confluencia K–Z debe aparecer en decisiones evaluadas antes de considerar su desactivación por underperformance.",
+    description: "Mínimo de veces que una confluencia Q–Z debe aparecer en decisiones evaluadas antes de considerar su desactivación por underperformance.",
     type: "slider", min: 3, max: 20, step: 1, unit: "muestras",
     format: v => String(v), parse: parseInt,
   },
   confluence_eval_min_win_rate: {
     label: "Evaluación confluencias — win rate mínimo",
-    description: "Win rate mínimo para mantener una confluencia K–Z activa. Si el win rate real está por debajo, el Supervisor evalúa desactivarla.",
+    description: "Win rate mínimo para mantener una confluencia Q–Z activa. Si el win rate real está por debajo, el Supervisor evalúa desactivarla.",
     type: "slider", min: 0.0, max: 0.5, step: 0.05,
     format: fmt2, parse: parseFloat,
   },
@@ -472,7 +472,7 @@ const FIELD_DEFS: Record<string, FieldDef> = {
   },
   min_confluences_short: {
     label: "Confluencias mínimas (SHORT)",
-    description: "Mínimo de confluencias bajistas (I/J/F…) para SHORT en futuros. Guía en el prompt.",
+    description: "Mínimo de confluencias bajistas (I–P/F…) para SHORT en futuros. Guía en el prompt.",
     type: "slider", min: 1, max: 4, step: 1, unit: "confluencias",
     format: v => String(v), parse: parseInt,
   },
@@ -572,7 +572,7 @@ const GLOBAL_GROUPS: ConfigGroup[] = [
       "confluence_eval_min_samples",
       "confluence_eval_min_win_rate",
     ],
-    note: "Encadenado a Outcome Attribution. Promoción K–Z: umbrales automáticos (Supervisor) y tope de activas (también aplica a promoción manual en /confluence). Evaluación de underperformance: muestras y win rate mínimos para desactivación automática.",
+    note: "Encadenado a Outcome Attribution. Promoción Q–Z: umbrales automáticos (Supervisor) y tope de activas (también aplica a promoción manual en /confluence). Evaluación de underperformance: muestras y win rate mínimos para desactivación automática.",
   },
   {
     title: "Scheduler",

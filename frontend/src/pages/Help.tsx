@@ -463,7 +463,7 @@ export function Help() {
           en el <strong>Bloque K</strong> del contexto del Decisor para evitar errores similares.
         </p>
         <ul className="text-sm text-zinc-400 space-y-1">
-          <li><Badge color="purple">Lesson Normalizer</Badge> — Convierte lecciones en candidatos a confluencia (K–Z)</li>
+          <li><Badge color="purple">Lesson Normalizer</Badge> — Convierte lecciones en candidatos a confluencia (Q–Z)</li>
           <li><Badge color="zinc">Bloque K</Badge> — Máximo <Code>block_k_max_lines</Code> (default 5) lecciones visibles al Decisor</li>
         </ul>
       </Card>
@@ -489,7 +489,7 @@ export function Help() {
         </p>
         <ul className="text-sm text-zinc-400 space-y-2">
           <li><Badge color="emerald">SHORT</Badge> — Órdenes de venta en corto (con SL y TP invertidos)</li>
-          <li><Badge color="amber">Confluencias I–J</Badge> — Señales bajistas RSI_OVERBOUGHT_REJECTION y MACD_BEARISH_CROSS</li>
+          <li><Badge color="amber">Confluencias I–P</Badge> — Señales bajistas RSI_OVERBOUGHT_REJECTION, MACD_BEARISH_CROSS, BB_UPPER_REJECTION y más</li>
           <li><Badge color="red">Risk Gates R7, R12–R15</Badge> — Validaciones específicas de futuros</li>
           <li><Badge color="sky">Apalancamiento</Badge> — Configurable vía <Code>max_leverage</Code> y <Code>margin_mode</Code></li>
           <li><Badge color="purple">Funding Rate</Badge> — Filtro <Code>funding_rate_max_pct</Code> (R15)</li>

@@ -52,7 +52,7 @@ Contexto operativo de errores recientes. Si contradice el Playbook (J), gana el 
 
 {block_k_lessons}
 
-Confluencias promovidas activas (I–Z):
+Confluencias promovidas activas (Q–Z):
 {confluence_registry_block}
 
 ════════════════════════════════════════════

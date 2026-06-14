@@ -133,7 +133,7 @@ def _parse_json_strict(text: str) -> dict:
                 return json.loads(stripped[start : i + 1])
     return json.loads(stripped)
 
-_CONFLUENCE_EVAL_PROMPT = """Eres un analista de patrones de trading. Revisá las siguientes confluencias promovidas (K-Z)
+_CONFLUENCE_EVAL_PROMPT = """Eres un analista de patrones de trading. Revisá las siguientes confluencias promovidas (Q-Z)
 que muestran bajo rendimiento y decidí si deben desactivarse.
 
 Para cada código recibís su nombre, definición, y cuántas veces apareció en
@@ -1659,7 +1659,7 @@ class Supervisor:
         metrics: dict,
         current_config: dict,
     ) -> dict:
-        """Evaluate active K-Z confluences for underperformance and ask LLM if any should be deactivated.
+        """Evaluate active Q-Z confluences for underperformance and ask LLM if any should be deactivated.
 
         Returns dict with:
           - evaluated (list[codes]): codes sent to LLM for review

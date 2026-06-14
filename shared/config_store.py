@@ -386,7 +386,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.CONFLUENCE_PROMOTION_MIN_OCCURRENCES: _Default(
         "3", "int",
-        "Ocurrencias mínimas de un pattern_tag para promover candidato a catálogo I–Z. Rango 2–10.",
+        "Ocurrencias mínimas de un pattern_tag para promover candidato a catálogo Q–Z. Rango 2–10.",
     ),
     ConfigKey.CONFLUENCE_PROMOTION_WINDOW_DAYS: _Default(
         "7", "int",
@@ -394,15 +394,15 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ),
     ConfigKey.CONFLUENCE_REGISTRY_MAX_ACTIVE: _Default(
         "5", "int",
-        "Máximo de confluencias promovidas activas (I–Z) simultáneas. Rango 1–18.",
+        "Máximo de confluencias promovidas activas (Q–Z) simultáneas. Rango 1–18.",
     ),
     ConfigKey.CONFLUENCE_EVAL_MIN_SAMPLES: _Default(
         "5", "int",
-        "Mínimo de veces que una confluencia K-Z debe aparecer en decisiones evaluadas antes de considerarla para desactivación por underperformance. Rango 3–20.",
+        "Mínimo de veces que una confluencia Q-Z debe aparecer en decisiones evaluadas antes de considerarla para desactivación por underperformance. Rango 3–20.",
     ),
     ConfigKey.CONFLUENCE_EVAL_MIN_WIN_RATE: _Default(
         "0.35", "float",
-        "Win rate mínimo para mantener una confluencia K-Z activa. Si el win rate real está por debajo, el Supervisor evalúa si desactivarla. Rango 0.0–0.5.",
+        "Win rate mínimo para mantener una confluencia Q-Z activa. Si el win rate real está por debajo, el Supervisor evalúa si desactivarla. Rango 0.0–0.5.",
     ),
     ConfigKey.LIVE_SINCE_TS: _Default(
         "", "string",
