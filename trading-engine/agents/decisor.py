@@ -23,7 +23,7 @@ from risk.coherence_checker import CoherenceChecker, CoherenceWarning
 
 logger = structlog.get_logger()
 
-_VALID_STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJ")
+_VALID_STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJKLMNOP")
 
 
 def _valid_confluence_codes(active_registry: frozenset[str]) -> frozenset[str]:
@@ -92,7 +92,7 @@ def _filter_confluence_codes(
     confluences: list[str],
     active_registry: frozenset[str] | None = None,
 ) -> list[str]:
-    """Elimina códigos fuera del catálogo A–H + letras activas en registry."""
+    """Elimina códigos fuera del catálogo A–P + letras activas en registry."""
     valid_set = _valid_confluence_codes(active_registry or frozenset())
     valid = [c for c in confluences if c in valid_set]
     invalid = [c for c in confluences if c not in valid_set]

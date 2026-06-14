@@ -50,7 +50,7 @@ async def fetch_active_registry(session: AsyncSession) -> list[ConfluenceRegistr
 
 
 def active_registry_codes(entries: list[ConfluenceRegistry]) -> frozenset[str]:
-    """Códigos promovidos activos (K–Z). Excluye A–J del catálogo fijo."""
+    """Códigos promovidos activos (Q–Z). Excluye A–P del catálogo fijo."""
     return frozenset(
         e.code for e in entries
         if e.active and e.code not in STATIC_CONFLUENCE_CODES
@@ -64,11 +64,13 @@ def render_registry_block(entries: list[ConfluenceRegistry]) -> str:
     ]
     if not promoted:
         return (
-            "  (ninguna confluencia promovida activa; I/J del catálogo fijo = SHORT, "
+            "  (ninguna confluencia promovida activa; I–P del catálogo fijo = SHORT, "
             "no confundir con lecciones de post-mortem.)"
         )
     lines: list[str] = [
-        "  Promovidas (K–Z). Catálogo fijo A–J (I=RSI overbought SHORT, J=MACD bearish) "
+        "  Promovidas (Q–Z). Catálogo fijo A–P (I=RSI overbought SHORT, J=MACD bearish, "
+        "K=EMA rejection, L=BB upper rejection, M=orderbook ask pressure, "
+        "N=breakdown vol, O=lower TF bearish, P=range resistance) "
         "está en el system prompt:",
     ]
     for entry in sorted(promoted, key=lambda e: e.code):

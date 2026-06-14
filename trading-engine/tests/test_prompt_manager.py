@@ -143,7 +143,7 @@ def test_render_user_prompt_with_strict_false_leaves_unknown_placeholders():
     manager = PromptManager(None)
 
     # WHEN rendering with a subset of the new block-based keys and strict=False
-    # El user prompt ahora usa bloques (A-J); aquí sólo proveemos los keys de
+    # El user prompt ahora usa bloques (A-P); aquí sólo proveemos los keys de
     # Bloque B + H + I para verificar que los valores conocidos se renderizan
     # y los desconocidos se dejan como "{key}".
     values = {

@@ -84,7 +84,8 @@ def test_verify_spec_testable_rejects_unknown_ctx():
 def test_extended_letters_exclude_static_ij():
     assert "I" not in EXTENDED_LETTERS
     assert "J" not in EXTENDED_LETTERS
-    assert "K" in EXTENDED_LETTERS
+    assert "K" not in EXTENDED_LETTERS
+    assert "Q" in EXTENDED_LETTERS
 
 
 def test_active_registry_codes_excludes_static_collisions():
@@ -103,8 +104,8 @@ def test_active_registry_codes_excludes_static_collisions():
             created_at=now,
         ),
         ConfluenceRegistry(
-            code="K",
-            slug="ok_k",
+            code="Q",
+            slug="ok_q",
             title="OK",
             definition_md="y",
             verify_spec={},
@@ -112,7 +113,7 @@ def test_active_registry_codes_excludes_static_collisions():
             created_at=now,
         ),
     ]
-    assert active_registry_codes(entries) == frozenset({"K"})
+    assert active_registry_codes(entries) == frozenset({"Q"})
 
 
 def test_render_registry_block_empty():
@@ -179,19 +180,19 @@ async def test_promote_eligible_candidates_assigns_first_extended_letter(session
     await session.commit()
 
     assert len(promoted) == 1
-    assert promoted[0]["code"] == "K"
+    assert promoted[0]["code"] == "Q"
 
     registry = (await session.execute(select(ConfluenceRegistry))).scalars().all()
     assert len(registry) == 1
-    assert registry[0].code == "K"
-    assert active_registry_codes(registry) == frozenset({"K"})
+    assert registry[0].code == "Q"
+    assert active_registry_codes(registry) == frozenset({"Q"})
 
 
 @pytest.mark.asyncio
 async def test_promote_skips_when_max_active_reached(session: AsyncSession):
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     session.add(ConfluenceRegistry(
-        code="K",
+        code="Q",
         slug="existing",
         title="Existing",
         definition_md="def",

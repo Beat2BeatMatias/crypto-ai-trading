@@ -183,14 +183,20 @@ export function Help() {
           ["H", "RANGE_SUPPORT_TOUCH", "Precio en banda inferior de rango definido"],
         ]} />
 
-        <SubTitle>Catálogo Fijo Bearish (I–J) — Solo Futuros</SubTitle>
+        <SubTitle>Catálogo Fijo Bearish (I–P) — Solo Futuros</SubTitle>
         <p className="text-zinc-500 text-xs mb-2">Siempre en system prompt, solo disponibles cuando <Code>trading_product=futures</Code>.</p>
         <Table headers={["Código", "Nombre", "Descripción"]} rows={[
           ["I", "RSI_OVERBOUGHT_REJECTION", "RSI 15m/1h &gt;65 con rechazo bajista"],
           ["J", "MACD_BEARISH_CROSS", "MACD &lt; Signal en 15m/1h con histograma decreciente"],
+          ["K", "BEARISH_EMA_REJECTION", "Rebote en EMA9/20/50/200 (15m, 1h o 4h) con mecha superior"],
+          ["L", "BB_UPPER_REJECTION", "BB% 5m &gt;95 con vela de rechazo (mecha superior)"],
+          ["M", "ORDERBOOK_ASK_PRESSURE", "Imbalance &gt;1.2 + ask_wall &lt;0.3% del precio"],
+          ["N", "BREAKDOWN_VOL_CONFIRMED", "Breakdown de soporte con volumen &gt;1.5× media + OBV slope negativo"],
+          ["O", "LOWER_TF_BEARISH_ALIGNMENT", "Estructura 1h=downtrend + RSI 4h&lt;50 + EMA20_4h &lt; EMA50_4h"],
+          ["P", "RANGE_RESISTANCE_TOUCH", "Precio en banda superior de rango (Stoch &gt;80, BB% &gt;90)"],
         ]} />
 
-        <SubTitle>Confluencias Promovidas (K–Z) — Patrones Aprendidos</SubTitle>
+        <SubTitle>Confluencias Promovidas (Q–Z) — Patrones Aprendidos</SubTitle>
         <p className="text-zinc-400 text-sm mb-2">
           No están hardcodeadas. Surgen de un pipeline de aprendizaje:
         </p>
@@ -202,8 +208,34 @@ export function Help() {
           <div>5. Cada confluencia promovida tiene <Code>definition_md</Code> + tag direccional [LONG/SHORT/AMBOS]</div>
         </div>
         <p className="text-zinc-500 text-xs">
-          El CoherenceChecker valida que K–Z cumplan su <Code>verify_spec</Code> (C8) y que el tag direccional
+          El CoherenceChecker valida que Q–Z cumplan su <Code>verify_spec</Code> (C8) y que el tag direccional
           coincida con la acción (C9).
+        </p>
+
+        <SubTitle>Evaluación y Desactivación (Downgrade)</SubTitle>
+        <p className="text-zinc-400 text-sm mb-3">
+          Las confluencias promovidas no son permanentes. El Supervisor evalúa su rendimiento
+          diariamente y puede <strong>desactivarlas</strong> si no rinden. También el operador puede
+          desactivarlas manualmente desde la UI.
+        </p>
+        <div className="bg-zinc-950 rounded-lg p-4 border border-zinc-800 text-sm text-zinc-300 font-mono text-xs space-y-1 mb-3">
+          <div><span className="text-zinc-500">Cada ciclo diario, el Supervisor:</span></div>
+          <div>          1. Cuenta ocurrencias de cada código Q–Z en decisiones con outcome conocido</div>
+          <div>2. Calcula win rate: <Code>winners / (winners + losers)</Code></div>
+          <div>3. Si <Code>total_samples &lt; confluence_eval_min_samples (5)</Code> → saltea (datos insuficientes)</div>
+          <div>4. Si <Code>win_rate &gt;= confluence_eval_min_win_rate (0.35)</Code> → adequate, sigue activa</div>
+          <div>5. Si no → envía al LLM para revisión: deactivate / keep / insufficient_data</div>
+          <div>6. Si el LLM decide "deactivate" → <Code>deactivate_registry_code()</Code> (active=false)</div>
+        </div>
+        <Table headers={["Config Key", "Default", "Descripción"]} rows={[
+          ["confluence_eval_min_samples", "5", "Mínimo de muestras para considerar evaluación"],
+          ["confluence_eval_min_win_rate", "0.35", "Win rate mínimo; por debajo gatilla revisión LLM"],
+          ["confluence_registry_max_active", "5", "Máximo de Q–Z activas simultáneas"],
+        ]} />
+        <p className="text-zinc-500 text-xs mt-2">
+          Las letras desactivadas se reservan por 30 días (<Code>LETTER_RECYCLE_DAYS</Code>) antes de
+          reciclarse para nuevas promociones. La desactivación manual vía UI sigue el mismo proceso:
+          <Code>POST /api/confluence/registry/{`{code}`}/deactivate</Code>.
         </p>
       </Card>
 
@@ -324,13 +356,14 @@ export function Help() {
           ["C1P", "Confluencia I (RSI overbought) sin RSI&gt;65", "warning (crítica en strict_mode)"],
           ["C2P", "Confluencia J (MACD bearish cross) sin MACD&lt;Signal", "warning (crítica en strict_mode)"],
           ["C3P", "SHORT action con régimen/indicadores incoherentes", "warning (crítica en strict_mode)"],
+          ["C4P", "Confluencia L (BB_UPPER_REJECTION) sin BB% 5m &gt;95", "warning (crítica en strict_mode)"],
           ["C4", "Confianza ≥0.85 con &lt;2 confluencias", "warning"],
           ["C5", "BUY con confianza &lt;0.60 sin tag explicativo", "warning"],
           ["C5P", "SHORT con confianza &lt;0.50 sin tag", "warning"],
           ["C6", "expected_holding_min fuera de rango del perfil", "warning"],
           ["C7", "R:R real ≤ min_rr_ratio", "crítica (siempre bloquea)"],
-          ["C8", "K–Z declarada pero verify_spec falla", "warning"],
-          ["C9", "Mix bull+bear opuestas o tag direccional vs acción", "warning (crítica en strict_mode)"],
+          ["C8", "Q–Z declarada pero verify_spec falla", "warning"],
+          ["C9", "Mix bull+bear (A–H + I–P) opuestas o tag direccional vs acción", "warning (crítica en strict_mode)"],
           ["C10", "TP proyectado más allá del rango 24h sin justificación", "warning (crítica si falta [TP_PROYECTADO])"],
         ]} />
       </Card>

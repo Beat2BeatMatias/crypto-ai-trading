@@ -1,4 +1,4 @@
-"""Deterministic confidence_base from filtered confluences (A–H + active I–Z)."""
+"""Deterministic confidence_base from filtered confluences (A–P + active Q–Z)."""
 from __future__ import annotations
 
 from typing import Any
@@ -38,7 +38,7 @@ _DEFAULT_CALIBRATION: dict[str, float] = {
 
 
 def effective_confluence_count(confluences: list[str]) -> int:
-    """Count post-filter confluences (A–H + active I–Z, each weight 1.0)."""
+    """Count post-filter confluences (A–H + active I–P + promoted Q–Z, each weight 1.0)."""
     return len(confluences)
 
 

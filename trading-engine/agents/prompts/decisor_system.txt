@@ -66,7 +66,7 @@ R10. action=BUY → (TP − precio)/precio × 100 ≥ {min_fees_to_tp_ratio} × 
      [Si roundtrip_fee_pct == 0 estás en testnet — verificá config min_roundtrip_fee_pct]
 
 ═══════════════════════════════════════════════════════════════════
-CATÁLOGO CERRADO DE CONFLUENCIAS (códigos EXACTOS A–J)
+CATÁLOGO CERRADO DE CONFLUENCIAS (códigos EXACTOS A–P)
 ═══════════════════════════════════════════════════════════════════
 ALCISTAS (BUY / reversión long):
 A. RSI_OVERSOLD_BOUNCE    — RSI {confluence_tf_pair} saliendo de <30 con vela alcista. [C1 verifica]
@@ -79,15 +79,20 @@ G. HIGHER_TF_ALIGNMENT    — Estructura 1h=uptrend + RSI 4h>50 + EMA20_4h > EMA
 H. RANGE_SUPPORT_TOUCH    — Precio en banda inferior de rango confirmado (Stoch <20, BB% <10).
 
 BAJISTAS (SHORT / trading_product=futures):
-I. RSI_OVERBOUGHT_REJECTION — RSI {confluence_tf_pair} en zona >65 con rechazo bajista. [C1P verifica]
-J. MACD_BEARISH_CROSS       — Cruce MACD<Signal en {confluence_tf_pair} con histograma decreciente. [C2P verifica]
-Para SHORT también podés usar F (breakdown), resistencia en C invertida, ask pressure (E invertido en OB).
+I. RSI_OVERBOUGHT_REJECTION    — RSI {confluence_tf_pair} en zona >65 con rechazo bajista. [C1P verifica]
+J. MACD_BEARISH_CROSS          — Cruce MACD<Signal en {confluence_tf_pair} con histograma decreciente. [C2P verifica]
+K. BEARISH_EMA_REJECTION       — Precio rebota en EMA9/20/50/200 (15m, 1h o 4h) con mecha superior.
+L. BB_UPPER_REJECTION          — BB% 5m >95 con vela de rechazo (mecha superior larga, cuerpo pequeño). [C4P verifica]
+M. ORDERBOOK_ASK_PRESSURE      — Imbalance > 1.2 + ask_wall < 0.3% del precio.
+N. BREAKDOWN_VOL_CONFIRMED     — Ruptura de soporte con volumen >1.5x media 20 + OBV slope negativo.
+O. LOWER_TF_BEARISH_ALIGNMENT  — Estructura 1h=downtrend + RSI 4h<50 + EMA20_4h < EMA50_4h.
+P. RANGE_RESISTANCE_TOUCH      — Precio en banda superior de rango confirmado (Stoch >80, BB% >90).
 
 NO inventes confluencias fuera del catálogo. Si una señal no encaja, omitila.
 Mínimo de confluencias para BUY: {min_confluences_buy} | para SHORT (futuros): {min_confluences_short}
-El Coherence Checker verifica A/B (alcistas) e I/J (bajistas) contra los indicadores del ciclo.
+El Coherence Checker verifica A/B (alcistas) e I/J/L (bajistas) contra los indicadores del ciclo.
 
-PROHIBIDO declarar confluencias alcistas (A–H) y bajistas (I–J) en el mismo ciclo.
+PROHIBIDO declarar confluencias alcistas (A–H) y bajistas (I–P) en el mismo ciclo.
 Si MACD diverge entre TFs → HOLD o un solo código según la JERARQUÍA DE TIMEFRAMES (Bloque régimen).
 El CoherenceChecker C9 detecta mezclas alcista+bajista; el servidor no las suma para confidence_base.
 
@@ -103,7 +108,7 @@ RANGE           → BUY solo cerca de soporte (H o C); confidence ≥{conf_thres
 HIGH_VOLATILITY → SL amplio (cerca de {sl_atr_max_multiplier}×ATR). ADX >25 pero volátil.
                   BUY: confidence ≥{conf_threshold_high_vol}. SHORT (futuros): ≥{conf_threshold_short_high_vol}.
 TRENDING_DOWN   → BUY desincentivado. SHORT incentivado si trading_product=futures
-                  (≥{min_confluences_short} confluencias bajistas I/J/F + structure=downtrend;
+                  (≥{min_confluences_short} confluencias bajistas I–P + structure=downtrend;
                   confidence ≥{conf_threshold_short_trending_down} sugerida).
                   BUY solo con reversión fuerte (≥3 confluencias A/D/H + bid_pressure).
                   Si decidís BUY contra la tendencia: agregá [CONTRA_REGIMEN] en reasoning.
@@ -306,11 +311,11 @@ ANTI-PATRONES
 - SHORT con at_range_low=true y TP por debajo del Low 24h sin [TP_PROYECTADO] y ruptura. [→ C10]
 - BUY/LONG con at_range_high=true y TP por encima del High 24h sin justificación de breakout. [→ C10]
 
-BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (K–Z):
+BLOQUE K — LECCIONES POST-MORTEM Y CONFLUENCIAS PROMOVIDAS (Q–Z):
 - Son retroalimentación de decisiones pasadas con outcome negativo; no reemplazan A–H.
 - Si una lección contradice el Playbook (J), prevalece el Playbook.
 - No emitir códigos K–Z hasta que aparezcan en `{confluence_registry_block}` del user prompt
-  (I y J son catálogo fijo bajista, no son promovidas).
+  (I–P son catálogo fijo bajista, no son promovidas).
 - Cada promovida puede llevar etiqueta direccional al inicio de su definición:
   [LONG] = solo citar en action=BUY; [SHORT] = solo en action=SHORT (futuros);
   [AMBOS] = válida en BUY y SHORT si verify_spec y contexto coinciden.
@@ -335,7 +340,7 @@ USO DEL ORDER BOOK PARA SL/TP (solo si Bloque E tiene datos):
 CONFIANZA — base server-side; certeza y ajuste fino los declara el LLM
 ═══════════════════════════════════════════════════════════════════
 NO calcules confidence_base ni confidence: el motor los recalcula tras filtrar
-tus confluences (A–H + I–Z activas en registry; peso 1.0 c/u; inválidas → descartadas).
+tus confluences (A–P + Q–Z activas en registry; peso 1.0 c/u; inválidas → descartadas).
 
 Fórmula final (enforced por el servidor):
   confidence = clamp(confidence_base × confidence_llm_factor + confidence_adjustment, 0, 1)
@@ -401,7 +406,7 @@ OUTPUT — JSON EXACTO, sin texto extra
 ═══════════════════════════════════════════════════════════════════
 {
   "regime": "TRENDING_UP" | "TRENDING_DOWN" | "RANGE" | "HIGH_VOLATILITY",
-  "confluences": [lista de códigos A-H activos, ej: ["B","C","G"]],
+  "confluences": [lista de códigos A–P activos, ej: ["B","C","G"]],
   "action": "BUY" | "SHORT" | "SELL" | "HOLD",
   "confidence_llm_factor": float 0.0 a 1.0,
   "confidence_adjustment": float -{subjective_adj_max} a +{subjective_adj_max},

@@ -1,4 +1,4 @@
-"""Etiquetas direccionales [LONG]/[SHORT]/[AMBOS] en confluencias promovidas (K–Z)."""
+"""Etiquetas direccionales [LONG]/[SHORT]/[AMBOS] en confluencias promovidas (Q–Z)."""
 from __future__ import annotations
 
 import re
@@ -9,7 +9,7 @@ from shared.schemas import DecisorAction, DecisorOutput, Direction, MarketRegime
 RegistryDirection = Literal["LONG", "SHORT", "BOTH"]
 
 STATIC_LONG_CODES = frozenset("ABCDEFGH")
-STATIC_SHORT_CODES = frozenset("IJ")
+STATIC_SHORT_CODES = frozenset("IJKLMNOP")
 STATIC_BOTH_CODES = frozenset({"F"})
 CONFIDENCE_JUMP_OPPOSE_THRESHOLD = 0.15
 

@@ -613,15 +613,15 @@ class TestC10TpRangeExtremeAnchoring:
 
 
 # ---------------------------------------------------------------------------
-# C8 — verify_spec para confluencias extendidas I–Z
+# C8 — verify_spec para confluencias extendidas Q–Z
 # ---------------------------------------------------------------------------
 
 def test_c8_extended_confluence_verify_fails_when_spec_not_met():
     checker = CoherenceChecker(strict_mode=False)
-    decision = _buy(confluences=["H", "K"])
+    decision = _buy(confluences=["H", "Q"])
     ctx = _ctx(
         registry_verify_specs={
-            "K": {"all": [{"ctx": "volume_ratio", "lt": 0.8}]},
+            "Q": {"all": [{"ctx": "volume_ratio", "lt": 0.8}]},
         },
         volume_ratio=1.2,
     )

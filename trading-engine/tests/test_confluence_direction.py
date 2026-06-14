@@ -33,14 +33,14 @@ def test_registry_direction_allows_action():
 
 def test_render_registry_block_shows_direction_hint():
     entry = SimpleNamespace(
-        code="K",
+        code="Q",
         title="Fake breakdown",
         definition_md="[SHORT] Precio pierde soporte con volumen.",
         active=True,
     )
     block = render_registry_block([entry])
     assert "solo SHORT" in block
-    assert "K." in block
+    assert "Q." in block
 
 
 def test_profile_confluences_futures_includes_short_codes():
@@ -57,7 +57,7 @@ def test_c9_promoted_direction_mismatch():
     decision = DecisorOutput(
         action=DecisorAction.BUY,
         regime=MarketRegime.RANGE,
-        confluences=["K"],
+        confluences=["Q"],
         confidence=0.7,
         confidence_base=0.7,
         confidence_adjustment=0.0,
@@ -70,7 +70,7 @@ def test_c9_promoted_direction_mismatch():
     ctx = {
         "price": 92_000.0,
         "trading_product": "futures",
-        "registry_direction_by_code": {"K": "SHORT"},
+        "registry_direction_by_code": {"Q": "SHORT"},
     }
     warnings = checker._c9_promoted_direction_vs_action(decision, ctx)
     assert len(warnings) == 1
@@ -81,8 +81,8 @@ def test_c9_promoted_direction_mismatch():
 def test_classify_confluences_by_direction_static():
     longs, shorts, neutral = classify_confluences_by_direction(["B", "J", "K"])
     assert longs == ["B"]
-    assert shorts == ["J"]
-    assert neutral == ["K"]
+    assert shorts == ["J", "K"]
+    assert neutral == []
 
 
 def test_has_opposing_confluence_mix():

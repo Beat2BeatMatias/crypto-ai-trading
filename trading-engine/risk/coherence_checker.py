@@ -1,8 +1,8 @@
 """
 CoherenceChecker — detecta incoherencias y posibles alucinaciones del LLM Decisor.
 
-Reglas C1–C10 (+ C1P/C2P/C3P bajistas): producen CoherenceWarning (warnings auditables).
-En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C7/C10 se convierten en rechazos duros.
+Reglas C1–C10 (+ C1P/C2P/C3P/C4P bajistas): producen CoherenceWarning (warnings auditables).
+En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C4P/C7/C10 se convierten en rechazos duros.
 C9 (mezcla alcista+bajista): en strict_mode filtra confluencias desalineadas y recalcula confianza.
 
 C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
@@ -56,7 +56,7 @@ def _ctx_tf_float(ctx: dict[str, Any], key_prefix: str, tf: str) -> float:
 
 @dataclass
 class CoherenceWarning:
-    rule_id: str          # "C1" … "C10", "C1P" … "C3P"
+    rule_id: str          # "C1" … "C10", "C1P" … "C4P"
     message: str
     severity: str = "warning"   # "warning" | "critical" (cuando strict_mode)
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -104,6 +104,7 @@ class CoherenceChecker:
         warnings.extend(self._c10_tp_range_extreme_anchoring(decision, ctx))
         warnings.extend(self._c8_extended_confluence_verify(decision, ctx))
         warnings.extend(self._c9_opposing_confluence_mix(decision, ctx))
+        warnings.extend(self._c4p_bb_upper_rejection(decision, ctx))
         warnings.extend(self._c9_promoted_direction_vs_action(decision, ctx))
 
         if warnings:
@@ -608,6 +609,34 @@ class CoherenceChecker:
             },
         )]
 
+    def _c4p_bb_upper_rejection(self, decision: DecisorOutput,
+                                ctx: dict[str, Any]) -> list[CoherenceWarning]:
+        """
+        C4P: Confluencia L (BB_UPPER_REJECTION) declarada pero BB% 5m no >95.
+        """
+        if "L" not in decision.confluences:
+            return []
+        bb_pct_5m = ctx.get("bb_pct_5m")
+        if bb_pct_5m is None:
+            return []
+        bb_pct_5m = float(bb_pct_5m)
+        if bb_pct_5m > 95:
+            return []
+        severity = "critical" if self.strict_mode else "warning"
+        return [CoherenceWarning(
+            rule_id="C4P",
+            severity=severity,
+            message=(
+                f"Confluencia 'L' (BB_UPPER_REJECTION) declarada pero "
+                f"BB% 5m={bb_pct_5m:.0f}% ≤ 95% — "
+                f"no hay evidencia de sobrecompra extrema en Bollinger Bands."
+            ),
+            evidence={
+                "bb_pct_5m": bb_pct_5m,
+                "threshold": 95.0,
+            },
+        )]
+
     def _c8_extended_confluence_verify(
         self,
         decision: DecisorOutput,
@@ -639,7 +668,7 @@ class CoherenceChecker:
         ctx: dict[str, Any],
     ) -> list[CoherenceWarning]:
         """
-        C9: Mezcla de confluencias alcistas (A–H) y bajistas (I–J) en la misma decisión.
+        C9: Mezcla de confluencias alcistas (A–H) y bajistas (I–P) en la misma decisión.
         En strict_mode la severidad es critical para habilitar filtrado server-side.
         """
         registry = ctx.get("registry_direction_by_code") or {}

@@ -41,7 +41,7 @@ async def test_list_confluence_registry_active_only(client, app_with_db):
     now = datetime.now(tz=timezone.utc)
     async with factory() as s:
         s.add(ConfluenceRegistry(
-            code="I",
+            code="Q",
             slug="vol_div_range",
             title="Volume Divergence",
             definition_md="def",
@@ -50,7 +50,7 @@ async def test_list_confluence_registry_active_only(client, app_with_db):
             created_at=now,
         ))
         s.add(ConfluenceRegistry(
-            code="J",
+            code="R",
             slug="inactive_pattern",
             title="Inactive",
             definition_md="def",
@@ -65,7 +65,7 @@ async def test_list_confluence_registry_active_only(client, app_with_db):
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 1
-    assert body[0]["code"] == "I"
+    assert body[0]["code"] == "Q"
 
     resp_all = await client.get("/api/confluence/registry?active_only=false")
     assert resp_all.status_code == 200
@@ -96,7 +96,7 @@ async def test_promote_candidate_creates_registry_entry(client, app_with_db):
     resp = await client.post(f"/api/confluence/candidates/{cand_id}/promote")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["code"] == "I"
+    assert body["code"] == "Q"
     assert body["title"] == "Test Pattern"
 
     reg = await client.get("/api/confluence/registry")
@@ -142,7 +142,7 @@ async def test_deactivate_registry_entry(client, app_with_db):
     now = datetime.now(tz=timezone.utc)
     async with factory() as s:
         s.add(ConfluenceRegistry(
-            code="I",
+            code="Q",
             slug="active_one",
             title="Active",
             definition_md="def",
@@ -152,7 +152,7 @@ async def test_deactivate_registry_entry(client, app_with_db):
         ))
         await s.commit()
 
-    resp = await client.post("/api/confluence/registry/I/deactivate")
+    resp = await client.post("/api/confluence/registry/Q/deactivate")
     assert resp.status_code == 200
     assert resp.json()["active"] is False
 

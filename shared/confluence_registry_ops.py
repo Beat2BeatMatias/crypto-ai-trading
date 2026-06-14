@@ -11,10 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.db.models import ConfluenceCandidate, ConfluenceRegistry
 
-STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJ")
-# Letras solo para confluencias promovidas (K–Z). I/J son bajistas estáticas en futuros.
+STATIC_CONFLUENCE_CODES = frozenset("ABCDEFGHIJKLMNOP")
+# Letras para confluencias promovidas (Q–Z). I–P son bajistas fijas en futuros.
 EXTENDED_LETTERS = [
-    chr(c) for c in range(ord("K"), ord("Z") + 1)
+    chr(c) for c in range(ord("Q"), ord("Z") + 1)
     if chr(c) not in STATIC_CONFLUENCE_CODES
 ]
 LETTER_RECYCLE_DAYS = 30
@@ -23,6 +23,7 @@ KNOWN_CTX_KEYS = frozenset({
     "price", "rsi_15m", "rsi_5m", "rsi_1h", "hist_15m", "hist_1h",
     "volume_ratio", "block_a_profile", "pct_24h", "imbalance",
     "block_f_cross_tf", "volatility_label", "macd_15m", "adx_15m",
+    "bb_pct_5m", "bb_pct_1m",
 })
 
 
@@ -122,7 +123,7 @@ async def promote_candidate_row(
 
     code = await next_available_letter(session, now=now)
     if code is None:
-        raise ConfluenceOpsError("no_letters", "No hay letras K–Z disponibles")
+        raise ConfluenceOpsError("no_letters", "No hay letras Q–Z disponibles")
 
     slug = slug_from_tag(candidate.pattern_tag)
     existing_slug = (await session.execute(
@@ -194,7 +195,7 @@ async def deactivate_registry_code(
 ) -> ConfluenceRegistry:
     now = now or datetime.now(tz=timezone.utc)
     if code in STATIC_CONFLUENCE_CODES:
-        raise ConfluenceOpsError("static_code", "No se puede desactivar el catálogo fijo A–J")
+        raise ConfluenceOpsError("static_code", "No se puede desactivar el catálogo fijo A–P")
     row = await session.get(ConfluenceRegistry, code)
     if row is None or not row.active:
         raise ConfluenceOpsError("not_found", "Confluencia no encontrada o ya inactiva")
