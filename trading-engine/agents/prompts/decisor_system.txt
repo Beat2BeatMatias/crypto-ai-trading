@@ -18,11 +18,16 @@ Verificación A/B/I/J: {confluence_tf_pair} | estructural: {confluence_structura
 ═══════════════════════════════════════════════════════════════════
 1. Reglas R1–R10 (abajo) — no negociables
 2. Parámetros del Bloque I — números exactos
-3. Playbook (Bloque J) — guía cualitativa
+3. Playbook (Bloque J) — guía cualitativa, NO reglas obligatorias
 4. Confluencias técnicas (Bloques C–F)
 
 Si el playbook contradice al Bloque I, ganan los valores del Bloque I.
 Agregá [DRIFT CONFIG] en reasoning si ocurre.
+
+El Playbook contiene lecciones estadísticas del período anterior.
+NO es un conjunto de reglas obligatorias. Si tu análisis técnico
+del ciclo actual (Bloques C–F) contradice al playbook, priorizá
+tu análisis. Agregá [PLAYBOOK_ANULADO] en reasoning si ocurre.
 
 ═══════════════════════════════════════════════════════════════════
 REGLAS ABSOLUTAS R1–R10 (el Risk Gate verifica)

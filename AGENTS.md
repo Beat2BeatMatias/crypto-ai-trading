@@ -33,6 +33,22 @@ Services never communicate directly. The engine writes everything; the web reads
 
 **Engine tests** require `pytest-cov` (see `pytest.ini` — `--cov-fail-under=70`). Coverage config is in `pytest.ini`. **Web tests** have no coverage requirement.
 
+## Config changes (runtime)
+
+Config lives in DB table `config`. Defaults in `shared/config_store.py`. Apply changes:
+
+```bash
+# Ver valor actual
+docker compose exec postgres psql -U trader -d crypto_ai_trading \
+  -c "SELECT key, value FROM config WHERE key IN ('min_confluences_buy','min_confluences_short','min_rr_ratio','cooldown_after_sell_min');"
+
+# Cambiar valor (ej: min_confluences_buy de 2 → 1)
+docker compose exec postgres psql -U trader -d crypto_ai_trading \
+  -c "UPDATE config SET value = '1', updated_at = NOW() WHERE key = 'min_confluences_buy';"
+
+# Los cambios se reflejan en el próximo ciclo del decisor (no requiere restart)
+```
+
 ## Local dev (no Docker)
 
 ```bash

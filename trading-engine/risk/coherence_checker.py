@@ -5,8 +5,8 @@ Reglas C1–C10 (+ C1P/C2P/C3P/C4P bajistas): producen CoherenceWarning (warning
 En modo strict (coherence_strict_mode=True), C1/C2/C3/C1P/C2P/C3P/C4P/C7/C10 se convierten en rechazos duros.
 C9 (mezcla alcista+bajista): en strict_mode filtra confluencias desalineadas y recalcula confianza.
 
-C7 es siempre critical independientemente del strict_mode: el LLM no puede alucinar
-el R:R porque el código lo recalcula con el precio real del contexto.
+        C7 es critical solo en strict_mode: el Risk Gate (R5) ya verifica R:R mínimo,
+        por lo que no necesita bloqueo adicional fuera de strict_mode.
 
 C10 (TP en extremo de rango 24h): warning por defecto; critical en strict_mode o cuando
 el TP proyecta más allá del Low/High sin [TP_PROYECTADO] + justificación de ruptura.
@@ -502,11 +502,9 @@ class CoherenceChecker:
         El LLM tiende a alucinar el R:R reportado en reasoning. Esta regla
         lo recalcula deterministicamente con el precio real del contexto
         (ctx["price"] — mismo valor que usará el RiskGate) y emite un warning
-        CRITICAL si el resultado no supera min_rr_ratio.
-
-        Siempre es critical: un BUY con R:R insuficiente no tiene corrección
-        posible en two-pass (los niveles SL/TP no cambian con la revisión),
-        por lo que el Decisor debe degradarlo a HOLD directamente.
+        CRITICAL solo en strict_mode. Fuera de strict_mode es warning: el Risk
+        Gate (R5) ya rechaza trades con R:R insuficiente, por lo que C7 sería
+        redundante como bloqueo.
         """
         direction = direction_for_action(decision.action)
         if direction is None:
@@ -537,7 +535,7 @@ class CoherenceChecker:
 
         return [CoherenceWarning(
             rule_id="C7",
-            severity="critical",
+            severity="critical" if self.strict_mode else "warning",
             message=(
                 f"R:R real={rr_real:.2f} ≤ min_rr_ratio={min_rr} "
                 f"(TP={decision.take_profit:,.2f}, precio={price:,.2f}, "

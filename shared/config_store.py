@@ -159,7 +159,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.KILL_SWITCH: _Default("false", "bool", "Emergency stop"),
     ConfigKey.SUPERVISOR_RUN_NOW: _Default("false", "bool", "internal: manual supervisor trigger"),
     ConfigKey.ATR_TIMEFRAME: _Default("15m", "string", "ATR reference timeframe. Options: 5m | 15m | 1h"),
-    ConfigKey.MIN_RR_RATIO: _Default("1.3", "float", "Min reward/risk ratio for BUY approval"),
+    ConfigKey.MIN_RR_RATIO: _Default("1.2", "float", "Min reward/risk ratio for BUY approval"),
     ConfigKey.SL_ATR_MULTIPLIER: _Default("0.3", "float", "Min SL distance as ATR multiplier"),
     ConfigKey.SL_ATR_MAX_MULTIPLIER: _Default("1.5", "float", "Max SL distance as ATR multiplier"),
     ConfigKey.CONF_THRESHOLD_TRENDING_UP: _Default(
@@ -247,15 +247,15 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "reporta fees 0 (testnet). 0.20 = equivalente LIVE (0.1% taker/lado). Rango 0.0–0.5.",
     ),
     ConfigKey.MIN_CONFLUENCES_BUY: _Default(
-        "2", "int",
+        "1", "int",
         "Guía LLM: número mínimo de confluencias recomendado para BUY. Inyectado en el system prompt como regla de calidad; el LLM lo considera pero tiene autonomía final. Rango 1–4.",
     ),
     ConfigKey.MIN_CONFLUENCES_SHORT: _Default(
-        "2", "int",
+        "1", "int",
         "Guía LLM: número mínimo de confluencias bajistas (I/J/F…) recomendado para SHORT en futuros. Rango 1–4.",
     ),
     ConfigKey.COOLDOWN_AFTER_SELL_MIN: _Default(
-        "15", "int",
+        "5", "int",
         "Guía LLM: minutos de cooldown tras SELL o cierre de posición antes de BUY o SHORT (futuros). Rango 0–120.",
     ),
     ConfigKey.SUBJECTIVE_ADJ_MAX: _Default(

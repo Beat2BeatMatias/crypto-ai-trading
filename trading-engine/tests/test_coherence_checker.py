@@ -326,18 +326,18 @@ class TestC7RRRatioVerification:
         decision = _buy(stop_loss=77100.0, take_profit=78500.0)
         ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
 
-        # WHEN
-        warnings = CoherenceChecker().evaluate(decision, ctx)
+        # WHEN strict_mode=True → critical
+        warnings = CoherenceChecker(strict_mode=True).evaluate(decision, ctx)
         c7 = [w for w in warnings if w.rule_id == "C7"]
 
-        # THEN hay un warning C7 crítico
+        # THEN hay un warning C7 crítico (solo en strict_mode)
         assert len(c7) == 1
         assert c7[0].severity == "critical"
         assert "0.56" in c7[0].message
         assert c7[0].evidence["rr_real"] == pytest.approx(0.5556, rel=1e-2)
 
-    def test_c7_critical_always_regardless_of_strict_mode(self):
-        # GIVEN strict_mode=False — C7 es critical igualmente
+    def test_c7_is_warning_outside_strict_mode(self):
+        # GIVEN strict_mode=False — C7 es warning (R5 del Risk Gate es el enforcement real)
         decision = _buy(stop_loss=77100.0, take_profit=78500.0)
         ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
 
@@ -345,9 +345,9 @@ class TestC7RRRatioVerification:
         warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
         c7 = [w for w in warnings if w.rule_id == "C7"]
 
-        # THEN sigue siendo critical aunque strict_mode=False
+        # THEN es warning fuera de strict_mode
         assert len(c7) == 1
-        assert c7[0].severity == "critical"
+        assert c7[0].severity == "warning"
 
     def test_c7_uses_context_price_not_llm_reported(self):
         # GIVEN el LLM podría reportar R:R=1.02 pero el precio real da 0.56
@@ -494,11 +494,17 @@ class TestC7RRRatioVerification:
         )
         ctx = _ctx(price=67000.0, min_rr_ratio=1.3)
 
-        warnings = CoherenceChecker().evaluate(decision, ctx)
+        # WHEN strict_mode=True → critical; fuera de strict_mode → warning
+        warnings = CoherenceChecker(strict_mode=True).evaluate(decision, ctx)
         c7 = [w for w in warnings if w.rule_id == "C7"]
 
         assert len(c7) == 1
         assert c7[0].severity == "critical"
+
+        # strict_mode=False → warning
+        warnings = CoherenceChecker(strict_mode=False).evaluate(decision, ctx)
+        c7 = [w for w in warnings if w.rule_id == "C7"]
+        assert c7[0].severity == "warning"
 
 
 # ---------------------------------------------------------------------------
@@ -656,8 +662,20 @@ def test_c8_skips_static_catalog_codes():
 
 class TestHasCritical:
 
-    def test_has_critical_true_when_c7_present(self):
-        # GIVEN BUY con R:R insuficiente
+    def test_has_critical_true_when_c7_present_in_strict_mode(self):
+        # GIVEN BUY con R:R insuficiente en strict_mode
+        decision = _buy(stop_loss=77100.0, take_profit=78500.0)
+        ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
+        checker = CoherenceChecker(strict_mode=True)
+
+        # WHEN
+        warnings = checker.evaluate(decision, ctx)
+
+        # THEN has_critical es True en strict_mode
+        assert checker.has_critical(warnings) is True
+
+    def test_has_critical_false_when_c7_outside_strict_mode(self):
+        # GIVEN BUY con R:R insuficiente pero strict_mode=False
         decision = _buy(stop_loss=77100.0, take_profit=78500.0)
         ctx = _ctx(price=78000.0, min_rr_ratio=1.0)
         checker = CoherenceChecker(strict_mode=False)
@@ -665,8 +683,8 @@ class TestHasCritical:
         # WHEN
         warnings = checker.evaluate(decision, ctx)
 
-        # THEN has_critical es True independientemente de strict_mode
-        assert checker.has_critical(warnings) is True
+        # THEN has_critical es False fuera de strict_mode (C7 es warning)
+        assert checker.has_critical(warnings) is False
 
     def test_has_critical_false_when_only_non_critical_warnings(self):
         # GIVEN BUY con R:R suficiente pero con warning C4 (no critical en no-strict)

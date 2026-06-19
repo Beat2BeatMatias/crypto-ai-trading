@@ -53,7 +53,7 @@ _PROFILE_CONFLUENCES_FUTURES_SHORT: dict[OperationalProfile, list[str]] = {
 
 def get_operational_profile(decisor_interval_min: int,
                             atr_timeframe: str) -> OperationalProfile:
-    if decisor_interval_min <= 10 or atr_timeframe in ("1m", "5m"):
+    if decisor_interval_min <= 15 or atr_timeframe in ("1m", "5m"):
         return "SCALPING"
     if decisor_interval_min > 30 or atr_timeframe in ("1h", "4h"):
         return "DAY_TRADING"
