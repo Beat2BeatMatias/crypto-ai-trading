@@ -192,7 +192,7 @@ class Decisor:
                 tokens_out=0,
                 latency_ms=0,
                 input={k: _serialize(v) for k, v in ctx.items()
-                       if not isinstance(v, dict) or k == "block_f_cross_tf"},
+                       if not isinstance(v, dict) or k in ("block_f_cross_tf", "block_c_tf_blocks")},
                 output={
                     **validated.model_dump(),
                     "coherence_warnings": [],

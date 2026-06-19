@@ -285,7 +285,7 @@ async def test_build_returns_all_required_keys(session: AsyncSession):
 
     # THEN all required keys are present
     required_keys = [
-        "timestamp_utc", "price", "rsi_5m", "rsi_1h",
+        "timestamp_utc", "price", "block_c_tf_blocks",
         "spread", "imbalance", "open_positions_count",
         "playbook", "mode", "taker_fee_pct", "roundtrip_fee_pct",
     ]
@@ -294,8 +294,8 @@ async def test_build_returns_all_required_keys(session: AsyncSession):
 
     # Spot-check some values
     assert ctx["price"] == 95000.0
-    assert ctx["rsi_1h"] == 55.0
-    assert ctx["rsi_5m"] == 48.0
+    assert ctx["block_c_tf_blocks"]["1h"]["rsi"] == 55.0
+    assert ctx["block_c_tf_blocks"]["5m"]["rsi"] == 48.0
     assert ctx["mode"] == "PAPER_TRADING"
     assert ctx["playbook"] == "# Playbook v0"
     assert ctx["spread"] == 0          # no orderbook
@@ -999,11 +999,10 @@ async def test_context_builder_when_rsi_null_should_flag_critical_null_indicator
     # THEN critical_null_indicator is True
     assert ctx["critical_null_indicator"] is True
 
-    # AND rsi_15m is None — not coerced to 0
-    assert ctx["rsi_15m"] is None
+    # AND rsi values are None inside block_c_tf_blocks — not coerced to 0
+    assert ctx["block_c_tf_blocks"].get("15m", {}).get("rsi") is None
 
-    # AND rsi_1h is None — not coerced to 0
-    assert ctx["rsi_1h"] is None
+    assert ctx["block_c_tf_blocks"].get("1h", {}).get("rsi") is None
 
 
 @pytest.mark.asyncio
@@ -1052,9 +1051,9 @@ async def test_context_builder_when_all_indicators_present_should_not_flag_criti
     # THEN critical_null_indicator is False — all critical keys are present
     assert ctx["critical_null_indicator"] is False
 
-    # AND rsi values are the real numbers
-    assert ctx["rsi_15m"] == pytest.approx(45.0)
-    assert ctx["rsi_1h"] == pytest.approx(55.0)
+    # AND rsi values are the real numbers in block_c_tf_blocks
+    assert ctx["block_c_tf_blocks"]["15m"]["rsi"] == pytest.approx(45.0)
+    assert ctx["block_c_tf_blocks"]["1h"]["rsi"] == pytest.approx(55.0)
 
 
 @pytest.mark.asyncio
@@ -1066,9 +1065,9 @@ async def test_context_builder_when_rsi_absent_should_pass_none_not_zero(
     # WHEN building the context
     ctx = await _build(session_null_rsi)
 
-    # THEN rsi_15m and rsi_1h are None — not 0 (which would trigger false oversold)
-    assert ctx["rsi_15m"] is None, "rsi_15m must be None, not 0 — 0 causes false oversold"
-    assert ctx["rsi_1h"] is None, "rsi_1h must be None, not 0 — 0 causes false oversold"
+    # THEN rsi values are None inside block_c_tf_blocks — not coerced to 0
+    assert ctx["block_c_tf_blocks"]["15m"].get("rsi") is None, "rsi_15m must be None, not 0"
+    assert ctx["block_c_tf_blocks"]["1h"].get("rsi") is None, "rsi_1h must be None, not 0"
 
 
 def test_fmt_when_value_is_none_should_return_nd():

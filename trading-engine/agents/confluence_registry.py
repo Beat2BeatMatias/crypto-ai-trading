@@ -1,6 +1,7 @@
 """Confluence registry — candidates queue, promotion, verify_spec evaluation."""
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -242,11 +243,36 @@ def evaluate_verify_spec(spec: dict[str, Any], ctx: dict[str, Any]) -> bool:
     return True
 
 
+_TF_SUFFIX_RE = re.compile(r"^(.+)_(\d+m|1h|4h)$")
+
+_FLAT_KEY_MAP = {
+    "macd": "macd",
+    "sig": "macd_signal",
+    "hist": "macd_hist",
+}
+
+
+def _resolve_ctx_value(key: str, ctx: dict[str, Any]) -> Any:
+    """Resolve a context key, falling back to block_c_tf_blocks for flat keys like rsi_15m."""
+    val = ctx.get(key)
+    if val is not None:
+        return val
+    m = _TF_SUFFIX_RE.match(key)
+    if m:
+        indicator, tf = m.group(1), m.group(2)
+        blocks = ctx.get("block_c_tf_blocks", {})
+        blk = blocks.get(tf, {})
+        if isinstance(blk, dict):
+            mapped = _FLAT_KEY_MAP.get(indicator, indicator)
+            return blk.get(mapped)
+    return None
+
+
 def _eval_rule(rule: dict[str, Any], ctx: dict[str, Any]) -> bool:
     key = rule.get("ctx")
     if not key:
         return False
-    val = ctx.get(key)
+    val = _resolve_ctx_value(key, ctx)
     if rule.get("exists"):
         return val is not None
     if val is None:

@@ -7,8 +7,6 @@ Precio BTC/USDT: ${price:,.2f}
 Cambio:  1h {pct_1h:+.2f}%  |  4h {pct_4h:+.2f}%  |  24h {pct_24h:+.2f}%
 ATR({atr_ref_tf}): ${atr_ref:.0f} ({atr_ref_pct:.2f}% del precio)  |  avg 7d: ${atr_avg_7d:.0f}  |  expanding={atr_expanding}
 Volatilidad: {volatility_label}
-Rango SL válido (R4): LONG → ${atr_ref_min:.0f}–${atr_ref_max:.0f} bajo precio | SHORT (futuros) → mismo rango ARRIBA del precio
-Producto activo: {trading_product}
 
 ════════════════════════════════════════════
 BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
@@ -18,15 +16,10 @@ BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
 {block_c_text}
 
 ════════════════════════════════════════════
-BLOQUE D — NIVELES CLAVE (referencia para anclar SL/TP — elección libre)
+BLOQUE D — NIVELES CLAVE (referencia para SL/TP)
 ════════════════════════════════════════════
-Usá estos niveles como anclas según tu tesis; podés combinarlos, ajustarlos
-(±0.1% antes de un wall) o proyectar más allá con [TP_PROYECTADO] si la tesis
-(breakout F, extensión de rango, etc.) lo justifica. Siempre citá el nivel o
-fórmula en [NIVELES] y verificá R4/R5 antes de emitir BUY o SHORT.
-
-Si at_range_low o at_range_high (líneas de rango 24h abajo): en extremos del rango
-preferí TP conservador en Low/High; measured move solo con ruptura confirmada.
+Usá estos niveles como anclas según tu tesis; citá el nivel o fórmula en [NIVELES].
+Si at_range_low o at_range_high: TP conservador en Low/High; measured move solo con ruptura.
 
 {block_d_text}
 
@@ -46,10 +39,8 @@ BLOQUE G — ÚLTIMAS DECISIONES
 {last_decisions_block}
 
 ════════════════════════════════════════════
-BLOQUE K — LECCIONES RECIENTES (post-mortem, últimas 72 h)
+BLOQUE K — LECCIONES RECIENTES (post-mortem)
 ════════════════════════════════════════════
-Contexto operativo de errores recientes. Si contradice el Playbook (J), gana el Playbook.
-
 {block_k_lessons}
 
 Confluencias promovidas activas (Q–Z):
@@ -59,33 +50,26 @@ Confluencias promovidas activas (Q–Z):
 BLOQUE H — PORTFOLIO
 ════════════════════════════════════════════
 Capital total: ${capital_total:,.2f} USDT  |  Disponible: ${usdt_available:,.2f}  |  BTC held: {btc_held:.6f}
-P&L hoy: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%)  |  Stop diario en: {daily_stop_pct:.1f}%
-P&L no realizado: ${unrealized_pnl_usd:+,.2f}
-Drawdown total: {current_drawdown_pct:+.2f}%
-Trades hoy: {trades_today_count} ({wins_today}W / {losses_today}L)
-Posiciones abiertas: {open_positions_count} / {max_simultaneous_trades}
+P&L hoy: ${pnl_today_usd:+,.2f} ({pnl_today_pct:+.2f}%)  |  Stop diario: {daily_stop_pct:.1f}%
+Drawdown: {current_drawdown_pct:+.2f}%  |  Trades hoy: {trades_today_count} ({wins_today}W/{losses_today}L)
+Posiciones: {open_positions_count} / {max_simultaneous_trades}
 {positions_block}
 
-Producto: {trading_product} | Funding rate: {funding_rate_pct}% | Margen disponible: ${available_margin:,.2f}
-Posición abierta (lado): {open_position_side} | Precio liquidación: {liquidation_price}
+Producto: {trading_product} | Funding: {funding_rate_pct}% | Margen disp: ${available_margin:,.2f} | Side: {open_position_side} | Liq: {liquidation_price}
 
 ════════════════════════════════════════════
-BLOQUE I — CONFIG RIESGO (fuente de verdad de parámetros numéricos)
+BLOQUE I — CONFIG RIESGO (fuente de verdad)
 ════════════════════════════════════════════
-max_position_pct:         {max_position_pct}     (cap R1)
-min_position_size:        {min_position_size}   (piso de sizing)
-min_notional_usdt:        {binance_min_notional_usdt:.2f} USDT  → position_size_pct mínimo entrada: {min_position_size_pct_notional:.4f}  (R11 — margen {usdt_available:.2f} USDT × leverage {notional_leverage:.0f}x en futuros; patas SL/TP exigen más % si TP/SL están lejos)
+max_position_pct:         {max_position_pct}     (R1)
+min_position_size:        {min_position_size}
+min_notional_usdt:        {binance_min_notional_usdt:.2f} USDT  → size pct mínimo: {min_position_size_pct_notional:.4f}  (margen {usdt_available:.2f} USDT × lev {notional_leverage:.0f}x)
 max_simultaneous_trades:  {max_simultaneous_trades}       (R8)
-daily_stop_pct:           {daily_stop_pct:.1f}%  (R9 — llevamos {pnl_today_pct:+.2f}% hoy)
 min_rr_ratio:             {min_rr_ratio}      (R5)
-sl_atr_range:             [{sl_atr_multiplier}×, {sl_atr_max_multiplier}×] ATR → ${atr_ref_min:.0f}–${atr_ref_max:.0f}  (R4)
-fees round-trip:          {roundtrip_fee_pct:.4f}%  (R10 — 0%=testnet)
-min_fees_to_tp_ratio:     {min_fees_to_tp_ratio}×
-min_confluences_buy:      {min_confluences_buy}
-min_confluences_short:    {min_confluences_short}
+min_fees_to_tp_ratio:     {min_fees_to_tp_ratio}×  |  fees round-trip: {roundtrip_fee_pct:.4f}%  |  slippage_cushion: {slippage_cushion_pct:.4f}%  (R10)
+min_confluences_buy:      {min_confluences_buy}  |  min_confluences_short: {min_confluences_short}
 conf_threshold BUY:       TRENDING_UP {conf_threshold_trending_up} | RANGE {conf_threshold_range} | HIGH_VOL {conf_threshold_high_vol}
 conf_threshold SHORT:     TRENDING_DOWN {conf_threshold_short_trending_down} | RANGE {conf_threshold_short_range} | HIGH_VOL {conf_threshold_short_high_vol}
-cooldown_after_sell_min:  {cooldown_after_sell_min}  (tras SELL o cierre, antes de BUY/SHORT)
+cooldown_after_sell_min:  {cooldown_after_sell_min}  |  spread_high_vol_threshold: {adj_spread_threshold_pct}%
 
 ════════════════════════════════════════════
 BLOQUE J — PLAYBOOK ACTIVO

@@ -1461,11 +1461,15 @@ class Supervisor:
             confidence = out.get("confidence") or "?"
             confluences = out.get("confluences") or []
             reasoning = (out.get("reasoning") or "")[:120]
-            rsi_15m = _safe_float(inp.get("rsi_15m") or inp.get("rsi"))
-            macd_hist = _safe_float(inp.get("hist_15m") or inp.get("hist"))
-            adx = _safe_float(inp.get("adx_15m") or inp.get("adx"))
+            tf_15m = (
+                (inp.get("block_c_tf_blocks") or {}).get("15m", {})
+                if isinstance(inp.get("block_c_tf_blocks"), dict) else {}
+            )
+            rsi_15m = _safe_float(tf_15m.get("rsi"))
+            macd_hist = _safe_float(tf_15m.get("macd_hist"))
+            adx = _safe_float(tf_15m.get("adx"))
             vol_ratio = _safe_float(inp.get("volume_ratio"))
-            bb_pct = _safe_float(inp.get("bb_pct_15m") or inp.get("bb_pct_5m"))
+            bb_pct = _safe_float(tf_15m.get("bb_pct"))
             cross_tf = (inp.get("block_f_cross_tf") or {}).get("alignment") or "?"
             conf_str = f"{confidence:.2f}" if isinstance(confidence, float) else str(confidence)
             confluences_str = "+".join(confluences) if confluences else "—"

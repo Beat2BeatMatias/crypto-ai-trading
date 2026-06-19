@@ -377,26 +377,6 @@ class ContextBuilder:
             # ---- Block C: Technical timeframes (per-TF blocks) ----
             "block_c_tf_blocks": tf_blocks,
             "block_c_tf_order": tf_order,
-            # Legacy flat keys — None when absent (no `or 0` coercion)
-            # so labelers receive the real signal rather than a fake 0/oversold.
-            "rsi_1m": self._get(ind, "1m", "rsi"),
-            "rsi_5m": self._get(ind, "5m", "rsi"),
-            "rsi_15m": self._get(ind, "15m", "rsi"),
-            "rsi_1h": self._get(ind, "1h", "rsi"),
-            "rsi_4h": self._get(ind, "4h", "rsi"),
-            "bb_pct_1m": self._get(ind, "1m", "bb_pct"),
-            "bb_pct_5m": self._get(ind, "5m", "bb_pct"),
-            **self._flat_macd_keys(ind),
-            "ema20_1h": self._get(ind, "1h", "ema20"),
-            "ema50_1h": ema50_1h,
-            "ema200_1h": ema200_1h,
-            "bb_up_1h": self._get(ind, "1h", "bb_upper"),
-            "bb_lo_1h": self._get(ind, "1h", "bb_lower"),
-            "ema20_4h": self._get(ind, "4h", "ema20"),
-            "ema50_4h": ema50_4h,
-            "ema200_4h": ema200_4h,
-            "atr_1h": self._get(ind, "1h", "atr"),
-            "atr_pct_1h": (float(self._get(ind, "1h", "atr")) / price * 100) if (self._get(ind, "1h", "atr") and price) else 0,
             # True when any critical indicator is absent — decisor must early-exit to HOLD.
             "critical_null_indicator": any(
                 self._get(ind, tf, key) is None
@@ -750,22 +730,32 @@ class ContextBuilder:
                 if macd_v is not None else "n/d"
             )
 
-            section = [
-                f"[{tf}] prioridad={prio} | trend={blk.get('trend_label','n/d')} | structure={struct}",
-                f"  RSI={_f(blk.get('rsi'),',.1f')} ({blk.get('rsi_label','n/d')}) | "
-                f"Stoch {stoch_str}",
-                f"  MACD {macd_str} ({blk.get('macd_label','n/d')})",
-                f"  EMA9={_f(blk.get('ema9'),',.0f')} EMA20={_f(blk.get('ema20'),',.0f')} "
-                f"EMA50={_f(blk.get('ema50'),',.0f')} EMA200={_f(blk.get('ema200'),',.0f')}",
-                f"  BB: upper={_f(blk.get('bb_upper'),',.0f')} mid={_f(blk.get('bb_middle'),',.0f')} "
-                f"lower={_f(blk.get('bb_lower'),',.0f')} bb%={bb_pct_str}",
-                f"  ATR={atr_val:.0f} ({atr_pct:.2f}%) | ADX={adx_str} | "
-                f"volatility={blk.get('volatility_label','n/d')}",
-                f"  VWAP={vwap_str}",
-                f"  Volume: actual={vol_c:.3f}  avg20={vol_a:.3f}  ratio={vol_ratio} | "
-                f"OBV_slope={obv_str}",
-                f"  Vela actual — wick_ratio: {wick_str}",
-            ]
+            if prio == "BAJA":
+                section = [
+                    f"[{tf}] prioridad=BAJA | RSI={_f(blk.get('rsi'),',.1f')} ({blk.get('rsi_label','n/d')}) | "
+                    f"MACD {macd_str} ({blk.get('macd_label','n/d')}) | ADX={adx_str}",
+                    f"  EMA9={_f(blk.get('ema9'),',.0f')} EMA20={_f(blk.get('ema20'),',.0f')} "
+                    f"EMA50={_f(blk.get('ema50'),',.0f')} EMA200={_f(blk.get('ema200'),',.0f')} | "
+                    f"BB%={bb_pct_str} | Volume ratio={vol_ratio}",
+                    f"  ATR={atr_val:.0f} ({atr_pct:.2f}%) | Stoch {stoch_str}",
+                ]
+            else:
+                section = [
+                    f"[{tf}] prioridad={prio} | trend={blk.get('trend_label','n/d')} | structure={struct}",
+                    f"  RSI={_f(blk.get('rsi'),',.1f')} ({blk.get('rsi_label','n/d')}) | "
+                    f"Stoch {stoch_str}",
+                    f"  MACD {macd_str} ({blk.get('macd_label','n/d')})",
+                    f"  EMA9={_f(blk.get('ema9'),',.0f')} EMA20={_f(blk.get('ema20'),',.0f')} "
+                    f"EMA50={_f(blk.get('ema50'),',.0f')} EMA200={_f(blk.get('ema200'),',.0f')}",
+                    f"  BB: upper={_f(blk.get('bb_upper'),',.0f')} mid={_f(blk.get('bb_middle'),',.0f')} "
+                    f"lower={_f(blk.get('bb_lower'),',.0f')} bb%={bb_pct_str}",
+                    f"  ATR={atr_val:.0f} ({atr_pct:.2f}%) | ADX={adx_str} | "
+                    f"volatility={blk.get('volatility_label','n/d')}",
+                    f"  VWAP={vwap_str}",
+                    f"  Volume: actual={vol_c:.3f}  avg20={vol_a:.3f}  ratio={vol_ratio} | "
+                    f"OBV_slope={obv_str}",
+                    f"  Vela actual — wick_ratio: {wick_str}",
+                ]
             lines.extend(section)
             lines.append("")
         return "\n".join(lines).rstrip()
@@ -854,14 +844,6 @@ class ContextBuilder:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _flat_macd_keys(ind: dict[str, Any]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for tf in _ALL_TIMEFRAMES:
-            out[f"macd_{tf}"] = ContextBuilder._get(ind, tf, "macd")
-            out[f"sig_{tf}"] = ContextBuilder._get(ind, tf, "macd_signal")
-            out[f"hist_{tf}"] = ContextBuilder._get(ind, tf, "macd_hist")
-        return out
-
     @staticmethod
     def _format_time_ago(ts: datetime) -> str:
         """Return human-readable elapsed time since `ts` (UTC-aware)."""

@@ -1,6 +1,8 @@
 """Tests unitarios para CoherenceChecker — reglas C1 a C7."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from risk.coherence_checker import CoherenceChecker
@@ -51,27 +53,33 @@ def _hold() -> DecisorOutput:
     )
 
 
+_FLAT_PATTERN = re.compile(r"^(.+)_(\d+m|1h|4h)$")
+_FLAT_KEY_MAP = {"macd": "macd", "sig": "macd_signal", "hist": "macd_hist"}
+
+
 def _ctx(**overrides) -> dict:
     base = {
         "price": 78000.0,
-        "rsi_15m": 55.0,
-        "rsi_1h": 52.0,
-        "macd_15m": 10.0,
-        "sig_15m": 8.0,
-        "macd_1h": 5.0,
-        "sig_1h": 3.0,
-        "ema20_1h": 77500.0,
-        "ema50_1h": 77000.0,
         "block_a_profile": "HIBRIDO",
         "block_a_holding_range_min": 15,
         "block_a_holding_range_max": 240,
         "block_c_tf_blocks": {
-            "15m": {"adx": 22.0},
-            "1h": {"adx": 25.0},
+            "15m": {"rsi": 55.0, "macd": 10.0, "macd_signal": 8.0, "adx": 22.0},
+            "1h": {"rsi": 52.0, "macd": 5.0, "macd_signal": 3.0, "ema20": 77500.0, "ema50": 77000.0, "adx": 25.0},
         },
         "min_rr_ratio": 1.0,
     }
-    base.update(overrides)
+    # Convert flat key overrides (rsi_15m=68) into block_c_tf_blocks nested format
+    remaining = {}
+    for key, val in overrides.items():
+        m = _FLAT_PATTERN.match(key)
+        if m:
+            indicator, tf = m.group(1), m.group(2)
+            mapped = _FLAT_KEY_MAP.get(indicator, indicator)
+            base.setdefault("block_c_tf_blocks", {}).setdefault(tf, {})[mapped] = val
+        else:
+            remaining[key] = val
+    base.update(remaining)
     return base
 
 

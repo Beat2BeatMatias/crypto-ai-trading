@@ -19,6 +19,7 @@ _KNOWN_CTX_KEYS = frozenset({
     "price", "rsi_15m", "rsi_5m", "rsi_1h", "hist_15m", "hist_1h",
     "volume_ratio", "block_a_profile", "pct_24h", "imbalance",
     "block_f_cross_tf", "volatility_label", "macd_15m", "adx_15m",
+    "bb_pct_5m", "bb_pct_15m",
 })
 
 
@@ -195,7 +196,17 @@ def _verify_spec_from_input(pattern_tag: str, inp: dict[str, Any]) -> dict[str, 
 
 
 def _input_keys_matching_ctx(inp: dict[str, Any]) -> list[str]:
-    return [k for k in inp if k in _KNOWN_CTX_KEYS]
+    result = [k for k in inp if k in _KNOWN_CTX_KEYS]
+    blocks = inp.get("block_c_tf_blocks", {})
+    if isinstance(blocks, dict):
+        for tf, blk in blocks.items():
+            if not isinstance(blk, dict):
+                continue
+            for key in blk:
+                flat = f"{key}_{tf}"
+                if flat in _KNOWN_CTX_KEYS and flat not in result:
+                    result.append(flat)
+    return result
 
 
 def _block_k_lines_from_norm(norm: dict[str, Any]) -> list[str]:

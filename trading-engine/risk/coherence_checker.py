@@ -44,6 +44,34 @@ def _confluence_verify_tfs(ctx: dict[str, Any]) -> tuple[str, str]:
     return primary, secondary
 
 
+def _tf_block_float(ctx: dict[str, Any], tf: str, key: str) -> float:
+    """Read indicator value from block_c_tf_blocks nested dict (replaces flat keys).
+    Returns 0.0 if missing or None."""
+    blocks = ctx.get("block_c_tf_blocks", {})
+    blk = blocks.get(tf, {})
+    if isinstance(blk, dict):
+        val = blk.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def _tf_block_opt_float(ctx: dict[str, Any], tf: str, key: str) -> float | None:
+    """Like _tf_block_float but returns None (not 0) when value is absent."""
+    blocks = ctx.get("block_c_tf_blocks", {})
+    blk = blocks.get(tf, {})
+    if isinstance(blk, dict):
+        val = blk.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+    return None
+
 def _ctx_tf_float(ctx: dict[str, Any], key_prefix: str, tf: str) -> float:
     val = ctx.get(f"{key_prefix}_{tf}")
     if val is None:
@@ -136,8 +164,8 @@ class CoherenceChecker:
         if "A" not in decision.confluences:
             return []
         primary, secondary = _confluence_verify_tfs(ctx)
-        rsi_primary = _ctx_tf_float(ctx, "rsi", primary)
-        rsi_secondary = _ctx_tf_float(ctx, "rsi", secondary)
+        rsi_primary = _tf_block_float(ctx, primary, "rsi")
+        rsi_secondary = _tf_block_float(ctx, secondary, "rsi")
         if rsi_primary < 35 or rsi_secondary < 35:
             return []
 
@@ -166,10 +194,10 @@ class CoherenceChecker:
         if "B" not in decision.confluences:
             return []
         primary, secondary = _confluence_verify_tfs(ctx)
-        macd_p = _ctx_tf_float(ctx, "macd", primary)
-        sig_p = _ctx_tf_float(ctx, "sig", primary)
-        macd_s = _ctx_tf_float(ctx, "macd", secondary)
-        sig_s = _ctx_tf_float(ctx, "sig", secondary)
+        macd_p = _tf_block_float(ctx, primary, "macd")
+        sig_p = _tf_block_float(ctx, primary, "macd_signal")
+        macd_s = _tf_block_float(ctx, secondary, "macd")
+        sig_s = _tf_block_float(ctx, secondary, "macd_signal")
 
         if macd_p > sig_p or macd_s > sig_s:
             return []
@@ -201,8 +229,8 @@ class CoherenceChecker:
         from shared.schemas import MarketRegime
         regime = decision.regime
         price = ctx.get("price") or 0
-        ema20_1h = ctx.get("ema20_1h") or 0
-        ema50_1h = ctx.get("ema50_1h") or 0
+        ema20_1h = _tf_block_float(ctx, "1h", "ema20")
+        ema50_1h = _tf_block_float(ctx, "1h", "ema50")
 
         # Obtener ADX del bloque C si está disponible
         tf_blocks = ctx.get("block_c_tf_blocks", {})
@@ -256,8 +284,8 @@ class CoherenceChecker:
         if "I" not in decision.confluences:
             return []
         primary, secondary = _confluence_verify_tfs(ctx)
-        rsi_primary = _ctx_tf_float(ctx, "rsi", primary)
-        rsi_secondary = _ctx_tf_float(ctx, "rsi", secondary)
+        rsi_primary = _tf_block_float(ctx, primary, "rsi")
+        rsi_secondary = _tf_block_float(ctx, secondary, "rsi")
         overbought_threshold = float(ctx.get("rsi_overbought_threshold", 65))
         if rsi_primary > overbought_threshold or rsi_secondary > overbought_threshold:
             return []
@@ -288,10 +316,10 @@ class CoherenceChecker:
         if "J" not in decision.confluences:
             return []
         primary, secondary = _confluence_verify_tfs(ctx)
-        macd_p = _ctx_tf_float(ctx, "macd", primary)
-        sig_p = _ctx_tf_float(ctx, "sig", primary)
-        macd_s = _ctx_tf_float(ctx, "macd", secondary)
-        sig_s = _ctx_tf_float(ctx, "sig", secondary)
+        macd_p = _tf_block_float(ctx, primary, "macd")
+        sig_p = _tf_block_float(ctx, primary, "macd_signal")
+        macd_s = _tf_block_float(ctx, secondary, "macd")
+        sig_s = _tf_block_float(ctx, secondary, "macd_signal")
 
         if macd_p < sig_p or macd_s < sig_s:
             return []
@@ -326,8 +354,8 @@ class CoherenceChecker:
         from shared.schemas import MarketRegime
         regime = decision.regime
         price = ctx.get("price") or 0
-        ema20_1h = ctx.get("ema20_1h") or 0
-        ema50_1h = ctx.get("ema50_1h") or 0
+        ema20_1h = _tf_block_float(ctx, "1h", "ema20")
+        ema50_1h = _tf_block_float(ctx, "1h", "ema50")
 
         tf_blocks = ctx.get("block_c_tf_blocks", {})
         adx_15m = (tf_blocks.get("15m") or {}).get("adx")
@@ -616,10 +644,9 @@ class CoherenceChecker:
         """
         if "L" not in decision.confluences:
             return []
-        bb_pct_5m = ctx.get("bb_pct_5m")
+        bb_pct_5m = _tf_block_opt_float(ctx, "5m", "bb_pct")
         if bb_pct_5m is None:
             return []
-        bb_pct_5m = float(bb_pct_5m)
         if bb_pct_5m > 95:
             return []
         severity = "critical" if self.strict_mode else "warning"

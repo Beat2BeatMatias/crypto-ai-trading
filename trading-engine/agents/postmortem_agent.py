@@ -38,7 +38,7 @@ def _trim_input(inp: dict[str, Any], *, max_chars: int = 12000) -> dict[str, Any
     """Keep post-mortem payload bounded; preserve scalar keys and block_f_cross_tf."""
     out: dict[str, Any] = {}
     for k, v in inp.items():
-        if isinstance(v, dict) and k != "block_f_cross_tf":
+        if isinstance(v, dict) and k not in ("block_f_cross_tf", "block_c_tf_blocks"):
             continue
         if isinstance(v, str) and len(v) > 500:
             out[k] = v[:497] + "..."
@@ -49,7 +49,7 @@ def _trim_input(inp: dict[str, Any], *, max_chars: int = 12000) -> dict[str, Any
         return out
     keys = sorted(out.keys(), key=lambda x: len(json.dumps(out[x], default=str)), reverse=True)
     for k in keys:
-        if k in ("price", "regime", "rsi_15m", "hist_15m", "block_f_cross_tf", "volume_ratio"):
+        if k in ("price", "regime", "block_c_tf_blocks", "block_f_cross_tf", "volume_ratio"):
             continue
         del out[k]
         if len(json.dumps(out, default=str)) <= max_chars:
