@@ -223,7 +223,8 @@ class CoherenceChecker:
                                  ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
         C3: Incoherencia entre el régimen declarado y los indicadores del ciclo.
-        - TRENDING_UP declarado: requiere al menos EMAs alineadas en 1h O ADX > 20.
+        - TRENDING_UP declarado: requiere EMAs alineadas 1h O ADX >20
+          O precio sobre EMA9 en TF primario (early entry en tendencia nueva).
         - TRENDING_DOWN declarado: precio sobre EMA20(1h) y EMA50(1h) → sospechoso.
         """
         from shared.schemas import MarketRegime
@@ -232,18 +233,22 @@ class CoherenceChecker:
         ema20_1h = _tf_block_float(ctx, "1h", "ema20")
         ema50_1h = _tf_block_float(ctx, "1h", "ema50")
 
-        # Obtener ADX del bloque C si está disponible
         tf_blocks = ctx.get("block_c_tf_blocks", {})
         adx_15m = (tf_blocks.get("15m") or {}).get("adx")
         adx_1h = (tf_blocks.get("1h") or {}).get("adx")
         adx = adx_1h or adx_15m
+
+        primary, _ = _confluence_verify_tfs(ctx)
+        close_primary = _tf_block_float(ctx, primary, "close")
+        ema9_primary = _tf_block_float(ctx, primary, "ema9")
 
         warnings: list[CoherenceWarning] = []
 
         if regime == MarketRegime.TRENDING_UP:
             emas_aligned = price > ema20_1h > ema50_1h > 0
             adx_strong = adx is not None and adx > 20
-            if not emas_aligned and not adx_strong:
+            price_over_ema9 = close_primary > ema9_primary > 0
+            if not emas_aligned and not adx_strong and not price_over_ema9:
                 severity = "critical" if self.strict_mode else "warning"
                 warnings.append(CoherenceWarning(
                     rule_id="C3",
@@ -345,7 +350,8 @@ class CoherenceChecker:
                                         ctx: dict[str, Any]) -> list[CoherenceWarning]:
         """
         C3P (C3′): Incoherencia régimen/estructura para aperturas SHORT.
-        - TRENDING_DOWN + SHORT: requiere EMAs bajistas en 1h O ADX > 20.
+        - TRENDING_DOWN + SHORT: requiere EMAs bajistas 1h O ADX >20
+          O precio bajo EMA9 en TF primario (early entry en tendencia nueva).
         - TRENDING_UP + SHORT: régimen alcista declarado con acción bajista.
         """
         if decision.action != DecisorAction.SHORT:
@@ -361,6 +367,10 @@ class CoherenceChecker:
         adx_15m = (tf_blocks.get("15m") or {}).get("adx")
         adx_1h = (tf_blocks.get("1h") or {}).get("adx")
         adx = adx_1h or adx_15m
+
+        primary, _ = _confluence_verify_tfs(ctx)
+        close_primary = _tf_block_float(ctx, primary, "close")
+        ema9_primary = _tf_block_float(ctx, primary, "ema9")
 
         warnings: list[CoherenceWarning] = []
         severity = "critical" if self.strict_mode else "warning"
@@ -383,7 +393,8 @@ class CoherenceChecker:
                 and price < ema20_1h < ema50_1h
             )
             adx_strong = adx is not None and adx > 20
-            if not emas_bearish and not adx_strong:
+            price_under_ema9 = 0 < close_primary < ema9_primary
+            if not emas_bearish and not adx_strong and not price_under_ema9:
                 warnings.append(CoherenceWarning(
                     rule_id="C3P",
                     severity=severity,

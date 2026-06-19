@@ -21,7 +21,7 @@ N/A — versión inicial.
 Sin contexto histórico. El primer ciclo del Supervisor establecerá el baseline.
 
 ## Régimen esperado próximas 24h
-NEUTRAL
+NEUTRAL (100%)
 
 ## Reglas específicas
 1. Requerir mínimo 2 confluencias del catálogo A–H antes de BUY.

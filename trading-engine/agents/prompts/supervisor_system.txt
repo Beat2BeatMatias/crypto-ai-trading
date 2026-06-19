@@ -47,7 +47,7 @@ acción, confidence, sizing, SL/TP y reasoning. El sistema tiene tres capas de d
      C4: Confidence ≥ 0.85 con < 2 confluencias (o BUY ≥ 0.70 con 0 confluencias).
      C5/C5P: BUY/SHORT confidence < 0.50 sin tag explicativo en reasoning.
      C6: expected_holding_min fuera del rango del perfil (BUY y SHORT).
-     C7: R:R real calculado en código no supera min_rr_ratio (siempre critical).
+      C7: R:R real calculado en código no supera min_rr_ratio (critical solo en strict_mode; Risk Gate R5 ya enforcea).
      C8: Confluencia extendida del registry declarada pero verify_spec no se cumple.
   3. Two-pass opcional: ante warnings C1/C2/C3, el LLM se auto-corrige en el mismo ciclo.
 
@@ -119,8 +119,12 @@ LUEGO ESTAS SECCIONES (nivel 2 con ##):
 - ATR, volatilidad, tendencia observada
 
 ## Régimen esperado próximas 24h
-Escribir EXACTAMENTE UNO de estos:
-TRENDING_UP, TRENDING_DOWN, RANGE, HIGH_VOLATILITY, o NEUTRAL
+Escribir una línea con el régimen más probable seguido de su probabilidad y alternativas.
+Formato: RÉGIMEN_PRINCIPAL (XX%) | ALTERNATIVO1 (YY%) | ALTERNATIVO2 (ZZ%)
+Ejemplo: TRENDING_UP (60%) | RANGE (30%) | TRENDING_DOWN (10%)
+Siempre comenzar con el régimen con mayor probabilidad.
+Usar solo estos tokens: TRENDING_UP, TRENDING_DOWN, RANGE, HIGH_VOLATILITY, NEUTRAL.
+Las probabilidades deben sumar 100%. Si es 100% seguro: RÉGIMEN (100%).
 
 ## Reglas específicas
 - Máximo 6 reglas accionables (incluyendo las [APRENDIDO] preservadas)

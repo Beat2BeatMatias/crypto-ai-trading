@@ -58,10 +58,11 @@ class PromptManager:
 
     @classmethod
     def parse_regime_from_playbook(cls, content: str) -> str | None:
-        """Extract the regime declared under '## Régimen esperado próximas 24h'.
+        """Extract the primary regime declared under '## Régimen esperado próximas 24h'.
 
-        Returns None when the section is missing or unparseable. Used by the
-        supervisor ratification guardrails (§F5.bis.5) to detect regime drift.
+        Supports both single-regime (TRENDING_UP) and distribution format
+        (TRENDING_UP (60%) | RANGE (30%)). Returns the first/primary regime token.
+        None when the section is missing or unparseable.
         """
         regime_header = "## Régimen esperado próximas 24h"
         if regime_header not in content:
@@ -74,6 +75,34 @@ class PromptManager:
             return None
         regime_value = token_match.group(1)
         return regime_value if regime_value in cls._VALID_REGIMES else None
+
+    @classmethod
+    def parse_regime_distribution_from_playbook(cls, content: str) -> dict[str, float] | None:
+        """Extract full regime distribution from playbook.
+
+        Parses format: TRENDING_UP (60%) | RANGE (30%) | TRENDING_DOWN (10%)
+        Returns dict like {"TRENDING_UP": 0.6, "RANGE": 0.3, "TRENDING_DOWN": 0.1}
+        Falls back to a single-regime 100% dict if no distribution is found.
+        Returns None if the section is missing.
+        """
+        regime_header = "## Régimen esperado próximas 24h"
+        if regime_header not in content:
+            return None
+        after = content.split(regime_header, 1)[1].strip()
+        first_line = after.split("\n")[0].strip()
+        import re as _re
+        parts = first_line.split("|")
+        if len(parts) <= 1:
+            token_match = _re.match(r"([A-Z_]+)", first_line)
+            if token_match and token_match.group(1) in cls._VALID_REGIMES:
+                return {token_match.group(1): 1.0}
+            return None
+        distribution: dict[str, float] = {}
+        for part in parts:
+            match = _re.match(r"\s*([A-Z_]+)\s*\((\d+)%\)", part.strip())
+            if match and match.group(1) in cls._VALID_REGIMES:
+                distribution[match.group(1)] = int(match.group(2)) / 100.0
+        return distribution if distribution else None
 
     @classmethod
     def validate_playbook_markdown(cls, content: str) -> list[str]:

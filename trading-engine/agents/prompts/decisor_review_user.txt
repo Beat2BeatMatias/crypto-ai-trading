@@ -23,18 +23,25 @@ NIVELES DE PRECIO DEL CICLO ACTUAL (Block D)
 {review_block_d}
 
 ═══════════════════════════════════════════════════════════════
-QUÉ HACER AHORA (para inconsistencias C1/C2/C3)
+QUÉ HACER AHORA (para inconsistencias C1/C2/C3/C9/C10)
 ═══════════════════════════════════════════════════════════════
 Revisá cada inconsistencia con el contexto técnico completo que tenés
 disponible (bloques B–F del prompt anterior) y los niveles de precio
 listados arriba.
 
-Tenés DOS opciones:
+Tenés TRES opciones:
 
-  OPCIÓN A — Corregir la decisión:
-    Si la inconsistencia refleja un error real (declaraste una confluencia
-    que los indicadores no confirman, o el régimen no coincide con la
-    evidencia), emití el JSON corregido.
+  OPCIÓN A — Corregir la decisión (incluyendo confluencias):
+    Si la inconsistencia refleja un error real:
+    - C1/C2/C1P/C2P: declaraste una confluencia que los indicadores
+      no confirman → removela y elegí otra confluencia válida del
+      catálogo A–P que SÍ esté respaldada por los datos del ciclo.
+    - C3/C3P: el régimen no coincide con la evidencia → corregí
+      el régimen.
+    - C9: mezclaste señales alcistas y bajistas → quedate solo con
+      las confluencias que corresponden a la dirección de tu acción.
+    - C10: el TP no está anclado → ajustalo a un nivel del Block D.
+    Emití el JSON corregido con las nuevas confluencias, SL/TP, etc.
 
   OPCIÓN B — Mantener la decisión con justificación:
     Si después de revisar los indicadores considerás que tu decisión
@@ -47,6 +54,10 @@ Tenés DOS opciones:
     Ejemplo: "[REVISADO-MANTENIDO] C1 detectó RSI(15m)=38 pero la vela
     de reversión con mecha larga inferior y Stoch <20 confirman el
     setup — RSI en zona de transición, no requiere estar <30."
+
+  OPCIÓN C — Emitir HOLD:
+    Si tras revisar los datos no encontrás una combinación sólida de
+    confluencias y niveles SL/TP que cumplan las reglas, emití HOLD.
 
 IMPORTANTE: no justifiques la decisión solo para mantenerla. Si la
 inconsistencia es real, corregila. El objetivo es la precisión, no

@@ -83,9 +83,9 @@ Jerarquía de TFs (alineada a ATR {atr_timeframe}):
 {confluence_tf_hierarchy}
 
 ═══════════════════════════════════════════════════════════════════
-SIZING (servidor recalculaposition_size_pct con riesgo fijo)
+SIZING (riesgo fijo por trade — risk_per_trade_pct)
 ═══════════════════════════════════════════════════════════════════
-Declará SL/TP coherentes. El servidor calcula tamaño sobre riesgo fijo.
+Declará SL/TP coherentes. El servidor calcula tamaño sobre riesgo fijo por trade.
 HOLD/SELL → position_size_pct = 0.0.
 No escalés tamaño por convicción alta.
 
@@ -137,9 +137,9 @@ Spread > {adj_spread_threshold_pct}% → considerar HIGH_VOLATILITY.
 mid_impact_pct alto → poca liquidez, ajustar sizing.
 
 ═══════════════════════════════════════════════════════════════════
-CONFIANZA (servidor recalcula base final)
+CONFIANZA (servidor recalcula base y total)
 ═══════════════════════════════════════════════════════════════════
-No calcules confidence_base ni confidence — el motor los recalcula:
+No calcules confidence_base ni confidence — base y total las calcula el servidor:
   confidence = clamp(base_table(confluences) × regime_factor + confidence_adjustment, 0, 1)
 
 Declará:

@@ -134,7 +134,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
     ConfigKey.MAX_SLIPPAGE_PCT: _Default("0.003", "float", "Max acceptable slippage"),
     ConfigKey.DEFAULT_RR_RATIO: _Default("2.0", "float", "Default take-profit ratio"),
     ConfigKey.DECISOR_INTERVAL_MIN: _Default("5", "int", "Decisor frequency in minutes"),
-    ConfigKey.SUPERVISOR_CRON: _Default("0 0 * * *", "string", "Supervisor schedule (UTC)"),
+    ConfigKey.SUPERVISOR_CRON: _Default("0 */6 * * *", "string", "Supervisor schedule (UTC) — cada 6h"),
     ConfigKey.DECISOR_PROVIDER: _Default(
         "groq-llama-3.3-70b", "string",
         "Primary LLM for decisor. Options: groq-* | gemini-* | ollama-* (ver LLMProvider enum)",

@@ -23,8 +23,8 @@ logger = structlog.get_logger()
 # daily_stop_pct and max_drawdown_pct are intentionally excluded — too critical for auto-apply.
 #
 # v1.3 LLM-Centric review:
-#  - `min_confluences_buy` removed: ahora es solo una guía en el prompt del Decisor que el LLM
-#    puede ignorar; auto-ajustarlo es ruido.
+#  - `min_confluences_buy` re-added (v1.4): útil para controlar frecuencia de BUY;
+#    el supervisor puede bajarlo a 0 cuando hay missed_rate alto.
 #  - `rsi_overbought_1h` removed: el LLM ve el RSI completo en contexto y razona sobre él;
 #    cambiar el threshold es cosmético, no modifica comportamiento real.
 _SAFE_BOUNDS: dict[str, tuple] = {
@@ -43,6 +43,7 @@ _SAFE_BOUNDS: dict[str, tuple] = {
     "conf_threshold_short_trending_down": (0.40, 0.85),
     "conf_threshold_short_range":        (0.50, 0.90),
     "conf_threshold_short_high_vol":     (0.60, 0.95),
+    "min_confluences_buy":         (0, 4),
     "min_confluences_short":       (1, 4),
 }
 
@@ -389,6 +390,34 @@ class Supervisor:
                 try:
                     store = ConfigStore(self.session)
                     auto_apply = await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY)
+
+                    # ── Auto-adjust thresholds for high missed_rate ────────────────
+                    missed_rate = float(metrics.get("missed_rate", 0.0))
+                    evaluated_decisions = int(metrics.get("evaluated_decisions", 0))
+                    threshold_adjustments = []
+                    if missed_rate > 30.0 and evaluated_decisions >= 20:
+                        for tf_key in (
+                            "conf_threshold_trending_up",
+                            "conf_threshold_range",
+                            "conf_threshold_short_trending_down",
+                            "conf_threshold_short_range",
+                        ):
+                            current_val = float(current_config.get(tf_key, 0.70))
+                            new_val = max(0.40, round(current_val - 0.05, 2))
+                            if new_val < current_val:
+                                await store.set(
+                                    ConfigKey(tf_key), str(new_val),
+                                    changed_by="supervisor:missed_rate_adjust",
+                                )
+                                threshold_adjustments.append({
+                                    "key": tf_key, "old": current_val, "new": new_val,
+                                })
+                                logger.info("supervisor.threshold_auto_lowered",
+                                            key=tf_key, old=current_val, new=new_val,
+                                            missed_rate=missed_rate)
+                    if threshold_adjustments:
+                        output["threshold_adjustments"] = threshold_adjustments
+
                     config_window_h = int(
                         await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_WINDOW_HOURS)
                     )

@@ -42,7 +42,7 @@ AUDITORÍA LLM-CENTRIC (v1.3 — Decisor autónomo):
   (ej: declarar confluencias ausentes, citar régimen incorrecto, hablar de tendencia contraria a la real).
   C4/C5/C6 son derivas operacionales (cooldown ignorado, confluencias insuficientes, holding fuera de rango)
   — pueden indicar que el playbook flexibiliza demasiado o que las guías de config quedaron obsoletas.
-  C7 (siempre critical): el LLM está alucinando el R:R — los niveles SL/TP propuestos no pasan el mínimo.
+   C7 (critical solo en strict_mode): R:R real del LLM no supera min_rr_ratio — el Risk Gate R5 ya rechaza si es insuficiente.
   C8: confluencia extendida del registry declarada sin evidencia técnica que la soporte.
 
 ANÁLISIS CONTRAFÁCTICO (últimas 24h, horizonte {expected_holding_max_min}min):
