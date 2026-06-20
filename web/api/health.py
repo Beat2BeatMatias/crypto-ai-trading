@@ -250,6 +250,22 @@ async def health(request: Request) -> dict:
                 binance_ws_ok = False
                 binance_ws_detail = "sin datos 1m"
 
+            # Scheduler status: 4 key processes tracked by trading-engine
+            sched_rows = (await s.execute(text("""
+                SELECT job_id, name, next_run_at, last_run_at, interval_desc
+                FROM scheduler_status
+                ORDER BY job_id
+            """))).all()
+            scheduled_processes = []
+            for _r in sched_rows:
+                scheduled_processes.append({
+                    "id": _r.job_id,
+                    "name": _r.name,
+                    "next_run_at": _r.next_run_at.isoformat() if _r.next_run_at else None,
+                    "last_run_at": _r.last_run_at.isoformat() if _r.last_run_at else None,
+                    "interval_desc": _r.interval_desc,
+                })
+
         parse_errors = int(llm_stats.parse_errors) if llm_stats else 0
         llm_errors = int(llm_stats.llm_errors) if llm_stats else 0
         decisor_total = int(llm_stats.decisor_total) if llm_stats else 0
@@ -325,6 +341,7 @@ async def health(request: Request) -> dict:
                 "two_pass_triggered_24h": two_pass_count,
                 "by_rule_24h": dict(coh_by_rule),
             },
+            "scheduled_processes": scheduled_processes,
             "outcome_attribution": {
                 "ok": oa_ok,
                 "last_run_age_min": oa_age_min,
@@ -371,6 +388,7 @@ async def health(request: Request) -> dict:
             "recent_rejections_1h": None,
             "risk_gate": None,
             "coherence": None,
+            "scheduled_processes": [],
             "outcome_attribution": None,
             "postgres": {"table_counts": None, "db_size": None, "db_bytes": None},
         }

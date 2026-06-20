@@ -153,6 +153,14 @@ export interface Balance {
   futures?: FuturesBalance | null;
 }
 
+export interface ScheduledProcess {
+  id: string;
+  name: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  interval_desc: string;
+}
+
 export interface Playbook {
   id: string; version: number; ts_generated: string;
   content: string; model: string | null;

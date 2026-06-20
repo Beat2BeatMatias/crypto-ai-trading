@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -50,6 +50,11 @@ class EngineScheduler:
     def add_outcome_attribution(self, fn: Callable[[], Awaitable[None]], *, interval_min: int = 60) -> None:
         self._scheduler.add_job(fn, IntervalTrigger(minutes=interval_min),
                                 id="outcome_attribution", replace_existing=True)
+
+    def get_job(self, job_id: str) -> Any | None:
+        return self._scheduler.get_job(job_id)
+
+    add_listener = lambda self, fn, mask: self._scheduler.add_listener(fn, mask)
 
     def start(self) -> None:
         self._scheduler.start()

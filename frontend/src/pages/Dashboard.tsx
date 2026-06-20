@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { PriceChart } from "../components/chart/PriceChart";
-import type { Position, Decision, DailyStats, Balance } from "../types";
+import type { Position, Decision, DailyStats, Balance, ScheduledProcess } from "../types";
 import ConfidenceBreakdown from "../components/ConfidenceBreakdown";
 import ReasoningBlock from "../components/ReasoningBlock";
 import { asDecisorOutput } from "../types/decisorOutput";
@@ -25,6 +25,7 @@ interface EngineHealth {
   last_decision_age_min: number | null;
   decisor_interval_min: number | null;
   next_execution_in_min: number | null;
+  scheduled_processes?: ScheduledProcess[];
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
@@ -88,6 +89,102 @@ function useCountdown(engineHealth: EngineHealth | null): number | null {
   return secsLeft;
 }
 
+function formatCountdown(secs: number): string {
+  if (secs <= 0) return "ejecutando...";
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function countdownColor(secs: number | null): string {
+  if (secs == null) return "text-zinc-500";
+  if (secs === 0) return "text-emerald-400 animate-pulse";
+  if (secs <= 60) return "text-amber-400";
+  return "text-zinc-300";
+}
+
+function useProcessCountdowns(
+  processes: ScheduledProcess[] | undefined,
+): Record<string, number | null> {
+  const [countdowns, setCountdowns] = useState<Record<string, number | null>>({});
+
+  useEffect(() => {
+    if (!processes?.length) {
+      setCountdowns({});
+      return;
+    }
+    const tick = () => {
+      const now = Date.now();
+      const next: Record<string, number | null> = {};
+      for (const p of processes) {
+        if (!p.next_run_at) {
+          next[p.id] = null;
+        } else {
+          const diff = Math.max(0, Math.floor((new Date(p.next_run_at).getTime() - now) / 1000));
+          next[p.id] = diff;
+        }
+      }
+      setCountdowns(next);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [processes]);
+
+  return countdowns;
+}
+
+function ScheduledProcessesTable({
+  processes,
+  countdowns,
+}: {
+  processes: ScheduledProcess[];
+  countdowns: Record<string, number | null>;
+}) {
+  if (!processes.length) return null;
+
+  return (
+    <div className="rounded-xl bg-zinc-900 p-5">
+      <h3 className="text-sm font-semibold text-zinc-400 mb-3 uppercase tracking-wide">
+        Procesos programados
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-700 text-left text-xs text-zinc-500 uppercase">
+              <th className="pb-2 pr-4">Proceso</th>
+              <th className="pb-2 pr-4">Próxima ejecución</th>
+              <th className="pb-2 pr-4">Intervalo</th>
+              <th className="pb-2">Última ejecución</th>
+            </tr>
+          </thead>
+          <tbody>
+            {processes.map(p => {
+              const secs = countdowns[p.id] ?? null;
+              return (
+                <tr key={p.id} className="border-b border-zinc-800 last:border-0">
+                  <td className="py-2.5 pr-4 font-medium text-zinc-200">{p.name}</td>
+                  <td className={`py-2.5 pr-4 font-mono ${countdownColor(secs)}`}>
+                    {secs != null ? formatCountdown(secs) : "—"}
+                  </td>
+                  <td className="py-2.5 pr-4 text-zinc-400">{p.interval_desc}</td>
+                  <td className="py-2.5 text-zinc-500">
+                    {p.last_run_at
+                      ? new Date(p.last_run_at).toLocaleString("es-AR")
+                      : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
@@ -97,7 +194,9 @@ export function Dashboard() {
   const [engineHealth, setEngineHealth] = useState<EngineHealth | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [tradingCtx, setTradingCtx] = useState<TradingContext | null>(null);
+  const [scheduledProcesses, setScheduledProcesses] = useState<ScheduledProcess[]>([]);
   const countdownSecs = useCountdown(engineHealth);
+  const processCountdowns = useProcessCountdowns(scheduledProcesses);
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
   const { last, connected } = useWebSocket(`${wsProtocol}://${window.location.host}/ws`);
 
@@ -107,6 +206,7 @@ export function Dashboard() {
       .then(d => {
         setEngineHealth(d?.engine ?? null);
         setTradingCtx(d?.trading ?? null);
+        setScheduledProcesses(d?.scheduled_processes ?? []);
       })
       .catch(() => {});
 
@@ -180,6 +280,11 @@ export function Dashboard() {
       {tradingCtx?.runtime_mismatch && (
         <RuntimeMismatchBanner ctx={tradingCtx} />
       )}
+
+      <ScheduledProcessesTable
+        processes={scheduledProcesses}
+        countdowns={processCountdowns}
+      />
 
       <PriceChart
         tradingProduct={tradingCtx?.trading_product}

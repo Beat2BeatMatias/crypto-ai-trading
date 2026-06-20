@@ -4,7 +4,7 @@ import asyncio
 import signal
 from datetime import datetime, timezone
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from shared.db.base import create_engine_from_url, create_session_factory
 from shared.db.models import Decision
 from shared.config_store import ConfigKey, ConfigStore
@@ -901,6 +901,64 @@ async def run() -> None:
         interval_min=outcome_interval_min,
         postmortem_chained=True,
     )
+
+    # ── Scheduler status tracking ────────────────────────────────────────
+    import asyncio as _asyncio
+    from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
+
+    _JOB_META = {
+        "decisor": ("Decisor", f"~{interval_min} min"),
+        "supervisor": ("Supervisor", cron),
+        "outcome_attribution": ("Outcome", f"~{outcome_interval_min} min"),
+        "fees": ("Fees", "24 h"),
+    }
+
+    async def _update_sched_status(job_id: str) -> None:
+        meta = _JOB_META.get(job_id)
+        if not meta:
+            return
+        name, interval_desc = meta
+        try:
+            job = sched.get_job(job_id)
+            next_run_at = getattr(job, 'next_run_time', None) if job else None
+            async with session_factory() as s:
+                await s.execute(text("""
+                    INSERT INTO scheduler_status (job_id, name, next_run_at, last_run_at, interval_desc)
+                    VALUES (:job_id, :name, :next_run_at, NOW(), :interval_desc)
+                    ON CONFLICT (job_id) DO UPDATE SET
+                        next_run_at = EXCLUDED.next_run_at,
+                        last_run_at = NOW(),
+                        interval_desc = EXCLUDED.interval_desc
+                """), {
+                    "job_id": job_id,
+                    "name": name,
+                    "next_run_at": next_run_at,
+                    "interval_desc": interval_desc,
+                })
+                await s.commit()
+        except Exception as e:
+            logger.warning("sched_status.update_failed", job_id=job_id, error=str(e))
+
+    def _on_scheduler_event(event) -> None:
+        if event.job_id not in _JOB_META:
+            return
+        _asyncio.ensure_future(_update_sched_status(event.job_id))
+
+    sched.add_listener(_on_scheduler_event, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+
+    try:
+        async with session_factory() as s:
+            for job_id in _JOB_META:
+                job = sched.get_job(job_id)
+                next_run_at = getattr(job, 'next_run_time', None) if job else None
+                await s.execute(
+                    text("UPDATE scheduler_status SET next_run_at = :next_run_at WHERE job_id = :job_id"),
+                    {"next_run_at": next_run_at, "job_id": job_id},
+                )
+            await s.commit()
+    except Exception as e:
+        logger.warning("sched_status.seed_failed", error=str(e))
+
     sched.start()
 
     stop_event = asyncio.Event()

@@ -324,3 +324,13 @@ class ConfluenceRegistry(Base):
         DateTime(timezone=True), nullable=False, server_default=text("now()"),
     )
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SchedulerStatus(Base):
+    __tablename__ = "scheduler_status"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    interval_desc: Mapped[str | None] = mapped_column(String(64))
