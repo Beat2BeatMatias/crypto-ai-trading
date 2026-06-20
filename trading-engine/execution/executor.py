@@ -11,6 +11,7 @@ from shared.db.models import Trade, Position, Decision
 from shared.notional_sizing import entry_notional_usdt
 from shared.schemas import DecisorOutput, Direction
 from shared.pnl import compute_pnl_pct_directional, compute_pnl_usdt_directional
+from execution.futures_algo_orders import cancel_conditional_algo_order
 
 logger = structlog.get_logger()
 
@@ -497,6 +498,8 @@ class Executor:
         pos_side = getattr(trade, "position_side", "LONG") or "LONG"
         direction = Direction(pos_side)
 
+        await self._cancel_bracket_orders(trade)
+
         if self._adapter is not None:
             res = await self._adapter.close_position(
                 symbol=self.symbol,
@@ -547,3 +550,25 @@ class Executor:
         await self.session.refresh(trade)
         logger.info("executor.close_executed", trade_id=str(trade.id), reason=close_reason)
         return trade
+
+    async def _cancel_bracket_orders(self, trade: Trade) -> None:
+        for order_id in (trade.order_id_sl, trade.order_id_tp):
+            if not order_id:
+                continue
+            cancelled = False
+            try:
+                await self.exchange.cancel_order(
+                    order_id, self.symbol, params={"trigger": True},
+                )
+                cancelled = True
+            except Exception:
+                try:
+                    await cancel_conditional_algo_order(
+                        self.exchange, symbol=self.symbol, algo_id=order_id,
+                    )
+                    cancelled = True
+                except Exception:
+                    pass
+            if cancelled:
+                logger.info("executor.bracket_order_cancelled",
+                            trade_id=str(trade.id), order_id=order_id)
