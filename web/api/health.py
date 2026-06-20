@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from fastapi import APIRouter, Request
 from sqlalchemy import desc, select, text
@@ -256,12 +256,26 @@ async def health(request: Request) -> dict:
                 FROM scheduler_status
                 ORDER BY job_id
             """))).all()
+
+            # Fallback: estimar next_run_at desde last_run_at + intervalo conocido
+            # cuando el engine aún no lo escribió (ej: engine no arrancado)
+            _INTERVAL_SEC = {
+                "decisor": decisor_interval_min * 60,
+                "supervisor": 6 * 3600,
+                "outcome_attribution": oa_interval_min * 60,
+                "fees": 24 * 3600,
+            }
             scheduled_processes = []
             for _r in sched_rows:
+                next_run_at = _r.next_run_at
+                if next_run_at is None and _r.last_run_at is not None:
+                    interval_sec = _INTERVAL_SEC.get(_r.job_id)
+                    if interval_sec:
+                        next_run_at = _r.last_run_at + timedelta(seconds=interval_sec)
                 scheduled_processes.append({
                     "id": _r.job_id,
                     "name": _r.name,
-                    "next_run_at": _r.next_run_at.isoformat() if _r.next_run_at else None,
+                    "next_run_at": next_run_at.isoformat() if next_run_at else None,
                     "last_run_at": _r.last_run_at.isoformat() if _r.last_run_at else None,
                     "interval_desc": _r.interval_desc,
                 })
