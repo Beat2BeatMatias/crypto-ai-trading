@@ -88,6 +88,8 @@ class ExchangeAdapter(Protocol):
 
     def min_notional(self, symbol: str) -> float: ...
 
+    def min_qty_base(self, symbol: str) -> float: ...
+
 
 class SpotAdapter:
     product = "spot"
@@ -175,6 +177,13 @@ class SpotAdapter:
             return float(client.markets[symbol]["limits"]["cost"]["min"])
         except (KeyError, TypeError, AttributeError):
             return 5.0
+
+    def min_qty_base(self, symbol: str) -> float:
+        client = self.build_client()
+        try:
+            return float(client.markets[symbol]["limits"]["amount"]["min"])
+        except (KeyError, TypeError, AttributeError):
+            return 0.0
 
 
 class FuturesAdapter:
@@ -314,6 +323,13 @@ class FuturesAdapter:
             return float(client.markets[symbol]["limits"]["cost"]["min"])
         except (KeyError, TypeError, AttributeError):
             return 100.0
+
+    def min_qty_base(self, symbol: str) -> float:
+        client = self.build_client()
+        try:
+            return float(client.markets[symbol]["limits"]["amount"]["min"])
+        except (KeyError, TypeError, AttributeError):
+            return 0.0
 
 
 def build_adapter(product: str) -> SpotAdapter | FuturesAdapter:

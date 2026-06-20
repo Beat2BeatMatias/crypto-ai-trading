@@ -38,7 +38,7 @@ from agents.confluence_registry import (
     render_registry_block,
 )
 from agents.lesson_normalizer import format_block_k_lessons
-from shared.notional_sizing import effective_notional_leverage, min_position_size_pct_for_entry
+from shared.notional_sizing import effective_notional_leverage, min_position_size_pct_for_entry, min_position_size_pct_for_lot
 
 
 _ALL_TIMEFRAMES = list(CANONICAL_TIMEFRAMES)
@@ -82,6 +82,7 @@ class ContextBuilder:
                     open_position_side: str | None = None,
                     liquidation_price: float | None = None,
                     min_notional_usdt: float = 5.0,
+                    min_qty_base: float = 0.0,
                     max_leverage: float = 1.0) -> dict[str, Any]:
 
         cal = calibration or {}
@@ -313,6 +314,17 @@ class ContextBuilder:
             leverage=max_leverage,
             trading_product=trading_product,
         )
+        min_position_size_pct_lot = (
+            min_position_size_pct_for_lot(
+                min_qty_base=min_qty_base,
+                price=price,
+                margin=margin_base,
+                leverage=max_leverage,
+                trading_product=trading_product,
+            )
+            if min_qty_base > 0 and price > 0
+            else 0.0
+        )
 
         # ------------------------------------------------------------------ #
         # Order book derived
@@ -511,7 +523,9 @@ class ContextBuilder:
             "subjective_adj_max": cal.get("subjective_adj_max", 0.10),
             "confluence_weak_factor": cal.get("confluence_weak_factor", 0.5),
             "binance_min_notional_usdt": min_notional_usdt,
+            "binance_min_qty_base": min_qty_base,
             "min_position_size_pct_notional": min_position_size_pct_notional,
+            "min_position_size_pct_lot": round(min_position_size_pct_lot, 6),
             "max_leverage": max_leverage,
             "notional_leverage": _lev,
             # slippage_cushion_pct: expuesto para que R10 en el prompt del Decisor

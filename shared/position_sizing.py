@@ -18,6 +18,7 @@ def apply_risk_based_sizing(
     min_position_size: float,
     min_position_size_pct_notional: float,
     min_notional_usdt: float = 5.0,
+    min_qty_base: float = 0.0,
     leverage: float = 1.0,
     trading_product: str = "spot",
 ) -> tuple[DecisorOutput, dict[str, Any] | None]:
@@ -48,6 +49,7 @@ def apply_risk_based_sizing(
         margin=usdt_available,
         price=price,
         min_notional_usdt=min_notional_usdt,
+        min_qty_base=min_qty_base,
         leverage=leverage,
         trading_product=trading_product,
     )

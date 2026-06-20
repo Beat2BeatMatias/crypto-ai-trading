@@ -123,6 +123,52 @@ def test_short_sizing_raises_floor_for_tp_notional_futures_3x():
     assert qty * 61_314.7 >= 50.0
 
 
+def test_min_qty_base_raises_floor():
+    """Cuando min_qty_base > 0, el position_size_pct debe asegurar qty >= min_qty_base."""
+    decision = _buy(sl=64_000.0, llm_pct=0.02)
+    updated, meta = apply_risk_based_sizing(
+        decision,
+        price=64_500.0,
+        capital_total=250.0,
+        usdt_available=250.0,
+        risk_per_trade_pct=0.005,
+        max_position_pct=0.30,
+        min_position_size=0.0,
+        min_position_size_pct_notional=0.0,
+        min_notional_usdt=5.0,
+        min_qty_base=0.001,
+        leverage=1.0,
+        trading_product="spot",
+    )
+    assert meta is not None
+    notional = 250.0 * updated.position_size_pct
+    qty = notional / 64_500.0
+    assert qty >= 0.001, f"qty {qty:.6f} < min_qty_base 0.001"
+
+
+def test_min_qty_base_futures_3x():
+    """min_qty_base con apalancamiento 3x en futuros."""
+    decision = _short(stop_loss=65_000.0, take_profit=63_000.0, llm_pct=0.02)
+    updated, meta = apply_risk_based_sizing(
+        decision,
+        price=64_500.0,
+        capital_total=250.0,
+        usdt_available=250.0,
+        risk_per_trade_pct=0.005,
+        max_position_pct=0.20,
+        min_position_size=0.0,
+        min_position_size_pct_notional=0.0,
+        min_notional_usdt=5.0,
+        min_qty_base=0.001,
+        leverage=3.0,
+        trading_product="futures",
+    )
+    assert meta is not None
+    notional = 250.0 * updated.position_size_pct * 3.0
+    qty = notional / 64_500.0
+    assert qty >= 0.001, f"qty {qty:.6f} < min_qty_base 0.001"
+
+
 def test_capped_by_max_position():
     decision = _buy(sl=99_500.0)
     updated, meta = apply_risk_based_sizing(

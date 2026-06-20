@@ -51,6 +51,35 @@ def test_fd91182d_short_tp_infeasible_at_1x_max_20pct():
     assert "min position_size_pct" in reason
 
 
+def test_min_position_size_pct_for_lot():
+    from shared.notional_sizing import min_position_size_pct_for_lot
+    pct = min_position_size_pct_for_lot(
+        min_qty_base=0.001,
+        price=64_500.0,
+        margin=250.0,
+        leverage=1.0,
+        trading_product="spot",
+    )
+    expected = 0.001 * 64_500.0 / 250.0
+    assert pct == pytest.approx(expected, rel=1e-6)
+
+
+def test_min_pct_exit_legs_with_qty_floor():
+    floor = min_position_size_pct_for_exit_legs(
+        direction=Direction.SHORT,
+        price=63204.9,
+        stop_loss=64150.0,
+        take_profit=61314.7,
+        margin=250.0,
+        min_notional_usdt=50.0,
+        min_qty_base=0.001,
+        leverage=1.0,
+        trading_product="futures",
+    )
+    lot_floor = 0.001 * 63204.9 / 250.0
+    assert floor >= lot_floor, "min_qty_base should increase the floor"
+
+
 def test_min_pct_exit_short_tp_floor():
     floor = min_position_size_pct_for_exit_legs(
         direction=Direction.SHORT,

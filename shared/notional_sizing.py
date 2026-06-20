@@ -44,6 +44,20 @@ def estimate_qty_btc(
     ) / price
 
 
+def min_position_size_pct_for_lot(
+    *,
+    min_qty_base: float,
+    price: float,
+    margin: float,
+    leverage: float,
+    trading_product: str = "spot",
+) -> float:
+    lev = effective_notional_leverage(trading_product=trading_product, leverage=leverage)
+    if margin <= 0 or lev <= 0 or price <= 0:
+        return 1.0
+    return min_qty_base * price / (margin * lev)
+
+
 def sl_exit_notional_usdt(*, qty_btc: float, stop_loss: float, direction: Direction) -> float:
     if direction == Direction.LONG:
         return qty_btc * stop_loss * SL_LIMIT_SLIPPAGE
@@ -75,10 +89,11 @@ def min_position_size_pct_for_exit_legs(
     take_profit: float | None,
     margin: float,
     min_notional_usdt: float,
+    min_qty_base: float = 0.0,
     leverage: float,
     trading_product: str = "spot",
 ) -> float:
-    """Mínimo position_size_pct para que entrada y patas SL/TP cumplan min_notional."""
+    """Mínimo position_size_pct para que entrada y patas SL/TP cumplan min_notional y min_qty."""
     floors = [
         min_position_size_pct_for_entry(
             min_notional_usdt=min_notional_usdt,
@@ -87,6 +102,16 @@ def min_position_size_pct_for_exit_legs(
             trading_product=trading_product,
         ),
     ]
+    if min_qty_base > 0:
+        floors.append(
+            min_position_size_pct_for_lot(
+                min_qty_base=min_qty_base,
+                price=price,
+                margin=margin,
+                leverage=leverage,
+                trading_product=trading_product,
+            ),
+        )
     lev = effective_notional_leverage(trading_product=trading_product, leverage=leverage)
     if margin <= 0 or price <= 0 or lev <= 0:
         return max(floors)
@@ -108,6 +133,7 @@ def min_position_size_pct_for_decision(
     margin: float,
     price: float,
     min_notional_usdt: float,
+    min_qty_base: float = 0.0,
     leverage: float,
     trading_product: str = "spot",
 ) -> float:
@@ -121,6 +147,7 @@ def min_position_size_pct_for_decision(
         take_profit=decision.take_profit,
         margin=margin,
         min_notional_usdt=min_notional_usdt,
+        min_qty_base=min_qty_base,
         leverage=leverage,
         trading_product=trading_product,
     )
@@ -131,6 +158,7 @@ def r11_infeasible_reason(
     margin: float,
     max_position_pct: float,
     min_notional_usdt: float,
+    min_qty_base: float = 0.0,
     leverage: float,
     trading_product: str,
     price: float,
@@ -145,6 +173,7 @@ def r11_infeasible_reason(
         take_profit=take_profit,
         margin=margin,
         min_notional_usdt=min_notional_usdt,
+        min_qty_base=min_qty_base,
         leverage=leverage,
         trading_product=trading_product,
     )

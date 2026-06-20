@@ -43,6 +43,18 @@ class Executor:
         self.symbol = symbol
         self._adapter = adapter
 
+    async def _check_min_qty(self, qty: float) -> None:
+        try:
+            min_qty = self.exchange.markets.get(self.symbol, {}).get("limits", {}).get("amount", {}).get("min", 0)
+            if min_qty and qty < min_qty:
+                raise RuntimeError(
+                    f"qty {qty:.6f} < min_qty {min_qty:.6f} for {self.symbol}"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
     async def execute_buy(self, *, decision: DecisorOutput, decision_id: uuid.UUID,
                            usdt_balance: float) -> Trade:
         usdt_to_spend = usdt_balance * decision.position_size_pct
@@ -412,6 +424,8 @@ class Executor:
             leverage=leverage,
             trading_product=trading_product,
         )
+        qty_est = notional / price if price > 0 else 0.0
+        await self._check_min_qty(qty_est)
         res = await self._adapter.open_position(
             symbol=self.symbol, direction=direction, notional_usdt=notional, price=price,
         )

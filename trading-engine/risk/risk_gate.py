@@ -26,7 +26,8 @@ class RiskGate:
                  max_slippage_pct: float, taker_fee_pct: float,
                  min_rr_ratio: float = 1.3, sl_atr_multiplier: float = 0.3,
                  sl_atr_max_multiplier: float = 1.5,
-                 min_notional_usdt: float = 5.0, max_leverage: float = 1.0,
+                 min_notional_usdt: float = 5.0, min_qty_base: float = 0.0,
+                 max_leverage: float = 1.0,
                  drawdown_protection_enabled: bool = True):
         self.max_position_pct = max_position_pct
         self.max_simultaneous_trades = max_simultaneous_trades
@@ -39,6 +40,7 @@ class RiskGate:
         self.sl_atr_multiplier = sl_atr_multiplier
         self.sl_atr_max_multiplier = sl_atr_max_multiplier
         self.min_notional_usdt = min_notional_usdt
+        self.min_qty_base = min_qty_base
         self.max_leverage = max_leverage
 
     def validate(
@@ -137,6 +139,7 @@ class RiskGate:
             margin=margin,
             max_position_pct=self.max_position_pct,
             min_notional_usdt=self.min_notional_usdt,
+            min_qty_base=self.min_qty_base,
             leverage=leverage,
             trading_product=trading_product,
             price=current_price,
@@ -186,6 +189,12 @@ class RiskGate:
                     "R11",
                     f"notional TP {tp_notional:.4f} USDT < min_notional {self.min_notional_usdt:.2f} USDT",
                 )
+
+        if self.min_qty_base > 0 and qty_btc_est > 0 and qty_btc_est < self.min_qty_base:
+            return self._reject(
+                "R11",
+                f"qty_btc {qty_btc_est:.6f} < min_qty_base {self.min_qty_base:.6f}",
+            )
 
         if open_positions_count >= self.max_simultaneous_trades:
             return self._reject(

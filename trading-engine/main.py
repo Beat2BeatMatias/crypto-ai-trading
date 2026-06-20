@@ -528,9 +528,14 @@ async def run() -> None:
             funding_rate_max = float(await store.get_typed(ConfigKey.FUNDING_RATE_MAX_PCT))
             liq_buffer_atr = float(await store.get_typed(ConfigKey.LIQUIDATION_BUFFER_ATR))
             min_notional = float(calibration.get("min_notional_usdt", 5.0))
+            min_qty_base = float(calibration.get("min_qty_base", 0.0))
+            try:
+                min_notional = engine_adapter.min_notional(engine_symbol)
+                min_qty_base = engine_adapter.min_qty_base(engine_symbol)
+            except Exception as e:
+                logger.warning("engine.min_qty_fetch_failed", error=str(e))
             if trading_product == "futures":
                 try:
-                    min_notional = engine_adapter.min_notional(engine_symbol)
                     funding_rate = await engine_adapter.fetch_funding_rate(engine_symbol)
                     if open_positions:
                         for pv in await engine_adapter.fetch_positions():
@@ -562,6 +567,7 @@ async def run() -> None:
                     open_position_side=open_position_side,
                     liquidation_price=liquidation_price,
                     min_notional_usdt=min_notional,
+                    min_qty_base=min_qty_base,
                     max_leverage=float(leverage),
                 )
                 cb.record_llm_success()
@@ -616,6 +622,7 @@ async def run() -> None:
                 min_rr_ratio=min_rr_ratio, sl_atr_multiplier=sl_atr_multiplier,
                 sl_atr_max_multiplier=calibration["sl_atr_max_multiplier"],
                 min_notional_usdt=min_notional,
+                min_qty_base=min_qty_base,
                 max_leverage=leverage,
                 drawdown_protection_enabled=drawdown_protection_enabled,
             )
