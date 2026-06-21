@@ -19,6 +19,7 @@ class CloseResult:
     filled_qty: float
     avg_price: float
     order_id: str
+    fee: float | None = None
 
 
 @dataclass(frozen=True)
@@ -239,10 +240,13 @@ class FuturesAdapter:
         order = await client.create_order(
             symbol, "market", side, qty_prec, None, {"reduceOnly": True},
         )
+        order_fee = order.get("fee") or {}
+        fee = float(order_fee.get("cost", 0.0)) if order_fee else None
         return CloseResult(
             filled_qty=float(order.get("filled") or qty_prec),
             avg_price=float(order.get("average") or 0.0),
             order_id=str(order["id"]),
+            fee=fee,
         )
 
     async def place_brackets(
@@ -285,10 +289,11 @@ class FuturesAdapter:
         client = self.build_client()
         bal = await client.fetch_balance()
         usdt = bal.get("USDT", {})
+        btc = bal.get("BTC", {})
         return BalanceView(
             available=float(usdt.get("free") or 0.0),
             total=float(usdt.get("total") or 0.0),
-            position_qty=0.0,
+            position_qty=float(btc.get("total", btc.get("free", 0.0))),
         )
 
     async def fetch_positions(self) -> list[PositionView]:

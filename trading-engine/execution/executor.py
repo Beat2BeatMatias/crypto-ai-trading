@@ -304,7 +304,7 @@ class Executor:
         pos_side = getattr(trade, "position_side", "LONG") or "LONG"
         gross_pnl = compute_pnl_usdt_directional(
             entry=float(trade.entry_price),
-            quantity=float(trade.quantity_btc),
+            quantity=qty_to_sell,
             exit_price=avg_price,
             direction=pos_side,
         ) or 0.0
@@ -530,12 +530,14 @@ class Executor:
                 trade_id=trade_id, decision_id=decision_id, close_reason=close_reason,
             )
 
-        fee = 0.0
         trade.exit_price = Decimal(str(exit_price))
         trade.ts_close = datetime.now(tz=timezone.utc)
         trade.status = "closed"
         trade.close_reason = close_reason
         trade.order_id_close = order_id
+        close_fee = 0.0
+        if hasattr(res, 'fee') and res.fee:
+            close_fee = float(res.fee)
         gross_pnl = compute_pnl_usdt_directional(
             entry=float(trade.entry_price),
             quantity=float(trade.quantity_btc),
@@ -543,8 +545,8 @@ class Executor:
             direction=pos_side,
         ) or 0.0
         prior_fees = float(trade.fees_usdt or 0)
-        trade.fees_usdt = Decimal(str(prior_fees + fee))
-        trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - fee))
+        trade.fees_usdt = Decimal(str(prior_fees + close_fee))
+        trade.pnl_usdt = Decimal(str(gross_pnl - prior_fees - close_fee))
         pnl_pct = compute_pnl_pct_directional(
             entry=float(trade.entry_price), exit_price=exit_price, direction=pos_side,
         )

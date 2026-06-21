@@ -43,7 +43,20 @@ def effective_confluence_count(confluences: list[str]) -> int:
 
 
 def quality_factor(confluences: list[str]) -> float:
-    return 1.0
+    """Compute quality multiplier from confluence composition.
+
+    Stronger signal combinations get a boost (>1.0), weaker ones get a penalty (<1.0).
+    Base quality is 1.0 (neutral).
+    """
+    if not confluences:
+        return 0.0
+    strong_patterns = {"B", "G", "F", "J", "O", "N"}
+    weak_patterns = {"D", "L", "H", "P"}
+    strong_count = sum(1 for c in confluences if c in strong_patterns)
+    weak_count = sum(1 for c in confluences if c in weak_patterns)
+    total = len(confluences)
+    quality = 1.0 + (strong_count / total) * 0.15 - (weak_count / total) * 0.10
+    return max(0.5, min(1.25, quality))
 
 
 def hold_signal_direction(

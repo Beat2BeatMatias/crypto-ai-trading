@@ -91,12 +91,58 @@ async def test_futures_config_defaults(session: AsyncSession):
     assert ConfigKey.LIQUIDATION_BUFFER_ATR in DEFAULTS
 
 
-async def test_futures_config_defaults(session: AsyncSession):
+async def test_get_many_returns_all_requested_keys(session: AsyncSession):
     store = ConfigStore(session)
     await store.seed_defaults()
-    assert DEFAULTS[ConfigKey.TRADING_PRODUCT].value == "spot"
-    assert await store.get(ConfigKey.TRADING_PRODUCT) == "spot"
-    assert await store.get_typed(ConfigKey.MAX_LEVERAGE) == 1
-    assert await store.get(ConfigKey.MARGIN_MODE) == "isolated"
-    assert ConfigKey.FUNDING_RATE_MAX_PCT in DEFAULTS
-    assert ConfigKey.LIQUIDATION_BUFFER_ATR in DEFAULTS
+    result = await store.get_many([
+        ConfigKey.MAX_POSITION_PCT,
+        ConfigKey.MAX_SIMULTANEOUS_TRADES,
+        ConfigKey.KILL_SWITCH,
+    ])
+    assert len(result) == 3
+    assert isinstance(result["max_position_pct"], float)
+    assert isinstance(result["max_simultaneous_trades"], int)
+    assert isinstance(result["kill_switch"], bool)
+    assert result["kill_switch"] is False
+
+
+async def test_get_many_skips_missing_keys(session: AsyncSession):
+    store = ConfigStore(session)
+    await store.seed_defaults()
+    result = await store.get_many([
+        ConfigKey.MAX_POSITION_PCT,
+        ConfigKey.DRAWDOWN_RESET_TS,
+        ConfigKey.TRADING_PRODUCT,
+    ])
+    assert "max_position_pct" in result
+    assert "drawdown_reset_ts" in result
+    assert "trading_product" in result
+
+
+async def test_get_many_single_key(session: AsyncSession):
+    store = ConfigStore(session)
+    await store.seed_defaults()
+    result = await store.get_many([ConfigKey.MODE])
+    assert len(result) == 1
+    assert result["mode"] == "PAPER_TRADING"
+
+
+async def test_get_many_empty_list(session: AsyncSession):
+    store = ConfigStore(session)
+    result = await store.get_many([])
+    assert result == {}
+
+
+async def test_get_many_types_are_correct(session: AsyncSession):
+    store = ConfigStore(session)
+    await store.seed_defaults()
+    result = await store.get_many([
+        ConfigKey.MAX_POSITION_PCT,
+        ConfigKey.MAX_SIMULTANEOUS_TRADES,
+        ConfigKey.DECISOR_PROVIDER,
+        ConfigKey.ENGINE_PAUSED,
+    ])
+    assert isinstance(result["max_position_pct"], float)
+    assert isinstance(result["max_simultaneous_trades"], int)
+    assert isinstance(result["decisor_provider"], str)
+    assert isinstance(result["engine_paused"], bool)

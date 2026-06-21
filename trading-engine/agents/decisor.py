@@ -293,9 +293,14 @@ class Decisor:
                 review_prompt = review_template.format_map(_DefaultReviewDict(review_ctx))
 
                 try:
+                    review_system = (
+                        "Revisá tu decisión de trading para BTC/USDT. "
+                        "Corregí inconsistencias entre tu output y los indicadores. "
+                        "Output: el mismo JSON del system prompt original."
+                    )
                     resp_review = await self.llm.call(
                         provider=self.provider,
-                        system_prompt=system_prompt,
+                        system_prompt=review_system,
                         user_prompt=review_prompt,
                         fallbacks=self.fallbacks,
                         temperature=self.llm_temperature,
@@ -749,7 +754,7 @@ def _hold_decision(reason: str) -> DecisorOutput:
 def _hold_datos_insuficientes(reason: str) -> DecisorOutput:
     return DecisorOutput(
         regime=MarketRegime.RANGE, confluences=[], action=DecisorAction.HOLD,
-        confidence_base=0.95, confidence_adjustment=0.0, confidence=0.95,
+        confidence_base=0.0, confidence_adjustment=0.0, confidence=0.0,
         stop_loss=None, take_profit=None, position_size_pct=0.0,
         expected_holding_min=1, reasoning=reason,
     )

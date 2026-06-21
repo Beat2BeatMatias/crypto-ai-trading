@@ -63,4 +63,16 @@ IMPORTANTE: no justifiques la decisión solo para mantenerla. Si la
 inconsistencia es real, corregila. El objetivo es la precisión, no
 la consistencia con vos mismo.
 
-Output: el mismo JSON exacto especificado en el system prompt.
+Output JSON:
+{
+  "regime": "TRENDING_UP"|"TRENDING_DOWN"|"RANGE"|"HIGH_VOLATILITY",
+  "confluences": ["A","B",...],
+  "action": "BUY"|"SHORT"|"SELL"|"HOLD",
+  "confidence_llm_factor": float [0,1],
+  "confidence_adjustment": float,
+  "stop_loss": float|null,
+  "take_profit": float|null,
+  "position_size_pct": float (0.0 para HOLD/SELL),
+  "expected_holding_min": int,
+  "reasoning": "string — una línea, ≤1000 chars"
+}

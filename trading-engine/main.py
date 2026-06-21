@@ -354,77 +354,66 @@ async def run() -> None:
 
         async with session_factory() as s:
             store = ConfigStore(s)
-            mode = await store.get(ConfigKey.MODE)
-            kill = await store.get_typed(ConfigKey.KILL_SWITCH)
-            max_pos = await store.get_typed(ConfigKey.MAX_POSITION_PCT)
-            max_sim = await store.get_typed(ConfigKey.MAX_SIMULTANEOUS_TRADES)
-            daily_stop = await store.get_typed(ConfigKey.DAILY_STOP_PCT)
-            interval_min = int(await store.get_typed(ConfigKey.DECISOR_INTERVAL_MIN))
+            cfg = await store.get_many([
+                ConfigKey.MODE, ConfigKey.KILL_SWITCH, ConfigKey.MAX_POSITION_PCT,
+                ConfigKey.MAX_SIMULTANEOUS_TRADES, ConfigKey.DAILY_STOP_PCT,
+                ConfigKey.DECISOR_INTERVAL_MIN, ConfigKey.DECISOR_PROVIDER,
+                ConfigKey.FALLBACK_PROVIDERS, ConfigKey.ATR_TIMEFRAME,
+                ConfigKey.MIN_RR_RATIO, ConfigKey.SL_ATR_MULTIPLIER,
+                ConfigKey.MAX_DRAWDOWN_PCT, ConfigKey.DRAWDOWN_PROTECTION_ENABLED,
+                ConfigKey.MAX_SLIPPAGE_PCT, ConfigKey.SL_ATR_MAX_MULTIPLIER,
+                ConfigKey.MIN_FEES_TO_TP_RATIO, ConfigKey.CONF_THRESHOLD_TRENDING_UP,
+                ConfigKey.CONF_THRESHOLD_RANGE, ConfigKey.CONF_THRESHOLD_HIGH_VOL,
+                ConfigKey.CONF_THRESHOLD_SHORT_TRENDING_DOWN,
+                ConfigKey.CONF_THRESHOLD_SHORT_RANGE,
+                ConfigKey.CONF_THRESHOLD_SHORT_HIGH_VOL,
+                ConfigKey.RSI_OVERBOUGHT_1H, ConfigKey.CONF_BASE_0, ConfigKey.CONF_BASE_1,
+                ConfigKey.CONF_BASE_2, ConfigKey.CONF_BASE_3, ConfigKey.CONF_BASE_4PLUS,
+                ConfigKey.PESO_REGIME_RANGE, ConfigKey.PESO_REGIME_HIGH_VOL,
+                ConfigKey.ADJ_VOLUME_BOOST, ConfigKey.ADJ_VOLUME_RATIO,
+                ConfigKey.ADJ_SPREAD_PENALTY, ConfigKey.ADJ_SPREAD_THRESHOLD_PCT,
+                ConfigKey.CONFLUENCE_WEAK_FACTOR, ConfigKey.SUBJECTIVE_ADJ_MAX,
+                ConfigKey.RANGE_EXTREME_PCT, ConfigKey.BLOCK_K_MAX_LINES,
+                ConfigKey.BLOCK_K_WINDOW_HOURS, ConfigKey.MIN_ROUNDTRIP_FEE_PCT,
+                ConfigKey.MIN_POSITION_SIZE, ConfigKey.RISK_PER_TRADE_PCT,
+                ConfigKey.MIN_CONFLUENCES_BUY, ConfigKey.MIN_CONFLUENCES_SHORT,
+                ConfigKey.COHERENCE_STRICT_MODE, ConfigKey.TWO_PASS_ENABLED,
+                ConfigKey.DECISOR_LLM_TEMPERATURE, ConfigKey.DECISOR_SELF_CONSISTENCY_N,
+            ])
+            mode = cfg.pop("mode", "PAPER_TRADING")
+            kill = cfg.pop("kill_switch", False)
+            max_pos = cfg.pop("max_position_pct", 0.10)
+            max_sim = cfg.pop("max_simultaneous_trades", 2)
+            daily_stop = cfg.pop("daily_stop_pct", -0.03)
+            interval_min = int(cfg.pop("decisor_interval_min", 5))
             if sched.update_decisor_interval(interval_min):
                 logger.info("decisor.scheduler_interval_synced", interval_min=interval_min)
             if not await _decisor_interval_elapsed(s, interval_min):
                 logger.info("decisor.skipped_interval_not_elapsed", interval_min=interval_min)
                 return
-            decisor_provider = LLMProvider(await store.get(ConfigKey.DECISOR_PROVIDER))
-            fallbacks = _parse_providers(await store.get(ConfigKey.FALLBACK_PROVIDERS))
-            atr_timeframe = await store.get(ConfigKey.ATR_TIMEFRAME)
-            min_rr_ratio = await store.get_typed(ConfigKey.MIN_RR_RATIO)
-            sl_atr_multiplier = await store.get_typed(ConfigKey.SL_ATR_MULTIPLIER)
-            max_drawdown_pct = await store.get_typed(ConfigKey.MAX_DRAWDOWN_PCT)
-            drawdown_protection_enabled = await store.get_typed(
-                ConfigKey.DRAWDOWN_PROTECTION_ENABLED,
-            )
-            max_slippage_pct = await store.get_typed(ConfigKey.MAX_SLIPPAGE_PCT)
+            decisor_provider = LLMProvider(cfg.pop("decisor_provider", "groq-llama-3.3-70b"))
+            fallbacks = _parse_providers(cfg.pop("fallback_providers", ""))
+            atr_timeframe = cfg.pop("atr_timeframe", "15m")
+            min_rr_ratio = cfg.pop("min_rr_ratio", 1.2)
+            sl_atr_multiplier = cfg.pop("sl_atr_multiplier", 0.3)
+            max_drawdown_pct = cfg.pop("max_drawdown_pct", -0.10)
+            drawdown_protection_enabled = cfg.pop("drawdown_protection_enabled", True)
+            max_slippage_pct = cfg.pop("max_slippage_pct", 0.003)
             cb.update_thresholds(daily_stop_pct=daily_stop, max_drawdown_pct=max_drawdown_pct)
-            calibration = {
-                # Risk Gate / SL bounds
-                "sl_atr_max_multiplier": await store.get_typed(ConfigKey.SL_ATR_MAX_MULTIPLIER),
-                "min_fees_to_tp_ratio": await store.get_typed(ConfigKey.MIN_FEES_TO_TP_RATIO),
-                # Guías para el LLM — se inyectan en el system prompt (no enforcement)
-                "conf_threshold_trending_up": await store.get_typed(ConfigKey.CONF_THRESHOLD_TRENDING_UP),
-                "conf_threshold_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_RANGE),
-                "conf_threshold_high_vol": await store.get_typed(ConfigKey.CONF_THRESHOLD_HIGH_VOL),
-                "conf_threshold_short_trending_down": await store.get_typed(
-                    ConfigKey.CONF_THRESHOLD_SHORT_TRENDING_DOWN,
-                ),
-                "conf_threshold_short_range": await store.get_typed(ConfigKey.CONF_THRESHOLD_SHORT_RANGE),
-                "conf_threshold_short_high_vol": await store.get_typed(
-                    ConfigKey.CONF_THRESHOLD_SHORT_HIGH_VOL,
-                ),
-                "rsi_overbought_1h": await store.get_typed(ConfigKey.RSI_OVERBOUGHT_1H),
-                "conf_base_0": await store.get_typed(ConfigKey.CONF_BASE_0),
-                "conf_base_1": await store.get_typed(ConfigKey.CONF_BASE_1),
-                "conf_base_2": await store.get_typed(ConfigKey.CONF_BASE_2),
-                "conf_base_3": await store.get_typed(ConfigKey.CONF_BASE_3),
-                "conf_base_4plus": await store.get_typed(ConfigKey.CONF_BASE_4PLUS),
-                "peso_regime_range": await store.get_typed(ConfigKey.PESO_REGIME_RANGE),
-                "peso_regime_high_vol": await store.get_typed(ConfigKey.PESO_REGIME_HIGH_VOL),
-                "adj_volume_boost": await store.get_typed(ConfigKey.ADJ_VOLUME_BOOST),
-                "adj_volume_ratio": await store.get_typed(ConfigKey.ADJ_VOLUME_RATIO),
-                "adj_spread_penalty": await store.get_typed(ConfigKey.ADJ_SPREAD_PENALTY),
-                "adj_spread_threshold_pct": await store.get_typed(ConfigKey.ADJ_SPREAD_THRESHOLD_PCT),
-                "confluence_weak_factor": await store.get_typed(ConfigKey.CONFLUENCE_WEAK_FACTOR),
-                "subjective_adj_max": await store.get_typed(ConfigKey.SUBJECTIVE_ADJ_MAX),
-                "range_extreme_pct": await store.get_typed(ConfigKey.RANGE_EXTREME_PCT),
-                "block_k_max_lines": await store.get_typed(ConfigKey.BLOCK_K_MAX_LINES),
-                "block_k_window_hours": await store.get_typed(ConfigKey.BLOCK_K_WINDOW_HOURS),
-                "min_roundtrip_fee_pct": await store.get_typed(ConfigKey.MIN_ROUNDTRIP_FEE_PCT),
-                "min_position_size": await store.get_typed(ConfigKey.MIN_POSITION_SIZE),
-                "risk_per_trade_pct": await store.get_typed(ConfigKey.RISK_PER_TRADE_PCT),
-                "min_confluences_buy": await store.get_typed(ConfigKey.MIN_CONFLUENCES_BUY),
-                "min_confluences_short": await store.get_typed(ConfigKey.MIN_CONFLUENCES_SHORT),
-            }
-            coherence_strict = await store.get_typed(ConfigKey.COHERENCE_STRICT_MODE)
-            two_pass = await store.get_typed(ConfigKey.TWO_PASS_ENABLED)
-            decisor_temperature = await store.get_typed(ConfigKey.DECISOR_LLM_TEMPERATURE)
-            decisor_self_consistency_n = await store.get_typed(ConfigKey.DECISOR_SELF_CONSISTENCY_N)
+            calibration = dict(cfg)
+            coherence_strict = cfg.pop("coherence_strict_mode", False)
+            two_pass = cfg.pop("two_pass_enabled", True)
+            decisor_temperature = cfg.pop("decisor_llm_temperature", 0.1)
+            decisor_self_consistency_n = cfg.pop("decisor_self_consistency_n", 0)
 
             collector = PriceCollector(
                 exchange, s, symbol=engine_symbol, market=ohlcv_market,
             )
             try:
-                for tf in ("1m", "5m", "15m", "1h", "4h"):
-                    await collector.fetch_and_persist(timeframe=tf)
+                await asyncio.gather(*[
+                    collector.fetch_and_persist(timeframe=tf)
+                    for tf in ("1m", "5m", "15m", "1h", "4h")
+                ])
             except Exception as e:
                 logger.warning("engine.ohlcv_fetch_failed_using_cached_data", error=str(e))
             await collector.compute_and_persist_indicators()
@@ -698,10 +687,25 @@ async def run() -> None:
                     )
                 elif decision.action == DecisorAction.SELL:
                     if open_positions:
-                        tid = open_positions[0].trade_id
-                        if use_adapter or (
-                            getattr(open_positions[0], "position_side", "LONG") == "SHORT"
-                        ):
+                        # Match SELL to the first open LONG position for spot, or
+                        # to the first open position matching the LLM's implied direction.
+                        # When multiple positions exist, prefer closing the side that
+                        # aligns with the LLM's regime/action intent.
+                        target_side = getattr(decision, 'position_side', None) or "LONG"
+                        matched = next(
+                            (p for p in open_positions
+                             if getattr(p, "position_side", "LONG") == target_side),
+                            open_positions[0],
+                        )
+                        tid = matched.trade_id
+                        matched_side = getattr(matched, "position_side", "LONG") or "LONG"
+                        logger.info(
+                            "executor.sell_matched_position",
+                            trade_id=str(tid),
+                            position_side=matched_side,
+                            total_open=len(open_positions),
+                        )
+                        if use_adapter or matched_side == "SHORT":
                             await executor.execute_close(
                                 trade_id=tid,
                                 decision_id=latest_d.id,

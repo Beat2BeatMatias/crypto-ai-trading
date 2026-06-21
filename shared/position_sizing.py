@@ -57,7 +57,7 @@ def apply_risk_based_sizing(
     capped_pct = min(raw_pct, max_position_pct)
     final_pct = max(capped_pct, floor_pct) if capped_pct >= floor_pct else capped_pct
 
-    risk_at_sl_usdt = usdt_available * final_pct * sl_distance_pct if usdt_available > 0 else 0.0
+    risk_at_sl_usdt = capital_total * final_pct * sl_distance_pct if capital_total > 0 else 0.0
     target_risk_usdt = capital_total * risk_per_trade_pct
 
     meta: dict[str, Any] = {

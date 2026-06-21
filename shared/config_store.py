@@ -486,6 +486,17 @@ class ConfigStore:
             raise KeyError(f"Config key not found: {key.value}")
         return _cast(row.value, row.value_type)
 
+    async def get_many(self, keys: list[ConfigKey]) -> dict[str, Any]:
+        """Return all values for the given keys in a single query, typed by value_type.
+
+        Missing keys are excluded from the result (no exception raised).
+        """
+        from sqlalchemy import select as _select
+        rows = (await self.session.execute(
+            _select(ConfigEntry).where(ConfigEntry.key.in_([k.value for k in keys]))
+        )).scalars().all()
+        return {r.key: _cast(r.value, r.value_type) for r in rows}
+
     async def set(self, key: ConfigKey, value: str, *, changed_by: str = "system") -> None:
         row = await self.session.get(ConfigEntry, key.value)
         if row is None:

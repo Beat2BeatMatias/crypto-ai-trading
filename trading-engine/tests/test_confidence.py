@@ -34,10 +34,26 @@ def test_effective_confluence_count_includes_static_and_extended():
     assert effective_confluence_count(["B", "I"]) == 2
 
 
-def test_quality_factor_always_one():
-    assert quality_factor(["A", "G"]) == pytest.approx(1.0)
-    assert quality_factor(["B", "C"]) == pytest.approx(1.0)
-    assert quality_factor([]) == pytest.approx(1.0)
+def test_quality_factor_neutral_all_non_strong_non_weak():
+    qf = quality_factor(["A", "C", "E"])
+    assert qf == pytest.approx(1.0)
+
+def test_quality_factor_boost_for_strong_patterns():
+    qf = quality_factor(["B", "G", "F"])
+    assert qf > 1.0
+
+def test_quality_factor_penalty_for_weak_patterns():
+    qf = quality_factor(["D", "L", "H", "P"])
+    assert qf < 1.0
+
+def test_quality_factor_zero_for_empty():
+    assert quality_factor([]) == 0.0
+
+def test_quality_factor_clamps_to_bounds():
+    all_weak = quality_factor(["D", "L"])
+    assert all_weak >= 0.5
+    all_strong = quality_factor(["B", "G", "F"])
+    assert all_strong <= 1.25
 
 
 def test_regime_factor_trending_down_long_is_zero():
@@ -62,7 +78,9 @@ def test_compute_confidence_base_two_confluences_range():
     base, meta = compute_confidence_base(
         ["B", "C"], MarketRegime.RANGE, {},
     )
-    assert base == pytest.approx(0.75 * 1.0 * 1.0)
+    # B is strong pattern (quality >1), C is neutral → quality ~1.075
+    expected_qf = 1.0 + (1.0 / 2.0) * 0.15
+    assert base == pytest.approx(0.75 * expected_qf * 1.0)
     assert meta["confluence_count"] == 2
     assert meta["extended_confluence_weight"] == 1.0
 
@@ -71,8 +89,10 @@ def test_compute_confidence_base_three_with_promoted_i():
     base, meta = compute_confidence_base(
         ["B", "C", "I"], MarketRegime.RANGE, {},
     )
+    # B is strong pattern (quality >1), C and I are neutral → quality ~1.05
+    expected_qf = 1.0 + (1.0 / 3.0) * 0.15
     assert meta["confluence_count"] == 3
-    assert base == pytest.approx(0.88 * 1.0 * 1.0)
+    assert base == pytest.approx(0.88 * expected_qf * 1.0)
 
 
 def test_apply_server_confidence_overrides_llm_base_and_recomputes_confidence():
@@ -83,7 +103,8 @@ def test_apply_server_confidence_overrides_llm_base_and_recomputes_confidence():
         confidence=0.99,
     )
     updated, meta = apply_server_confidence(decision, calibration={})
-    assert updated.confidence_base == pytest.approx(0.75 * 1.0 * 1.0)
+    expected_qf = 1.0 + (1.0 / 2.0) * 0.15
+    assert updated.confidence_base == pytest.approx(0.75 * expected_qf * 1.0)
     assert updated.confidence_adjustment == pytest.approx(0.05)
     assert updated.confidence == pytest.approx(
         updated.confidence_base * updated.confidence_llm_factor + 0.05,
@@ -116,7 +137,8 @@ def test_apply_server_confidence_applies_llm_factor_multiplicatively():
         confidence_adjustment=0.02,
     )
     updated, meta = apply_server_confidence(decision, calibration={})
-    base = 0.75 * 1.0 * 1.0
+    expected_qf = 1.0 + (1.0 / 2.0) * 0.15
+    base = 0.75 * expected_qf * 1.0
     assert updated.confidence_base == pytest.approx(base)
     assert updated.confidence_llm_factor == pytest.approx(0.75)
     assert updated.confidence == pytest.approx(base * 0.75 + 0.02)
@@ -133,7 +155,9 @@ def test_hold_trending_down_futures_uses_short_regime_factor():
     )
     assert meta["regime_factor"] == pytest.approx(1.0)
     assert meta.get("hold_signal_direction") == "SHORT"
-    assert updated.confidence_base == pytest.approx(0.75 * 1.0 * 1.0)
+    # J is strong pattern → quality > 1.0
+    expected_qf = 1.0 + (1.0 / 2.0) * 0.15
+    assert updated.confidence_base == pytest.approx(0.75 * expected_qf * 1.0)
     assert updated.confidence > 0.0
 
 
@@ -148,8 +172,12 @@ def test_hold_trending_down_futures_b_and_j_counts_only_short():
     assert meta["confluence_count"] == 1
     assert meta["confluences_counted"] == ["J"]
     assert meta["confluences_excluded_direction"] == ["B"]
-    assert updated.confidence_base == pytest.approx(0.55 * 1.0 * 1.0)
-    assert meta["confidence_base_inflated"] == pytest.approx(0.75 * 1.0 * 1.0)
+    # J is strong → quality = 1.15
+    expected_qf = 1.0 + (1.0 / 1.0) * 0.15
+    assert updated.confidence_base == pytest.approx(0.55 * expected_qf * 1.0)
+    # Inflated: both B and J are strong → quality = 1.15
+    inflated_qf = 1.0 + (2.0 / 2.0) * 0.15
+    assert meta["confidence_base_inflated"] == pytest.approx(0.75 * inflated_qf * 1.0)
 
 
 def test_hold_trending_down_spot_uses_default_regime_factor():
