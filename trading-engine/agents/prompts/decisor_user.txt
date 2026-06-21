@@ -15,6 +15,8 @@ BLOQUE C — INDICADORES TÉCNICOS POR TIMEFRAME
 
 {block_c_text}
 
+{block_cp_text}
+
 ════════════════════════════════════════════
 BLOQUE D — NIVELES CLAVE (referencia para SL/TP)
 ════════════════════════════════════════════

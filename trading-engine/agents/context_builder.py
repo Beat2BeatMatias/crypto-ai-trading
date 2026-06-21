@@ -37,6 +37,7 @@ from agents.confluence_registry import (
     registry_verify_specs,
     render_registry_block,
 )
+from agents.confluence_prescanner import ConfluencePrescanner
 from agents.lesson_normalizer import format_block_k_lessons
 from shared.notional_sizing import effective_notional_leverage, min_position_size_pct_for_entry, min_position_size_pct_for_lot
 
@@ -555,6 +556,11 @@ class ContextBuilder:
         ctx["block_d_text"] = self._render_key_levels_text(ctx, price)
         ctx["block_e_text"] = self._render_orderbook_text(ob, ctx)
         ctx["block_f_text"] = self._render_cross_tf_text(cross_tf)
+
+        # BLOQUE CP — Deterministic confluence prescan (pre-LLM)
+        prescanner = ConfluencePrescanner()
+        ctx["confluence_prescan"] = prescanner.scan(ctx)
+        ctx["block_cp_text"] = prescanner.render(ctx["confluence_prescan"])
 
         return ctx
 
