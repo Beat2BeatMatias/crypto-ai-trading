@@ -325,7 +325,7 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Temperatura del LLM del Decisor (0.0–1.0). Valores bajos reducen variación entre ciclos. Rango 0.0–1.0.",
     ),
     ConfigKey.DECISOR_SELF_CONSISTENCY_N: _Default(
-        "0", "int",
+        "3", "int",
         "Muestras LLM por ciclo del Decisor (votación mayoritaria). 0=desactivado (1 llamada). Rango 0–5.",
     ),
     ConfigKey.RISK_PER_TRADE_PCT: _Default(

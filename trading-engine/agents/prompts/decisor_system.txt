@@ -47,24 +47,24 @@ R10. BUY → (TP − precio)/precio × 100 ≥ min_fees_to_tp_ratio × roundtrip
 CATÁLOGO DE CONFLUENCIAS (códigos A–P)
 ═══════════════════════════════════════════════════════════════════
 ALCISTAS (BUY / reversión long):
-A. RSI_OVERSOLD_BOUNCE    — RSI <30 saliendo con vela alcista en {confluence_tf_pair}.
-B. MACD_BULLISH_CROSS     — Cruce MACD>Signal en {confluence_tf_pair} con hist creciente.
-C. EMA_SUPPORT_HOLD       — Precio rebota en EMA9/20/50/200 (15m/1h/4h) con mecha inferior.
-D. BB_LOWER_REVERSAL      — BB% 5m <5 con vela de reversión.
-E. ORDERBOOK_BID_PRESSURE — Imbalance > 1.2 + bid_wall < 0.3%.
-F. BREAKOUT_VOL_CONFIRMED — Ruptura resistencia con volumen >1.5× + OBV slope positivo.
-G. HIGHER_TF_ALIGNMENT    — 1h=uptrend + RSI 4h>50 + EMA20_4h > EMA50_4h.
-H. RANGE_SUPPORT_TOUCH    — Precio en banda inferior de rango (Stoch <20, BB% <10).
+A. RSI_OVERSOLD_BOUNCE    — RSI <35 en TF primario o secundario + mecha baja dominante (wick_lower > wick_upper × 1.5).
+B. MACD_BULLISH_CROSS     — MACD > Signal en TF primario o secundario con histograma >0.
+C. EMA_SUPPORT_HOLD       — Precio a <1.0% de EMA50 1h (dist_support_pct) + mecha baja en TF primario/secundario/5m/1m.
+D. BB_LOWER_REVERSAL      — BB% 5m <5% + mecha baja dominante (wick_lower > wick_upper × 1.5).
+E. ORDERBOOK_BID_PRESSURE — Imbalance > 1.2 + bid_wall_dist < 0.3%.
+F. BREAKOUT_VOL_CONFIRMED — Precio sobre high_24h o resistance_1h + volume_ratio >1.5× + OBV slope >0.
+G. HIGHER_TF_ALIGNMENT    — trend_label(1h)=uptrend + RSI 4h>50 + EMA20_4h > EMA50_4h.
+H. RANGE_SUPPORT_TOUCH    — at_range_low=True o (Stoch_K <20 y BB% <10 en TF primario/secundario).
 
 BAJISTAS (SHORT, futures):
-I. RSI_OVERBOUGHT_REJECTION    — RSI >65 con rechazo bajista en {confluence_tf_pair}.
-J. MACD_BEARISH_CROSS          — Cruce MACD<Signal en {confluence_tf_pair} con hist decreciente.
-K. BEARISH_EMA_REJECTION       — Precio rebota en EMA9/20/50/200 (15m/1h/4h) con mecha superior.
-L. BB_UPPER_REJECTION          — BB% 5m >95 con vela de rechazo arriba.
-M. ORDERBOOK_ASK_PRESSURE      — Imbalance < 0.8 + ask_wall < 0.3%.
-N. BREAKDOWN_VOL_CONFIRMED     — Ruptura soporte con volumen >1.5× + OBV slope negativo.
-O. LOWER_TF_BEARISH_ALIGNMENT  — 1h=downtrend + RSI 4h<50 + EMA20_4h < EMA50_4h.
-P. RANGE_RESISTANCE_TOUCH      — Precio en banda superior de rango (Stoch >80, BB% >90).
+I. RSI_OVERBOUGHT_REJECTION    — RSI >65 en TF primario o secundario + mecha alta dominante (wick_upper > wick_lower × 1.5).
+J. MACD_BEARISH_CROSS          — MACD < Signal en TF primario o secundario con histograma <0.
+K. BEARISH_EMA_REJECTION       — Precio a <1.0% bajo EMA200 1h + mecha alta dominante.
+L. BB_UPPER_REJECTION          — BB% 5m >95% + mecha alta dominante (wick_upper > wick_lower × 1.5).
+M. ORDERBOOK_ASK_PRESSURE      — Imbalance < 0.8 + ask_wall_dist < 0.3%.
+N. BREAKDOWN_VOL_CONFIRMED     — Precio bajo low_24h o <1% bajo EMA50 1h + volume_ratio >1.5× + OBV slope <0.
+O. LOWER_TF_BEARISH_ALIGNMENT  — trend_label(1h)=downtrend + RSI 4h<50 + EMA20_4h < EMA50_4h.
+P. RANGE_RESISTANCE_TOUCH      — at_range_high=True o (Stoch_K >80 y BB% >90 en TF primario/secundario).
 
 Mínimo confluencias: {min_confluences_buy} (BUY) / {min_confluences_short} (SHORT).
 No mezcles A–H con I–P (C9 lo detecta). Códigos Q–Z solo si aparecen en Bloque K.

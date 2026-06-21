@@ -209,6 +209,31 @@ class Decisor:
         active_ext = frozenset(ctx.get("active_registry_confluence_codes") or [])
         cal = calibration or {}
 
+        # ── Pre-gate: sin confluencias detectadas → HOLD sin LLM ────────────
+        prescan = ctx.get("confluence_prescan", {})
+        if prescan:
+            alive = sum(
+                1 for v in prescan.values()
+                if v.get("status") in ("DETECTADO", "MARGINAL")
+            )
+            if alive == 0:
+                logger.info("decisor.pregate_hold_no_confluences")
+                validated = _hold_decision(
+                    "[PRE-GATE] Ninguna confluencia detectada por prescanner."
+                )
+                self.session.add(Decision(
+                    agent="decisor",
+                    model=self.provider.value,
+                    tokens_in=0, tokens_out=0, latency_ms=0,
+                    input={k: _serialize(v) for k, v in ctx.items()
+                           if not isinstance(v, dict) or k == "block_f_cross_tf"},
+                    output={**validated.model_dump(), "coherence_warnings": [], "two_pass_triggered": False},
+                    executed=False,
+                    rejected_reason="pregate_no_confluences",
+                ))
+                await self.session.commit()
+                return validated
+
         system_prompt = self.prompt_manager.load_system_prompt("decisor")
         system_prompt = _safe_substitute(system_prompt, ctx)
         user_prompt = self.prompt_manager.render_user_prompt("decisor", ctx, strict=False)
