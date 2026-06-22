@@ -78,6 +78,7 @@ class ConfigKey(str, Enum):
     MAX_PLAYBOOK_AGE_DAYS = "max_playbook_age_days"
     PLAYBOOK_FORCE_REGEN_WR_DELTA_PCT = "playbook_force_regen_wr_delta_pct"
     SUPERVISOR_CONFIG_WINDOW_HOURS = "supervisor_config_window_hours"
+    SUPERVISOR_CONFIG_CHANGES_ENABLED = "supervisor_config_changes_enabled"
     SUPERVISOR_CONFIG_AUTO_APPLY = "supervisor_config_auto_apply"
     SUPERVISOR_CONFIG_MIN_EVALUATED = "supervisor_config_min_evaluated_decisions"
     # Decisor LLM-centric (02-technical-spec §2.6)
@@ -299,10 +300,15 @@ DEFAULTS: dict[ConfigKey, _Default] = {
         "Ventana (horas) de métricas para sugerencias y auto-apply de parámetros numéricos. "
         "Playbook sigue usando 24h. Rango 24–336 (1–14 días).",
     ),
+    ConfigKey.SUPERVISOR_CONFIG_CHANGES_ENABLED: _Default(
+        "true", "bool",
+        "Si true, el Supervisor puede modificar configuraciones (auto-apply, ajuste de umbrales, revert degradación). "
+        "false congela toda modificación de config por parte del Supervisor."
+    ),
     ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY: _Default(
         "false", "bool",
         "Si true, el Supervisor aplica cambios numéricos dentro de _SAFE_BOUNDS. "
-        "false congela config durante validación paper (solo sugerencias en output).",
+        "false congela config durante validación paper (solo sugerencias en output)."
     ),
     ConfigKey.SUPERVISOR_CONFIG_MIN_EVALUATED: _Default(
         "30", "int",

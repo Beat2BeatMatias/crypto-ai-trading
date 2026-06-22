@@ -315,6 +315,11 @@ const FIELD_DEFS: Record<string, FieldDef> = {
     type: "slider", min: 10, max: 200, step: 5, unit: "decisiones",
     format: v => String(v), parse: parseInt,
   },
+  supervisor_config_changes_enabled: {
+    label: "Modificación de config por Supervisor",
+    description: "Si está desactivado, el Supervisor no puede modificar configuraciones (congela auto-apply, ajuste de umbrales y revert de degradación).",
+    type: "toggle",
+  },
   supervisor_config_auto_apply: {
     label: "Auto-apply de parámetros (Supervisor)",
     description: "Si está desactivado, el Supervisor solo sugiere cambios numéricos sin aplicarlos (recomendado en paper hasta validar edge).",
@@ -551,11 +556,12 @@ const GLOBAL_GROUPS: ConfigGroup[] = [
     title: "Supervisor — auto-config de parámetros",
     color: "cyan",
     keys: [
+      "supervisor_config_changes_enabled",
       "supervisor_config_window_hours",
       "supervisor_config_min_evaluated_decisions",
       "supervisor_config_auto_apply",
     ],
-    note: "Playbook y diagnóstico usan 24h. Auto-apply de min_rr, sl_atr, etc. usa la ventana larga.",
+    note: "El switch general congela toda modificación de config por el Supervisor. Auto-apply de min_rr, sl_atr, etc. usa la ventana larga.",
   },
   {
     title: "Post-mortem — Aprendizaje",

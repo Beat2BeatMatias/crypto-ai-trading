@@ -333,9 +333,15 @@ class Supervisor:
             metrics["kill_switch_in_period"] = op_ctx.get("kill_switch_in_period", False)
 
             # ----- Closed-loop revert: check if prior config changes degraded metrics -----
-            reverted = await self._maybe_revert_degraded_config(metrics)
-            if reverted:
-                logger.info("supervisor.reverted_degraded_config_keys", keys=reverted)
+            store_pre = ConfigStore(self.session)
+            changes_enabled_pre = await store_pre.get_typed(
+                ConfigKey.SUPERVISOR_CONFIG_CHANGES_ENABLED
+            )
+            reverted = []
+            if changes_enabled_pre:
+                reverted = await self._maybe_revert_degraded_config(metrics)
+                if reverted:
+                    logger.info("supervisor.reverted_degraded_config_keys", keys=reverted)
 
             active_playbook = await self.prompt_manager.get_active_playbook()
 
@@ -387,72 +393,80 @@ class Supervisor:
 
             # ----- Phase 3: config suggestions (ventana larga; auto-apply opcional) -----
             if current_config:
-                try:
-                    store = ConfigStore(self.session)
-                    auto_apply = await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY)
+                store = ConfigStore(self.session)
+                changes_enabled = await store.get_typed(
+                    ConfigKey.SUPERVISOR_CONFIG_CHANGES_ENABLED
+                )
+                if not changes_enabled:
+                    logger.info("supervisor.config_changes_disabled")
+                    output["config_changes_enabled"] = False
+                else:
+                    output["config_changes_enabled"] = True
+                    try:
+                        auto_apply = await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_AUTO_APPLY)
 
-                    # ── Auto-adjust thresholds for high missed_rate ────────────────
-                    missed_rate = float(metrics.get("missed_rate", 0.0))
-                    evaluated_decisions = int(metrics.get("evaluated_decisions", 0))
-                    threshold_adjustments = []
-                    if missed_rate > 30.0 and evaluated_decisions >= 20:
-                        for tf_key in (
-                            "conf_threshold_trending_up",
-                            "conf_threshold_range",
-                            "conf_threshold_short_trending_down",
-                            "conf_threshold_short_range",
-                        ):
-                            current_val = float(current_config.get(tf_key, 0.70))
-                            new_val = max(0.40, round(current_val - 0.05, 2))
-                            if new_val < current_val:
-                                await store.set(
-                                    ConfigKey(tf_key), str(new_val),
-                                    changed_by="supervisor:missed_rate_adjust",
-                                )
-                                threshold_adjustments.append({
-                                    "key": tf_key, "old": current_val, "new": new_val,
-                                })
-                                logger.info("supervisor.threshold_auto_lowered",
-                                            key=tf_key, old=current_val, new=new_val,
-                                            missed_rate=missed_rate)
-                    if threshold_adjustments:
-                        output["threshold_adjustments"] = threshold_adjustments
+                        # ── Auto-adjust thresholds for high missed_rate ────────────────
+                        missed_rate = float(metrics.get("missed_rate", 0.0))
+                        evaluated_decisions = int(metrics.get("evaluated_decisions", 0))
+                        threshold_adjustments = []
+                        if missed_rate > 30.0 and evaluated_decisions >= 20:
+                            for tf_key in (
+                                "conf_threshold_trending_up",
+                                "conf_threshold_range",
+                                "conf_threshold_short_trending_down",
+                                "conf_threshold_short_range",
+                            ):
+                                current_val = float(current_config.get(tf_key, 0.70))
+                                new_val = max(0.40, round(current_val - 0.05, 2))
+                                if new_val < current_val:
+                                    await store.set(
+                                        ConfigKey(tf_key), str(new_val),
+                                        changed_by="supervisor:missed_rate_adjust",
+                                    )
+                                    threshold_adjustments.append({
+                                        "key": tf_key, "old": current_val, "new": new_val,
+                                    })
+                                    logger.info("supervisor.threshold_auto_lowered",
+                                                key=tf_key, old=current_val, new=new_val,
+                                                missed_rate=missed_rate)
+                        if threshold_adjustments:
+                            output["threshold_adjustments"] = threshold_adjustments
 
-                    config_window_h = int(
-                        await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_WINDOW_HOURS)
-                    )
-                    min_evaluated = int(
-                        await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_MIN_EVALUATED)
-                    )
-                    config_since = datetime.now(tz=timezone.utc) - timedelta(hours=config_window_h)
-                    config_metrics = await self._compute_metrics(config_since)
-                    suggestions = await self._generate_config_suggestions(
-                        config_metrics, current_config,
-                    )
-                    applied, rejected = await self._apply_config_suggestions(
-                        suggestions,
-                        current_config,
-                        auto_apply_enabled=auto_apply,
-                        config_metrics=config_metrics,
-                        min_evaluated_decisions=min_evaluated,
-                    )
-                    output["config_suggestions"] = suggestions
-                    output["config_applied"] = applied
-                    output["config_rejected"] = rejected
-                    output["config_metrics_window_hours"] = config_window_h
-                    output["config_auto_apply_enabled"] = auto_apply
-                    if applied:
-                        output["config_applied_baseline"] = {
-                            "win_rate": float(metrics.get("win_rate", 0.0)),
-                            "profit_factor": float(metrics.get("profit_factor", 0.0)),
-                            "applied_keys": [s["key"] for s in applied],
-                            "ts": datetime.now(tz=timezone.utc).isoformat(),
-                        }
-                    logger.info("supervisor.suggestions_processed",
-                                total=len(suggestions.get("suggestions", [])),
-                                applied=len(applied), rejected=len(rejected))
-                except Exception as e:
-                    logger.warning("supervisor.suggestions_failed", error=str(e))
+                        config_window_h = int(
+                            await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_WINDOW_HOURS)
+                        )
+                        min_evaluated = int(
+                            await store.get_typed(ConfigKey.SUPERVISOR_CONFIG_MIN_EVALUATED)
+                        )
+                        config_since = datetime.now(tz=timezone.utc) - timedelta(hours=config_window_h)
+                        config_metrics = await self._compute_metrics(config_since)
+                        suggestions = await self._generate_config_suggestions(
+                            config_metrics, current_config,
+                        )
+                        applied, rejected = await self._apply_config_suggestions(
+                            suggestions,
+                            current_config,
+                            auto_apply_enabled=auto_apply,
+                            config_metrics=config_metrics,
+                            min_evaluated_decisions=min_evaluated,
+                        )
+                        output["config_suggestions"] = suggestions
+                        output["config_applied"] = applied
+                        output["config_rejected"] = rejected
+                        output["config_metrics_window_hours"] = config_window_h
+                        output["config_auto_apply_enabled"] = auto_apply
+                        if applied:
+                            output["config_applied_baseline"] = {
+                                "win_rate": float(metrics.get("win_rate", 0.0)),
+                                "profit_factor": float(metrics.get("profit_factor", 0.0)),
+                                "applied_keys": [s["key"] for s in applied],
+                                "ts": datetime.now(tz=timezone.utc).isoformat(),
+                            }
+                        logger.info("supervisor.suggestions_processed",
+                                    total=len(suggestions.get("suggestions", [])),
+                                    applied=len(applied), rejected=len(rejected))
+                    except Exception as e:
+                        logger.warning("supervisor.suggestions_failed", error=str(e))
 
             try:
                 promotions = await self._promote_confluence_candidates(
