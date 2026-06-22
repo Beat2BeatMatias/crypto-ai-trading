@@ -459,13 +459,14 @@ async def run() -> None:
             collector = PriceCollector(
                 exchange, s, symbol=engine_symbol, market=ohlcv_market,
             )
-            try:
-                await asyncio.gather(*[
-                    collector.fetch_and_persist(timeframe=tf)
-                    for tf in ("1m", "5m", "15m", "1h", "4h")
-                ])
-            except Exception as e:
-                logger.warning("engine.ohlcv_fetch_failed_using_cached_data", error=str(e))
+            for tf in ("1m", "5m", "15m", "1h", "4h"):
+                try:
+                    await collector.fetch_and_persist(timeframe=tf)
+                except Exception as e:
+                    logger.warning(
+                        "engine.ohlcv_fetch_failed_using_cached_data",
+                        error=str(e), timeframe=tf,
+                    )
             await collector.compute_and_persist_indicators()
 
             fees = FeeManager(exchange, s, symbol=engine_symbol)
