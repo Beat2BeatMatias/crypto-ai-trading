@@ -32,20 +32,6 @@ logger = structlog.get_logger()
 FUTURES_SYMBOL = "BTC/USDT:USDT"
 
 
-async def _decisor_interval_elapsed(session, interval_min: int) -> bool:
-    result = await session.execute(
-        select(Decision.ts)
-        .where(Decision.agent == "decisor")
-        .order_by(Decision.ts.desc())
-        .limit(1)
-    )
-    last_ts = result.scalar_one_or_none()
-    if last_ts is None:
-        return True
-    age_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60.0
-    return age_min >= interval_min
-
-
 def resolve_engine_symbol(product: str, spot_symbol: str) -> str:
     return FUTURES_SYMBOL if product == "futures" else spot_symbol
 
@@ -454,9 +440,7 @@ async def run() -> None:
             interval_min = int(cfg.pop("decisor_interval_min", 5))
             if sched.update_decisor_interval(interval_min):
                 logger.info("decisor.scheduler_interval_synced", interval_min=interval_min)
-            if not await _decisor_interval_elapsed(s, interval_min):
-                logger.info("decisor.skipped_interval_not_elapsed", interval_min=interval_min)
-                return
+
             decisor_provider = LLMProvider(cfg.pop("decisor_provider", "groq-llama-3.3-70b"))
             fallbacks = _parse_providers(cfg.pop("fallback_providers", ""))
             atr_timeframe = cfg.pop("atr_timeframe", "15m")

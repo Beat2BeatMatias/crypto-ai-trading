@@ -7,7 +7,7 @@ from unittest.mock import patch
 from sqlalchemy import select, MetaData, Table, Column, String, Text, DateTime, Numeric
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from main import _decisor_interval_elapsed, _compute_risk_metrics, validate_futures_sizing, resolve_engine_symbol, _parse_providers, calibration_tick
+from main import _compute_risk_metrics, validate_futures_sizing, resolve_engine_symbol, _parse_providers, calibration_tick
 from shared.db.models import Decision, BalanceSnapshot, Ohlcv, Trade
 from shared.config_store import ConfigStore, ConfigEntry, DEFAULTS, ConfigKey
 
@@ -178,36 +178,6 @@ class TestComputeRiskMetrics:
         await session.commit()
         _, drawdown = await _compute_risk_metrics(session, 1000.0)
         assert drawdown < 0
-
-
-class TestDecisorIntervalElapsed:
-    async def test_true_when_no_decision(self, session):
-        assert await _decisor_interval_elapsed(session, 5) is True
-
-    async def test_true_when_old_decision(self, session):
-        from uuid import uuid4
-        from datetime import timedelta
-        old_ts = datetime.now(timezone.utc) - timedelta(minutes=30)
-        dec = Decision(
-            id=uuid4(), ts=old_ts, agent="decisor", model="test",
-            tokens_in=0, tokens_out=0, latency_ms=0,
-            input={}, output={}, executed=False,
-        )
-        session.add(dec)
-        await session.commit()
-        assert await _decisor_interval_elapsed(session, 5) is True
-
-    async def test_false_when_recent_decision(self, session):
-        from uuid import uuid4
-        now = datetime.now(timezone.utc)
-        dec = Decision(
-            id=uuid4(), ts=now, agent="decisor", model="test",
-            tokens_in=0, tokens_out=0, latency_ms=0,
-            input={}, output={}, executed=False,
-        )
-        session.add(dec)
-        await session.commit()
-        assert await _decisor_interval_elapsed(session, 5) is False
 
 
 class TestParseProviders:
