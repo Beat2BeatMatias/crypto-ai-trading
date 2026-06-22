@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 import signal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy import select, text
 from shared.db.base import create_engine_from_url, create_session_factory
@@ -185,6 +185,72 @@ def _parse_providers(csv: str) -> list[LLMProvider]:
         except ValueError:
             logger.warning("main.invalid_provider_in_config", value=token)
     return result
+
+
+async def calibration_tick(session_factory: Any) -> None:
+    """Auto-calibrar conf_base_N según win rates reales de trades cerrados."""
+    from sqlalchemy import text as _text
+    from shared.config_store import ConfigKey as _CfgKey
+
+    min_trades_per_bucket = 10
+    learning_rate = 0.25
+    max_lookback_days = 60
+
+    try:
+        async with session_factory() as s:
+            cutoff = datetime.now(tz=timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            )
+            cutoff -= timedelta(days=max_lookback_days)
+
+            rows = (await s.execute(
+                _text("""
+                    SELECT t.pnl_usdt, d.output
+                    FROM trades t
+                    LEFT JOIN decisions d ON d.id = t.decision_id
+                    WHERE t.status = 'closed'
+                      AND t.ts_close >= :cutoff
+                      AND t.pnl_usdt IS NOT NULL
+                """),
+                {"cutoff": cutoff},
+            )).all()
+
+            import json
+            buckets: dict[int, list[float]] = {}
+            for pnl_usdt, dec_output_json in rows:
+                dec_out = json.loads(dec_output_json) if dec_output_json else {}
+                confs = dec_out.get("confluences", [])
+                cnt = min(len(confs), 4)
+                buckets.setdefault(cnt, []).append(float(pnl_usdt) > 0)
+
+            store = ConfigStore(s)
+            updates: dict[str, float] = {}
+            for cnt in range(0, 5):
+                outcomes = buckets.get(cnt, [])
+                if len(outcomes) < min_trades_per_bucket:
+                    continue
+                win_rate = sum(outcomes) / len(outcomes)
+                key = f"conf_base_{cnt}" if cnt < 4 else "conf_base_4plus"
+                current = float(await store.get_typed(
+                    getattr(_CfgKey, f"CONF_BASE_{cnt if cnt < 4 else '4PLUS'}")
+                ))
+                smoothed = current * (1 - learning_rate) + win_rate * learning_rate
+                updates[key] = round(smoothed, 2)
+
+            for key, val in updates.items():
+                await store.set(
+                    getattr(_CfgKey, key.upper()),
+                    str(val),
+                    changed_by="calibration",
+                )
+            if updates:
+                await s.commit()
+                logger.info("calibration.conf_base_updated", updates=updates)
+            else:
+                logger.info("calibration.skipped_insufficient_data",
+                            buckets={k: len(v) for k, v in buckets.items()})
+    except Exception as e:
+        logger.error("calibration.tick_error", error=str(e))
 
 
 async def run() -> None:
@@ -912,6 +978,12 @@ async def run() -> None:
         interval_min=outcome_interval_min,
         postmortem_chained=True,
     )
+
+    async def _calibration_wrapper() -> None:
+        await calibration_tick(session_factory)
+
+    sched.add_calibration(_calibration_wrapper, hours=6)
+    logger.info("scheduler.calibration_registered", hours=6)
 
     # ── Scheduler status tracking ────────────────────────────────────────
     import asyncio as _asyncio

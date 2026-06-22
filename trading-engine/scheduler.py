@@ -51,6 +51,10 @@ class EngineScheduler:
         self._scheduler.add_job(fn, IntervalTrigger(minutes=interval_min),
                                 id="outcome_attribution", replace_existing=True)
 
+    def add_calibration(self, fn: Callable[[], Awaitable[None]], *, hours: int = 6) -> None:
+        self._scheduler.add_job(fn, IntervalTrigger(hours=hours),
+                                id="calibration", replace_existing=True)
+
     def get_job(self, job_id: str) -> Any | None:
         return self._scheduler.get_job(job_id)
 

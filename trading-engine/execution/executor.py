@@ -67,8 +67,6 @@ class Executor:
         if avg_price == 0 or filled_qty == 0:
             raise RuntimeError(f"Buy order zero fill: {order}")
 
-        # Persistir Trade y Position ANTES de intentar colocar los brackets.
-        # Esto garantiza que el BUY quede registrado en BD aunque los brackets fallen.
         trade = Trade(
             decision_id=decision_id, ts_open=datetime.now(tz=timezone.utc),
             side="BUY", quantity_btc=Decimal(str(filled_qty)),
@@ -88,52 +86,41 @@ class Executor:
         if d is not None:
             d.executed = True
             d.trade_id = trade.id
-        await self.session.commit()
 
-        # Colocar brackets SL/TP via OCO (One-Cancels-the-Other).
-        # La OCO coloca SL y TP en una sola llamada: cuando uno se ejecuta,
-        # Binance cancela el otro automáticamente. Esto elimina el problema de
-        # "insufficient balance" que ocurre al colocarlos por separado (el SL
-        # reserva el BTC y Binance rechaza el TP con saldo insuficiente).
-        #
-        # Fallback en cascada si algún precio no está disponible:
-        #   1. OCO (SL + TP en un request) — preferido cuando ambos precios existen
-        #   2. Solo SL STOP_LOSS_LIMIT — cuando no hay TP en la decisión
-        #   3. Solo TP LIMIT — cuando no hay SL en la decisión (poco común)
-        #   4. Sin bracket — SL Guardian y TP Guardian del OrderTracker cubren el trade
+        # Colocar brackets SL/TP y persistir todo en una sola transacción.
         sl_order_id: str | None = None
         tp_order_id: str | None = None
-
         has_sl = decision.stop_loss is not None
         has_tp = decision.take_profit is not None
 
-        if has_sl and has_tp:
-            sl_order_id, tp_order_id = await self._place_oco_bracket(
-                filled_qty=filled_qty,
-                stop_loss=decision.stop_loss,
-                take_profit=decision.take_profit,
-                trade_id=trade.id,
-            )
-        elif has_sl:
-            sl_order_id = await self._place_sl_bracket(
-                filled_qty=filled_qty,
-                stop_loss=decision.stop_loss,
-                trade_id=trade.id,
-            )
-        elif has_tp:
-            tp_order_id = await self._place_tp_bracket(
-                filled_qty=filled_qty,
-                take_profit=decision.take_profit,
-                trade_id=trade.id,
-            )
+        try:
+            if has_sl and has_tp:
+                sl_order_id, tp_order_id = await self._place_oco_bracket(
+                    filled_qty=filled_qty,
+                    stop_loss=decision.stop_loss,
+                    take_profit=decision.take_profit,
+                    trade_id=trade.id,
+                )
+            elif has_sl:
+                sl_order_id = await self._place_sl_bracket(
+                    filled_qty=filled_qty,
+                    stop_loss=decision.stop_loss,
+                    trade_id=trade.id,
+                )
+            elif has_tp:
+                tp_order_id = await self._place_tp_bracket(
+                    filled_qty=filled_qty,
+                    take_profit=decision.take_profit,
+                    trade_id=trade.id,
+                )
+        except Exception:
+            logger.exception("executor.brackets_failed", trade_id=str(trade.id))
 
-        # Persistir los IDs de brackets obtenidos (incluso si solo uno fue exitoso)
         if sl_order_id is not None or tp_order_id is not None:
-            await self.session.refresh(trade)
             trade.order_id_sl = sl_order_id
             trade.order_id_tp = tp_order_id
-            await self.session.commit()
 
+        await self.session.commit()
         await self.session.refresh(trade)
         logger.info("executor.buy_executed", trade_id=str(trade.id), price=avg_price,
                     sl_placed=(sl_order_id is not None), tp_placed=(tp_order_id is not None))
@@ -463,7 +450,6 @@ class Executor:
         if d is not None:
             d.executed = True
             d.trade_id = trade.id
-        await self.session.commit()
 
         try:
             brackets = await self._adapter.place_brackets(
@@ -474,10 +460,8 @@ class Executor:
                 take_profit=decision.take_profit,
             )
             if brackets.order_id_sl or brackets.order_id_tp:
-                await self.session.refresh(trade)
                 trade.order_id_sl = brackets.order_id_sl
                 trade.order_id_tp = brackets.order_id_tp
-                await self.session.commit()
         except Exception as e:
             logger.error(
                 "executor.brackets_failed",
@@ -485,10 +469,10 @@ class Executor:
                 direction=direction.value,
                 error=str(e),
             )
-            d = await self.session.get(Decision, decision_id)
             if d is not None:
                 d.rejected_reason = f"brackets_failed: {str(e)[:160]}"
-                await self.session.commit()
+
+        await self.session.commit()
         await self.session.refresh(trade)
         logger.info(
             "executor.open_executed",

@@ -1,14 +1,15 @@
 """Tests for main.py — orchestrator helper functions."""
+import json
 import pytest
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from sqlalchemy import select, MetaData, Table, Column, String, Text, DateTime, Numeric
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from main import _decisor_interval_elapsed, _compute_risk_metrics, validate_futures_sizing, resolve_engine_symbol, _parse_providers
-from shared.db.models import Decision, BalanceSnapshot, Ohlcv
-from shared.config_store import ConfigStore, ConfigEntry, DEFAULTS
+from main import _decisor_interval_elapsed, _compute_risk_metrics, validate_futures_sizing, resolve_engine_symbol, _parse_providers, calibration_tick
+from shared.db.models import Decision, BalanceSnapshot, Ohlcv, Trade
+from shared.config_store import ConfigStore, ConfigEntry, DEFAULTS, ConfigKey
 
 
 _sqlite_metadata = MetaData()
@@ -16,6 +17,8 @@ _sqlite_metadata = MetaData()
 _trade_table = Table(
     "trades", _sqlite_metadata,
     Column("id", String(36), primary_key=True),
+    Column("decision_id", String(36)),
+    Column("ts_open", DateTime),
     Column("ts_close", DateTime),
     Column("status", String(20)),
     Column("pnl_usdt", Numeric),
@@ -23,6 +26,34 @@ _trade_table = Table(
     Column("quantity_btc", Numeric),
     Column("entry_price", Numeric),
     Column("fees_usdt", Numeric),
+    Column("stop_loss", Numeric),
+    Column("take_profit", Numeric),
+    Column("order_id_open", String(50)),
+    Column("order_id_close", String(50)),
+    Column("order_id_sl", String(50)),
+    Column("order_id_tp", String(50)),
+    Column("close_requested", String(5)),
+    Column("position_side", String(5)),
+    Column("leverage", Numeric(5, 2)),
+    Column("liquidation_price", Numeric(18, 8)),
+    Column("margin_mode", String(10)),
+    Column("funding_paid_usdt", Numeric(18, 4)),
+)
+
+_decision_table = Table(
+    "decisions", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("ts", DateTime),
+    Column("agent", String(20)),
+    Column("model", String(50)),
+    Column("tokens_in", String(10)),
+    Column("tokens_out", String(10)),
+    Column("latency_ms", String(10)),
+    Column("input", Text),
+    Column("output", Text),
+    Column("trade_id", String(36)),
+    Column("executed", String(5)),
+    Column("rejected_reason", String(200)),
 )
 
 _bal_snap_table = Table(
@@ -51,6 +82,16 @@ _config_table = Table(
     Column("value_type", String(20)),
     Column("description", Text),
     Column("updated_at", DateTime),
+)
+
+_config_history_table = Table(
+    "config_history", _sqlite_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("ts", DateTime),
+    Column("key", String(60)),
+    Column("old_value", Text),
+    Column("new_value", Text),
+    Column("changed_by", String(60)),
 )
 
 
@@ -182,3 +223,109 @@ class TestParseProviders:
 
     def test_returns_empty_for_empty(self):
         assert _parse_providers("") == []
+
+
+class TestCalibrationTick:
+    async def test_updates_conf_base_with_win_rates(self, session, seed_config):
+        from uuid import uuid4
+        now = datetime.now(tz=timezone.utc)
+        store = ConfigStore(session)
+
+        orig_conf_base_0 = float(await store.get_typed(ConfigKey.CONF_BASE_0))
+        orig_conf_base_1 = float(await store.get_typed(ConfigKey.CONF_BASE_1))
+
+        dec_out_0 = json.dumps({"confluences": []})
+        dec_out_1 = json.dumps({"confluences": ["A"]})
+
+        dec0 = str(uuid4())
+        dec1 = str(uuid4())
+
+        await session.execute(
+            _decision_table.insert().values(
+                id=dec0, ts=now, agent="decisor", model="test",
+                output=dec_out_0, input="{}",
+            )
+        )
+        await session.execute(
+            _decision_table.insert().values(
+                id=dec1, ts=now, agent="decisor", model="test",
+                output=dec_out_1, input="{}",
+            )
+        )
+        for i in range(12):
+            await session.execute(
+                _trade_table.insert().values(
+                    id=str(uuid4()), decision_id=dec0,
+                    ts_close=now, status="closed",
+                    pnl_usdt=Decimal("10.0") if i < 6 else Decimal("-5.0"),
+                    side="BUY", quantity_btc=Decimal("0.01"),
+                    entry_price=Decimal("80000"), fees_usdt=Decimal("1.0"),
+                )
+            )
+        for i in range(12):
+            pnl = Decimal("10.0") if i < 9 else Decimal("-5.0")
+            await session.execute(
+                _trade_table.insert().values(
+                    id=str(uuid4()), decision_id=dec1,
+                    ts_close=now, status="closed",
+                    pnl_usdt=pnl, side="BUY",
+                    quantity_btc=Decimal("0.01"),
+                    entry_price=Decimal("80000"), fees_usdt=Decimal("1.0"),
+                )
+            )
+        await session.commit()
+
+        class FakeFactory:
+            def __init__(self, sess):
+                self._sess = sess
+            async def __aenter__(self):
+                return self._sess
+            async def __aexit__(self, *args):
+                pass
+
+        await calibration_tick(lambda: FakeFactory(session))
+
+        new_conf_base_0 = float(await store.get_typed(ConfigKey.CONF_BASE_0))
+        new_conf_base_1 = float(await store.get_typed(ConfigKey.CONF_BASE_1))
+
+        assert new_conf_base_0 != orig_conf_base_0
+        assert new_conf_base_1 != orig_conf_base_1
+
+    async def test_skips_when_insufficient_trades(self, session, seed_config):
+        from uuid import uuid4
+        now = datetime.now(tz=timezone.utc)
+        store = ConfigStore(session)
+
+        orig = float(await store.get_typed(ConfigKey.CONF_BASE_0))
+
+        dec_out = json.dumps({"confluences": []})
+        dec_id = str(uuid4())
+        await session.execute(
+            _decision_table.insert().values(
+                id=dec_id, ts=now, agent="decisor", model="test",
+                output=dec_out, input="{}",
+            )
+        )
+        for i in range(3):
+            await session.execute(
+                _trade_table.insert().values(
+                    id=str(uuid4()), decision_id=dec_id,
+                    ts_close=now, status="closed",
+                    pnl_usdt=Decimal("10.0"), side="BUY",
+                    quantity_btc=Decimal("0.01"),
+                    entry_price=Decimal("80000"), fees_usdt=Decimal("1.0"),
+                )
+            )
+        await session.commit()
+
+        class FakeFactory:
+            def __init__(self, sess):
+                self._sess = sess
+            async def __aenter__(self):
+                return self._sess
+            async def __aexit__(self, *args):
+                pass
+
+        await calibration_tick(lambda: FakeFactory(session))
+
+        assert float(await store.get_typed(ConfigKey.CONF_BASE_0)) == orig

@@ -115,9 +115,11 @@ class PriceCollector:
                 await self.session.execute(
                     select(Ohlcv)
                     .where(Ohlcv.timeframe == tf, Ohlcv.market == self.market)
-                    .order_by(Ohlcv.time.asc())
+                    .order_by(Ohlcv.time.desc())
+                    .limit(self.limit)
                 )
             ).scalars().all()
+            rows.reverse()
             if not rows:
                 continue
             df = pd.DataFrame(
